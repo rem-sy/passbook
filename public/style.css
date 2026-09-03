@@ -269,6 +269,16 @@ body {
   color: var(--text);
 }
 .search-wrap input::placeholder { color: #aab1bf; }
+
+/* ---------- 强搜索命中高亮（v2.1.0） ---------- */
+mark.hl {
+  background: rgba(255, 213, 79, 0.55);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+html.dark mark.hl { background: rgba(255, 193, 7, 0.38); color: #ffe9b0; }
+.entry mark.hl { font-weight: 600; }
 .search-wrap input::-webkit-search-cancel-button { -webkit-appearance: none; }
 .sort-select {
   border: 1px solid var(--line);

@@ -641,31 +641,53 @@ const state = {
 /* ---------------- 列表渲染 ---------------- */
 async function refreshList() {
   try {
-    const { items, total } = await store.list({ q: state.q, category: state.category, sort: state.sort });
+    // 强搜索管线（v2.1.0）：解析操作符与多词；
+    // 单词无操作符 → 服务端 LIKE 粗筛后客户端打分高亮；
+    // 多词/操作符 → 拉当前分类全量，客户端过滤排序
+    const pq = (window.PassSearch || { parseQuery: (q) => ({ terms: q ? [q.toLowerCase()] : [], filters: {}, unknown: [] }) }).parseQuery(state.q);
+    const advanced = pq.terms.length > 1 || Object.keys(pq.filters).length > 0 || (pq.unknown && pq.unknown.length);
+    const serverQ = advanced ? '' : (pq.terms[0] || '');
+    const { items, total } = await store.list({ q: serverQ, category: state.category, sort: state.sort });
     state.total = total;
-    renderEntries(items);
-    $('#count').textContent = `共 ${total} 条`;
-    $('#empty-state').classList.toggle('hidden', total > 0);
+
+    let shown = items, hitsMap = null;
+    if (advanced || pq.terms.length === 1) {
+      const res = window.PassSearch ? PassSearch.searchEntries(items, state.q) : null;
+      if (res) {
+        shown = res.map((r) => r.entry);
+        hitsMap = {};
+        for (const r of res) hitsMap[r.entry.id] = r.fields;
+      }
+    }
+    renderEntries(shown, hitsMap);
+    const filtered = state.q && shown.length !== total ? `${shown.length}/` : '';
+    $('#count').textContent = `共 ${filtered}${total} 条`;
+    $('#empty-state').classList.toggle('hidden', shown.length > 0);
   } catch (e) {
     toast(e.message, true);
   }
 }
 
-function renderEntries(items) {
+function renderEntries(items, hitsMap) {
   const list = $('#entry-list');
+  const hl = (field, id, text) => {
+    const t = text == null ? '' : String(text);
+    if (!hitsMap || !hitsMap[id] || !hitsMap[id][field] || !t) return escapeHtml(t);
+    return PassSearch.highlightHtml(t, hitsMap[id][field], escapeHtml);
+  };
   list.innerHTML = items.map((it) => {
-    const cat = it.category ? `<span class="entry-cat">${escapeHtml(it.category)}</span>` : '';
-    const url = it.url ? `<a class="entry-url" href="${escapeHtml(it.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(it.url)}</a>` : '';
-    const note = it.note ? `<div class="entry-note">${escapeHtml(it.note)}</div>` : '';
+    const cat = it.category ? `<span class="entry-cat">${hl('category', it.id, it.category)}</span>` : '';
+    const url = it.url ? `<a class="entry-url" href="${escapeHtml(it.url)}" target="_blank" rel="noopener noreferrer">${hl('url', it.id, it.url)}</a>` : '';
+    const note = it.note ? `<div class="entry-note">${hl('note', it.id, it.note)}</div>` : '';
     return `
       <div class="entry" data-id="${it.id}">
         <div class="entry-top">
           <div class="entry-main">
             <div class="entry-title">
-              <span class="entry-owner">${escapeHtml(it.owner)}</span>
+              <span class="entry-owner">${hl('owner', it.id, it.owner)}</span>
               ${cat}
             </div>
-            <div class="entry-account">${escapeHtml(it.account)}</div>
+            <div class="entry-account">${hl('account', it.id, it.account)}</div>
             ${url}
             ${note}
             <div class="entry-pw">
