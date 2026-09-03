@@ -884,6 +884,30 @@ $('#category-chips').addEventListener('click', (e) => {
 /* ---------------- 生成器 ---------------- */
 const GEN_DEFAULTS = { length: 16, upper: true, lower: true, digit: true, symbol: true, symbols: '', ensure: true, ambiguous: true, noadj: false, norepeat: false, noseq: false, exclude: '' };
 
+/** 短语模式选项（v2.3.0） */
+function ppOptsFromUi() {
+  return {
+    list: $('#gen-pp-list').value,
+    words: Number($('#gen-pp-words').value) || 6,
+    separator: $('#gen-pp-sep').value,
+    capitalize: $('#gen-pp-cap').checked,
+    includeNumber: $('#gen-pp-num').checked,
+  };
+}
+
+/** 当前生成模式：char | phrase（v2.3.0） */
+function genMode() {
+  const active = document.querySelector('.gen-tab.active');
+  return active ? active.dataset.genmode : 'char';
+}
+
+function setGenMode(mode) {
+  const m = mode === 'phrase' ? 'phrase' : 'char';
+  document.querySelectorAll('.gen-tab').forEach((b) => b.classList.toggle('active', b.dataset.genmode === m));
+  $('#gen-char-section').classList.toggle('hidden', m !== 'char');
+  $('#gen-phrase-section').classList.toggle('hidden', m !== 'phrase');
+}
+
 function genOptsFromUi() {
   const s = loadSettings();
   const g = s.gen || {};
@@ -922,6 +946,20 @@ function genPrefsFromOpts(o) {
 
 function runGenerate() {
   try {
+    if (genMode() === 'phrase') {
+      const o = ppOptsFromUi();
+      const pw = PassPhrase.generatePassphrase(o);
+      state.currentGenPw = pw;
+      $('#gen-pw').textContent = pw;
+      const bits = PassPhrase.entropyPassphrase(o);
+      const s = PassPhrase.strengthLabel(bits);
+      $('#gen-entropy').textContent = `熵值约 ${bits} bits · 强度：${s.label}`;
+      $('#gen-result').classList.remove('hidden');
+      const settings = loadSettings();
+      settings.gen = { ...(settings.gen || {}), pp: o };
+      saveSettings(settings);
+      return;
+    }
     const o = genOptsFromUi();
     const pw = PassGen.generate(o);
     state.currentGenPw = pw;
@@ -954,9 +992,22 @@ function showGenPanel() {
   $('#gen-norepeat').checked = g.norepeat;
   $('#gen-noseq').checked = g.noseq;
   $('#gen-exclude').value = g.exclude || '';
+  // 短语模式偏好（v2.3.0）
+  if (g.pp) {
+    $('#gen-pp-list').value = g.pp.list || 'zh';
+    $('#gen-pp-words').value = g.pp.words || 6;
+    $('#gen-pp-sep').value = g.pp.separator ?? '-';
+    $('#gen-pp-cap').checked = !!g.pp.capitalize;
+    $('#gen-pp-num').checked = g.pp.includeNumber !== false;
+  }
   if ($('#gen-panel').classList.contains('hidden')) history.pushState({ pb: 1 }, ''); // 返回键可先收起生成器
   $('#gen-panel').classList.remove('hidden');
 }
+
+// 模式切换（v2.3.0）
+document.querySelectorAll('.gen-tab').forEach((b) => {
+  b.addEventListener('click', () => setGenMode(b.dataset.genmode));
+});
 
 $('#btn-generate').addEventListener('click', runGenerate);
 $('#btn-regenerate').addEventListener('click', runGenerate);

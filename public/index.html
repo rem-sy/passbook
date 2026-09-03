@@ -46,7 +46,11 @@
         <h2>生成强密码</h2>
         <button id="btn-gen-close" class="btn ghost small">收起</button>
       </div>
-      <div class="gen-grid">
+      <div class="gen-tabs">
+        <button class="gen-tab active" data-genmode="char">字符密码</button>
+        <button class="gen-tab" data-genmode="phrase">密码短语</button>
+      </div>
+      <div id="gen-char-section" class="gen-grid">
         <label class="field">
           <span>长度</span>
           <input id="gen-length" type="number" min="4" max="128" value="16" />
@@ -77,6 +81,36 @@
         <label class="field">
           <span>额外排除字符（可选）</span>
           <input id="gen-exclude" type="text" placeholder="如：@#&lt;&gt;" />
+        </label>
+      </div>
+      <div id="gen-phrase-section" class="gen-grid hidden">
+        <label class="field">
+          <span>词表</span>
+          <select id="gen-pp-list">
+            <option value="zh" selected>中文双字词（约 9 bit/词）</option>
+            <option value="en">English words</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>词数（3-12，推荐 6+）</span>
+          <input id="gen-pp-words" type="number" min="3" max="12" value="6" />
+        </label>
+        <label class="field">
+          <span>分隔符</span>
+          <select id="gen-pp-sep">
+            <option value="-" selected>- 连字符</option>
+            <option value=".">. 句点</option>
+            <option value="_">_ 下划线</option>
+            <option value=" ">空格</option>
+            <option value="">无</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>选项</span>
+          <div class="chk-group">
+            <label><input type="checkbox" id="gen-pp-cap" /> 英文词首字母大写</label>
+            <label><input type="checkbox" id="gen-pp-num" checked /> 末尾附加两位数字</label>
+          </div>
         </label>
       </div>
       <div class="gen-actions">
@@ -194,6 +228,7 @@
 
   <script src="lib/sql-wasm.js"></script>
   <script src="generator.js"></script>
+  <script src="passphrase.js"></script>
   <script src="watchtower.js"></script>
   <script src="totp.js"></script>
   <script src="autolock.js"></script>

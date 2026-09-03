@@ -291,6 +291,17 @@ html.dark mark.hl { background: rgba(255, 193, 7, 0.38); color: #ffe9b0; }
 .backup-size { color: var(--muted); flex: 1; }
 .backup-ops { display: flex; gap: 6px; }
 .backup-ops .btn { padding: 4px 10px; font-size: 12px; }
+
+/* ---------- 生成器模式切换（v2.3.0） ---------- */
+.gen-tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+.gen-tab {
+  padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line);
+  background: transparent; color: var(--muted); font-size: 13px; cursor: pointer;
+}
+.gen-tab:hover { border-color: var(--line-strong); color: var(--text); }
+.gen-tab.active {
+  background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600;
+}
 .search-wrap input::-webkit-search-cancel-button { -webkit-appearance: none; }
 .sort-select {
   border: 1px solid var(--line);
