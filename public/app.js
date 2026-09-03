@@ -30,6 +30,7 @@ const DEFAULT_SETTINGS = {
   storageMode: 'auto', // auto | server | local
   pinHash: '',         // SHA-256(pin)，空 = 未启用
   gen: {},             // 生成器偏好
+  wt: { hibp: true, staleMonths: 12 }, // 安全体检：联网泄露检查 + 陈旧阈值（月，0=不检查）
 };
 
 function loadSettings() {
@@ -1327,6 +1328,108 @@ function downloadBlob(blob, filename) {
 
 $('#btn-export').addEventListener('click', openExportModal);
 
+/* ---------------- 安全体检（Watchtower） ---------------- */
+const WT_LAST_KEY = 'passbook-wt-last';
+const WT_LEVEL_META = {
+  high: { text: '高危', cls: 'high' },
+  medium: { text: '中危', cls: 'medium' },
+  low: { text: '低危', cls: 'low' },
+  info: { text: '提示', cls: 'info' },
+};
+const WT_TYPE_ICON = {
+  reused: '🔁', weak: '🔓', incomplete: '📋', stale: '⏳', pwned: '💥',
+};
+
+function loadWtSettings() {
+  const s = loadSettings();
+  return { hibp: s.wt?.hibp !== false, staleMonths: s.wt?.staleMonths ?? 12 };
+}
+
+async function openEditById(id) {
+  const { items } = await store.list({});
+  const item = items.find((x) => x.id === id);
+  if (item) openEditModal(item);
+  else toast('条目不存在（可能已被删除）', true);
+}
+
+async function runWatchtower() {
+  const panel = $('#watchtower-panel');
+  panel.classList.remove('hidden');
+  const summaryEl = $('#wt-summary'), findingsEl = $('#wt-findings');
+  summaryEl.innerHTML = '<span class="wt-running">正在体检…</span>';
+  findingsEl.innerHTML = '';
+  panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  try {
+    const { items } = await store.list({});
+    const cfg = loadWtSettings();
+    const { findings, summary } = PassWatch.analyze(items, { staleMonths: cfg.staleMonths });
+
+    // 可选联网泄露检查（HIBP k-匿名：仅上传 SHA-1 前 5 位）
+    if (cfg.hibp && items.some((e) => e.password)) {
+      try {
+        const pwned = await PassWatch.checkPwned(
+          items.map((e) => e.password),
+          async (url) => (await agentFetch(url)).text()
+        );
+        for (const e of items) {
+          const n = pwned.get(e.password);
+          if (n) findings.push({ type: 'pwned', level: 'high', entryIds: [e.id], title: '密码已泄露', detail: `「${e.owner}${e.account ? '/' + e.account : ''}」的密码在公开泄露库中出现 ${n} 次` });
+        }
+        findings.sort((a, b) => ({ high: 0, medium: 1, low: 2, info: 3 })[a.level] - ({ high: 0, medium: 1, low: 2, info: 3 })[b.level]);
+        for (const f of findings.filter((x) => x.type === 'pwned')) summary.high++;
+      } catch (err) {
+        toast('联网泄露检查失败（已跳过）：' + err.message, true);
+      }
+    }
+
+    localStorage.setItem(WT_LAST_KEY, JSON.stringify({ at: Date.now(), summary }));
+    renderWatchtower(findings, summary);
+  } catch (e) {
+    summaryEl.innerHTML = '';
+    findingsEl.innerHTML = `<div class="wt-empty">体检失败：${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderWatchtower(findings, summary) {
+  const total = findings.length;
+  $('#wt-last').textContent = `上次体检：${fmtTime(new Date().toISOString())}`;
+  $('#wt-summary').innerHTML = total === 0
+    ? '<span class="wt-allclear">✅ 未发现问题，继续保持</span>'
+    : Object.entries(WT_LEVEL_META).map(([k, m]) =>
+        summary[k] ? `<span class="wt-chip ${m.cls}">${m.text} ${summary[k]}</span>` : ''
+      ).join('');
+
+  $('#wt-findings').innerHTML = total === 0 ? '' : findings.map((f, i) => {
+    const m = WT_LEVEL_META[f.level];
+    const entriesBtns = f.entryIds.map((id) => `<button class="wt-entry-btn" data-wt-entry="${id}">查看</button>`).join(' ');
+    return `
+      <div class="wt-finding ${m.cls}">
+        <span class="wt-dot"></span>
+        <div class="wt-body">
+          <div class="wt-title">${WT_TYPE_ICON[f.type] || ''} ${escapeHtml(f.title)} <span class="wt-level">${m.text}</span></div>
+          <div class="wt-detail">${escapeHtml(f.detail)}</div>
+        </div>
+        <div class="wt-actions">${entriesBtns}</div>
+      </div>`;
+  }).join('');
+}
+
+$('#btn-watchtower').addEventListener('click', runWatchtower);
+$('#btn-wt-refresh').addEventListener('click', runWatchtower);
+$('#btn-wt-close').addEventListener('click', () => $('#watchtower-panel').classList.add('hidden'));
+$('#wt-findings').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-wt-entry]');
+  if (btn) openEditById(Number(btn.dataset.wtEntry));
+});
+// 启动时若面板曾展示过，恢复上次体检时间
+(function restoreWtLast() {
+  try {
+    const last = JSON.parse(localStorage.getItem(WT_LAST_KEY) || 'null');
+    if (last?.at) $('#wt-last').textContent = `上次体检：${fmtTime(new Date(last.at).toISOString())}`;
+  } catch { /* 忽略 */ }
+})();
+
 /* ---------------- 设置 ---------------- */
 function openSettingsModal() {
   const s = loadSettings();
@@ -1385,6 +1488,19 @@ function openSettingsModal() {
       ${dbPathField}
       ${encField}
       ${agentField}
+      <div class="field"><span>安全体检</span>
+        <div class="chk-group" style="padding-top:2px">
+          <label><input type="checkbox" id="set-wt-hibp" ${loadWtSettings().hibp ? 'checked' : ''} /> 联网检查泄露密码（仅上传 SHA-1 前 5 位，密码不出本机）</label>
+        </div>
+      </div>
+      <label class="field"><span>陈旧密码提醒阈值</span>
+        <select id="set-wt-stale">
+          <option value="6" ${loadWtSettings().staleMonths === 6 ? 'selected' : ''}>6 个月未修改即提醒</option>
+          <option value="12" ${loadWtSettings().staleMonths === 12 ? 'selected' : ''}>12 个月未修改即提醒</option>
+          <option value="24" ${loadWtSettings().staleMonths === 24 ? 'selected' : ''}>24 个月未修改即提醒</option>
+          <option value="0" ${loadWtSettings().staleMonths === 0 ? 'selected' : ''}>不检查</option>
+        </select>
+      </label>
       <div class="field"><span>启动锁（可选，仅本地拦截，不加密数据）</span>
         <div class="lock-toggle">
           <button class="btn ${s.pinHash ? '' : 'primary'}" id="btn-lock-toggle" type="button">${s.pinHash ? '停用' : '启用'}</button>
@@ -1493,6 +1609,11 @@ function openSettingsModal() {
       apiKey: $('#set-agent-key').value.trim(),
       model: $('#set-agent-model').value.trim(),
     });
+    const wtEl = $('#set-wt-hibp');
+    if (wtEl) {
+      ns.wt = { hibp: wtEl.checked, staleMonths: Number($('#set-wt-stale').value) || 0 };
+      saveSettings(ns);
+    }
     closeModal();
     toast('设置已保存');
     if (!IS_TAURI) location.reload();
