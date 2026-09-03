@@ -15,7 +15,7 @@ $ndkToolchain = "$dev\sdk\ndk\$ndkVer\toolchains\llvm\prebuilt\windows-x86_64\bi
 $target = 'aarch64-linux-android'
 $api = '24'
 $profile = if ($DebugBuild) { 'debug' } else { 'release' }
-$suffix = if ($Clean) { '-纯净版' } else { '' }
+$suffix = if ($Clean) { '-clean' } else { '' }
 $localCfg = "$proj\public\agent-config.local.js"
 
 $env:JAVA_HOME = "$dev\jdk"
@@ -87,7 +87,7 @@ try {
   $apkDir = "$srcTauri\gen\android\app\build\outputs\apk\arm64\$profile"
   $apk = Get-ChildItem $apkDir -Filter '*.apk' | Select-Object -First 1
   if (!$apk) { throw "未找到 APK（预期在 $apkDir）" }
-  $dest = "D:\hobby\产物\密码本\密码本-android-1.1.0-arm64$suffix.apk"
+  $dest = "D:\hobby\产物\密码本\Passbook-Android-1.1.0-arm64$suffix.apk"
   Copy-Item $apk.FullName $dest -Force
   Write-Host "完成: $dest ($([math]::Round($apk.Length/1MB,1))MB)"
 } finally {

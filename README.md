@@ -32,7 +32,7 @@
 
 ## 🖥 桌面安装版（推荐分发形态）
 
-给别人的是 **NSIS 安装包**（`D:\hobby\产物\密码本\` 下的 `*-setup.exe`，另有 `-纯净版` 变体与免安装便携版）：接收方下载 → 双击安装（免管理员，装到当前用户）→ 开始菜单/桌面启动「密码本」。
+给别人的是 **NSIS 安装包**（`D:\hobby\产物\密码本\` 下的 `Passbook_<版本>_x64-setup.exe`，另有 `-clean` 纯净版变体与免安装便携版 `Passbook_<版本>_portable.exe`）：接收方下载 → 双击安装（免管理员，装到当前用户）→ 开始菜单/桌面启动「密码本」。
 
 > 注意：正式分发用安装包会装入接收方自己的用户目录（对方机器）；**本机自用请用「便携版 + 启动器 bat」**，数据全部留在 `产物\密码本\app-data`，不写 C 盘。
 
@@ -42,8 +42,8 @@
 cd D:\hobby\源码\密码本
 powershell -ExecutionPolicy Bypass -File scripts\build-desktop.ps1
 # 产物 -> D:\hobby\产物\密码本\：
-#   密码本_1.1.0_x64-setup.exe（预置渠道） + 密码本-便携版.exe
-#   密码本_1.1.0_x64-setup-纯净版.exe          + 密码本-便携版-纯净版.exe
+#   Passbook_1.1.0_x64-setup.exe（预置渠道）      + Passbook_1.1.0_portable.exe
+#   Passbook_1.1.0_x64-setup-clean.exe（纯净版）  + Passbook_1.1.0_portable-clean.exe
 ```
 
 > 目录规范：源码在 `D:\hobby\源码\密码本`，对外交付物统一放 `D:\hobby\产物\密码本`。
@@ -74,7 +74,7 @@ node server.mjs --no-open      # 不自动打开浏览器
 
 ### Android 安装包（推荐）
 
-交付物在 `D:\hobby\产物\密码本\`：`密码本-android-<版本>-arm64.apk`（预置渠道）与 `密码本-android-<版本>-arm64-纯净版.apk`（需自行配置渠道）。手机上直接安装（需允许「安装未知来源应用」），数据存在应用私有目录，无需网络服务器。
+交付物在 `D:\hobby\产物\密码本\`：`Passbook-Android-<版本>-arm64.apk`（预置渠道）与 `Passbook-Android-<版本>-arm64-clean.apk`（需自行配置渠道）。手机上直接安装（需允许「安装未知来源应用」），数据存在应用私有目录，无需网络服务器。
 
 - 架构 `arm64-v8a`（覆盖近几年的主流安卓机）；
 - 前端与桌面版同一套（`public/` 打进 APK assets），数据库为应用私有 SQLite 文件；
@@ -116,7 +116,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build-android.ps1 -Clean  # 纯
 | 发行版 | AI 助理开箱即用 | 适合 |
 | --- | --- | --- |
 | 预置渠道版（默认文件名） | 是（内置自定义渠道） | 自己人用，拿来就能聊 |
-| 纯净版（文件名带「-纯净版」） | 否，需在设置里手动配置渠道 | 对外分发，不暴露渠道密钥 |
+| 纯净版（文件名带「-clean」） | 否，需在设置里手动配置渠道 | 对外分发，不暴露渠道密钥 |
 
 核心逻辑在 `public/agent-core.js`（渠道无关，Node 可测），网络路由分三路：桌面/Android → Rust `agent_http_stream`（流式事件 + 可中止）；浏览器服务器模式 → `/api/agent/proxy-stream`；PWA → 直连。
 

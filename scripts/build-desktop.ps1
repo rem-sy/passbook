@@ -38,14 +38,14 @@ function Build-One([string]$name, [string]$suffix, [switch]$clean) {
       Pop-Location; throw "tauri build 失败（$name，退出码 $code）"
     }
     Pop-Location
-    Copy-Item "$proj\src-tauri\target\release\bundle\nsis\密码本_${ver}_x64-setup.exe" "$prod\密码本_${ver}_x64-setup$suffix.exe" -Force
-    Copy-Item "$proj\src-tauri\target\release\passbook-desktop.exe" "$prod\密码本-便携版$suffix.exe" -Force
-    Write-Host "    完成：密码本_${ver}_x64-setup$suffix.exe + 密码本-便携版$suffix.exe"
+    Copy-Item "$proj\src-tauri\target\release\bundle\nsis\密码本_${ver}_x64-setup.exe" "$prod\Passbook_${ver}_x64-setup$suffix.exe" -Force
+    Copy-Item "$proj\src-tauri\target\release\passbook-desktop.exe" "$prod\Passbook_${ver}_portable$suffix.exe" -Force
+    Write-Host "    完成：Passbook_${ver}_x64-setup$suffix.exe + Passbook_${ver}_portable$suffix.exe"
   } finally {
     if ($bak) { Move-Item $bak $localCfg -Force; Write-Host '    已恢复 agent-config.local.js' }
   }
 }
 
 if (!$SkipPreset) { Build-One '预置渠道版' '' }
-if (!$SkipClean) { Build-One '纯净版（无预置渠道）' '-纯净版' -clean }
+if (!$SkipClean) { Build-One '纯净版（无预置渠道）' '-clean' -clean }
 Write-Host '全部完成'
