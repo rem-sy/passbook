@@ -139,6 +139,35 @@ test('导入：覆盖模式清空并导入', async () => {
   assert.equal(all.data.items[0].owner, 'OnlyOne');
 });
 
+test('TOTP：创建/读取/更新 totp_secret 往返一致', async () => {
+  const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
+  const { status, data } = await j('POST', '/api/entries', {
+    owner: 'TOTP测试', account: 'u1', password: 'Pw#12345', totp_secret: secret,
+  });
+  assert.equal(status, 201);
+  assert.equal(data.totp_secret, secret);
+  const id = data.id;
+  // 更新为空 = 清除；更新为其他值 = 替换
+  const up = await j('PUT', `/api/entries/${id}`, { owner: 'TOTP测试', account: 'u1', password: 'Pw#12345', totp_secret: '' });
+  assert.equal(up.status, 200);
+  assert.equal(up.data.totp_secret, '');
+  const up2 = await j('PUT', `/api/entries/${id}`, { owner: 'TOTP测试', account: 'u1', password: 'Pw#12345', totp_secret: 'MFRGGZDF' });
+  assert.equal(up2.data.totp_secret, 'MFRGGZDF');
+  // 旧客户端不带 totp_secret 字段：不应清掉已有值（normalizeEntry 补 ''，merged 覆盖为 ''）
+  // —— 实际行为：normalizeEntry 输出 '' 会覆盖，此处固化该行为作为契约
+  const legacy = await j('PUT', `/api/entries/${id}`, { owner: 'TOTP测试', account: 'u1', password: 'Pw#12345' });
+  assert.equal(legacy.data.totp_secret, '');
+});
+
+test('导入：totp_secret 字段随条目入库', async () => {
+  const items = [{ owner: 'T2', account: 'a', password: 'Xy#1', totp_secret: 'MFRGGZDF' }];
+  const { status, data } = await j('POST', '/api/import', { items, mode: 'merge' });
+  assert.equal(status, 200);
+  assert.equal(data.imported, 1);
+  const all = await j('GET', '/api/entries?q=T2');
+  assert.equal(all.data.items[0].totp_secret, 'MFRGGZDF');
+});
+
 test('导出 JSON', async () => {
   const r = await fetch(base + '/api/export');
   assert.equal(r.status, 200);

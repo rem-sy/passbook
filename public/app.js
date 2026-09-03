@@ -122,6 +122,7 @@ const SCHEMA_SQL = `
     url TEXT NOT NULL DEFAULT '',
     category TEXT NOT NULL DEFAULT '',
     note TEXT NOT NULL DEFAULT '',
+    totp_secret TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -130,7 +131,7 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_entries_category ON entries(category);
 `;
 
-const FIELDS = ['owner', 'account', 'password', 'url', 'category', 'note'];
+const FIELDS = ['owner', 'account', 'password', 'url', 'category', 'note', 'totp_secret'];
 
 function escLike(s) { return s.replace(/[\\%_]/g, (m) => '\\' + m); }
 
@@ -280,6 +281,12 @@ const LocalStore = {
       this.db.run(SCHEMA_SQL);
       await this.persist();
     }
+    // v1.3.0 迁移：为旧库补 totp_secret 列（幂等）
+    const cols = this.query('PRAGMA table_info(entries)').map((c) => c.name);
+    if (!cols.includes('totp_secret')) {
+      this.db.run("ALTER TABLE entries ADD COLUMN totp_secret TEXT NOT NULL DEFAULT ''");
+      await this.persist();
+    }
   },
   /** 读取底层原始字节：Tauri 下从数据库文件读，否则从 IndexedDB 读 */
   async _readRaw() {
@@ -374,8 +381,8 @@ const LocalStore = {
   async create(entry) {
     const now = new Date().toISOString();
     this.db.run(
-      'INSERT INTO entries (owner, account, password, url, category, note, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)',
-      [entry.owner, entry.account, entry.password, entry.url, entry.category, entry.note, now, now]
+      'INSERT INTO entries (owner, account, password, url, category, note, totp_secret, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
+      [entry.owner, entry.account, entry.password, entry.url, entry.category, entry.note, entry.totp_secret ?? '', now, now]
     );
     const id = this.lastInsertId();
     await this.persist();
@@ -386,8 +393,8 @@ const LocalStore = {
     if (!cur) throw new Error('记录不存在');
     const merged = { ...cur, ...patch };
     this.db.run(
-      'UPDATE entries SET owner=?, account=?, password=?, url=?, category=?, note=?, updated_at=? WHERE id=?',
-      [merged.owner, merged.account, merged.password, merged.url, merged.category, merged.note, new Date().toISOString(), id]
+      'UPDATE entries SET owner=?, account=?, password=?, url=?, category=?, note=?, totp_secret=?, updated_at=? WHERE id=?',
+      [merged.owner, merged.account, merged.password, merged.url, merged.category, merged.note, merged.totp_secret ?? '', new Date().toISOString(), id]
     );
     await this.persist();
     return this.query('SELECT * FROM entries WHERE id = ?', [id])[0];
@@ -421,8 +428,8 @@ const LocalStore = {
         const key = `${e.owner}\u0000${e.account}\u0000${e.password}`;
         if (mode === 'merge' && existingKeys.has(key)) { skipped++; continue; }
         this.db.run(
-          'INSERT INTO entries (owner, account, password, url, category, note, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)',
-          [e.owner, e.account, e.password, e.url, e.category, e.note, now, now]
+          'INSERT INTO entries (owner, account, password, url, category, note, totp_secret, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
+          [e.owner, e.account, e.password, e.url, e.category, e.note, e.totp_secret ?? '', now, now]
         );
         existingKeys.add(key);
         imported++;
@@ -646,6 +653,13 @@ function renderEntries(items) {
                 <button data-act="copy" title="复制">${ICONS.copy}</button>
               </div>
             </div>
+            ${it.totp_secret ? `
+            <div class="entry-totp">
+              <svg class="totp-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+              <span class="totp-code" data-totp="${escapeHtml(it.totp_secret)}">······</span>
+              <span class="totp-remain"></span>
+              <button data-act="copy-totp" title="复制验证码">${ICONS.copy}</button>
+            </div>` : ''}
           </div>
           <div class="entry-side">
             <span class="entry-time">${fmtTime(it.updated_at)}</span>
@@ -658,6 +672,22 @@ function renderEntries(items) {
       </div>`;
   }).join('');
 }
+
+/* TOTP 码每秒刷新（只更新可见的动态码元素，无则空转） */
+setInterval(async () => {
+  for (const el of document.querySelectorAll('.totp-code[data-totp]')) {
+    try {
+      const { code, remaining } = await PassTotp.generateTotp(el.dataset.totp);
+      el.textContent = code.replace(/(\d{3})(\d{3})/, '$1 $2');
+      const box = el.closest('.entry-totp');
+      if (box) {
+        const r = box.querySelector('.totp-remain');
+        if (r) r.textContent = remaining + 's';
+        box.classList.toggle('expiring', remaining <= 5);
+      }
+    } catch { el.textContent = '密钥无效'; }
+  }
+}, 1000);
 
 $('#entry-list').addEventListener('click', async (e) => {
   const btn = e.target.closest('button[data-act]');
@@ -678,6 +708,10 @@ $('#entry-list').addEventListener('click', async (e) => {
     }
   } else if (act === 'copy') {
     await copyText(card.querySelector('.pw-masked').dataset.pw);
+  } else if (act === 'copy-totp') {
+    const secret = card.querySelector('.totp-code')?.dataset.totp;
+    if (!secret) return;
+    try { const { code } = await PassTotp.generateTotp(secret); await copyText(code); } catch (e) { toast(e.message, true); }
   } else if (act === 'edit') {
     const list = await store.list({});
     const item = list.items.find((x) => x.id === id);
@@ -853,6 +887,9 @@ function openEditModal(item = null, prefillPw = '') {
           <button class="btn" id="btn-gen-again" title="用当前生成器设置重新生成">${ICONS.refresh}</button>
         </div>
       </label>
+      <label class="field"><span>动态验证码 TOTP（可选）</span>
+        <input id="f-totp" placeholder="base32 密钥或 otpauth:// 链接，粘贴自动提取" value="${escapeHtml(v('totp_secret'))}" autocomplete="off" spellcheck="false" />
+      </label>
       <div class="form-row">
         <label class="field"><span>分类（可选）</span>
           <input id="f-category" placeholder="如：工作 / 个人 / 邮箱" value="${escapeHtml(v('category'))}" />
@@ -934,6 +971,9 @@ function openEditModal(item = null, prefillPw = '') {
       category: $('#f-category').value.trim(),
       note: $('#f-note').value.trim(),
     };
+    const totpRaw = $('#f-totp').value.trim();
+    entry.totp_secret = totpRaw ? PassTotp.extractSecret(totpRaw) : '';
+    if (totpRaw && !PassTotp.isValidSecret(entry.totp_secret)) return toast('TOTP 密钥无效：需 base32 字符（A-Z、2-7）或 otpauth:// 链接', true);
     if (!entry.owner || !entry.account) return toast('所属和账户不能为空', true);
     if (!entry.password) return toast('密码不能为空', true);
     try {
@@ -968,6 +1008,9 @@ function openManualAddModal() {
           <input id="mf-password" type="text" autocomplete="off" placeholder="手动输入，或点右侧按钮生成" />
           <button class="btn" id="mf-gen" title="用当前生成器设置生成">${ICONS.wand}</button>
         </div>
+      </label>
+      <label class="field"><span>动态验证码 TOTP（可选）</span>
+        <input id="mf-totp" placeholder="base32 密钥或 otpauth:// 链接，粘贴自动提取" autocomplete="off" spellcheck="false" />
       </label>
       <div class="form-row">
         <label class="field"><span>分类（可选）</span>
@@ -1038,6 +1081,9 @@ function openManualAddModal() {
       category: $('#mf-category').value.trim(),
       note: $('#mf-note').value.trim(),
     };
+    const totpRaw = $('#mf-totp').value.trim();
+    entry.totp_secret = totpRaw ? PassTotp.extractSecret(totpRaw) : '';
+    if (totpRaw && !PassTotp.isValidSecret(entry.totp_secret)) return toast('TOTP 密钥无效：需 base32 字符（A-Z、2-7）或 otpauth:// 链接', true);
     if (!entry.owner || !entry.account) return toast('所属和账户不能为空', true);
     if (!entry.password) return toast('密码不能为空', true);
     try {
@@ -1048,7 +1094,7 @@ function openManualAddModal() {
       refreshList();
       if (keepOpen) {
         $('#mf-owner').value = ''; $('#mf-account').value = ''; $('#mf-password').value = '';
-        $('#mf-url').value = ''; $('#mf-note').value = '';
+        $('#mf-url').value = ''; $('#mf-note').value = ''; $('#mf-totp').value = '';
         $('#mf-owner').focus();
       } else {
         closeModal();
