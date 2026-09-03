@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- 白色圆角底（透明圆角） -->
+  <rect x="0" y="0" width="1024" height="1024" rx="216" fill="#FFFFFF"/>
+
+  <!-- 外层：圆角菱形（旋转 45° 的圆角方） -->
+  <g transform="rotate(45 512 512)">
+    <rect x="216" y="216" width="592" height="592" rx="88"
+          fill="none" stroke="#2C3844" stroke-width="44"/>
+  </g>
+
+  <!-- 内层：圆角菱形（留白，形成嵌套层次感） -->
+  <g transform="rotate(45 512 512)">
+    <rect x="356" y="356" width="312" height="312" rx="56"
+          fill="none" stroke="#2C3844" stroke-width="44"/>
+  </g>
+</svg>

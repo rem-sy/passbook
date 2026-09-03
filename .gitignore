@@ -1,0 +1,33 @@
+# Node
+node_modules/
+.npm-cache/
+*.log
+
+# 运行时数据（数据库文件，含密码，勿提交）
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# 本机预置渠道密钥（不入库；模板见 agent-config.example.js）
+public/agent-config.local.js
+
+# Rust / Tauri 构建产物
+src-tauri/target/
+
+# Android 生成工程：跟踪源配置（含定制 manifest/mipmap/gradle），
+# 忽略本机路径与构建产物
+src-tauri/gen/android/.gradle/
+src-tauri/gen/android/build/
+src-tauri/gen/android/app/build/
+src-tauri/gen/android/local.properties
+src-tauri/gen/android/*.jks
+src-tauri/gen/android/keystore.properties
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 探针临时目录
+.probe/
+probe-tauri/

@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#ffffff" />
+  <title>密码本</title>
+  <link rel="icon" href="icons/icon-192.png" type="image/png" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>
+      </span>
+      <h1>密码本</h1>
+      <span id="mode-badge" class="mode-badge" title="当前存储模式"></span>
+    </div>
+    <div class="top-actions">
+      <button id="btn-guide" class="icon-btn" title="使用说明" aria-label="使用说明">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+      </button>
+      <button id="btn-agent" class="icon-btn" title="AI 助理：聊天存密码 / 查密码" aria-label="AI 助理">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
+      </button>
+      <button id="btn-settings" class="icon-btn" title="设置" aria-label="设置">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- 生成器 -->
+    <section id="gen-panel" class="card hidden">
+      <div class="card-head">
+        <h2>生成强密码</h2>
+        <button id="btn-gen-close" class="btn ghost small">收起</button>
+      </div>
+      <div class="gen-grid">
+        <label class="field">
+          <span>长度</span>
+          <input id="gen-length" type="number" min="4" max="128" value="16" />
+        </label>
+        <label class="field">
+          <span>字符类型</span>
+          <div class="chk-group" id="gen-charsets">
+            <label><input type="checkbox" value="upper" checked /> 大写 A-Z</label>
+            <label><input type="checkbox" value="lower" checked /> 小写 a-z</label>
+            <label><input type="checkbox" value="digit" checked /> 数字 0-9</label>
+            <label><input type="checkbox" value="symbol" checked /> 特殊符号</label>
+          </div>
+        </label>
+        <label class="field">
+          <span>自定义符号集（可选）</span>
+          <input id="gen-symbols" type="text" placeholder="留空使用默认 !@#$%^&*()-_=+[]{};:,.<>?/~" />
+        </label>
+        <label class="field">
+          <span>约束选项</span>
+          <div class="chk-group" id="gen-constraints">
+            <label><input type="checkbox" id="gen-ensure" checked /> 每类至少一个</label>
+            <label><input type="checkbox" id="gen-ambiguous" checked /> 排除易混淆字符</label>
+            <label><input type="checkbox" id="gen-noadj" /> 键盘布局不连续</label>
+            <label><input type="checkbox" id="gen-norepeat" /> 禁止连续相同字符</label>
+            <label><input type="checkbox" id="gen-noseq" /> 禁止顺序/倒序字符对</label>
+          </div>
+        </label>
+        <label class="field">
+          <span>额外排除字符（可选）</span>
+          <input id="gen-exclude" type="text" placeholder="如：@#&lt;&gt;" />
+        </label>
+      </div>
+      <div class="gen-actions">
+        <button id="btn-generate" class="btn primary">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/><path d="m14 7 3 3"/><path d="M5 6v4"/><path d="M19 14v4"/><path d="M10 2v2"/><path d="M7 8H3"/><path d="M21 16h-4"/><path d="M11 3H9"/></svg>
+          生成密码
+        </button>
+      </div>
+      <div id="gen-result" class="gen-result hidden">
+        <div class="pw-box">
+          <code id="gen-pw"></code>
+          <div class="pw-meta">
+            <span id="gen-entropy"></span>
+            <button id="btn-copy-gen" class="btn small">复制</button>
+            <button id="btn-save-gen" class="btn primary small">保存到密码本</button>
+            <button id="btn-regenerate" class="btn small">换一个</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 工具栏：搜索 + 分类 + 排序 -->
+    <section class="toolbar card">
+      <div class="search-row">
+        <div class="search-wrap">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          <input id="search" type="search" placeholder="快速筛选：所属 / 账户 / 网址 / 备注…" autocomplete="off" />
+        </div>
+        <select id="sort" class="sort-select" title="排序">
+          <option value="updated">最近更新</option>
+          <option value="created">最近创建</option>
+          <option value="owner">按所属</option>
+        </select>
+        <button id="btn-gen-open" class="btn primary">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+          生成密码
+        </button>
+        <button id="btn-manual-add" class="btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+          手动录入
+        </button>
+        <button id="btn-import" class="btn">导入</button>
+        <button id="btn-export" class="btn">导出</button>
+      </div>
+      <div id="category-chips" class="chips"></div>
+    </section>
+
+    <section class="list-head">
+      <span id="count">共 0 条</span>
+    </section>
+
+    <section id="entry-list" class="entry-list"></section>
+    <section id="empty-state" class="empty hidden">
+      <p>还没有密码记录</p>
+      <p class="sub">点击「生成密码」生成并保存，或点「导入」批量录入</p>
+    </section>
+  </main>
+
+  <!-- 弹窗 -->
+  <div id="modal-root"></div>
+  <div id="toast-root"></div>
+
+  <!-- AI 助理聊天面板 -->
+  <aside id="agent-panel" class="agent-panel hidden" aria-label="AI 助理">
+    <div class="agent-head">
+      <span class="agent-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
+        AI 助理
+      </span>
+      <span class="agent-sub">聊天存密码 · 查密码</span>
+      <button id="agent-clear" class="icon-btn small" title="清空对话" aria-label="清空对话">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+      </button>
+      <button id="agent-stop" class="icon-btn small hidden" title="停止生成" aria-label="停止生成">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+      </button>
+      <button id="agent-close" class="icon-btn small" title="收起" aria-label="收起">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </button>
+    </div>
+    <div id="agent-messages" class="agent-messages">
+      <div class="agent-msg sys">你好，我是密码本 AI 助理，直接用自然语言存密码、查密码，例如：<br/>
+        · 「帮我存一下：GitHub，账户 tom@example.com，密码 Abc!2345，备注工作主力号」<br/>
+        · 「我 GitHub 的密码是什么？」<br/>
+        · 「把 GitHub 的密码改成 Xk9#New2025」<br/>
+        · 「生成一个 20 位不含符号的密码，存到 微信/13800138000」<br/>
+        查询结果会在下方卡片展示真实密码（可一键复制），密码本身不会发给我。</div>
+    </div>
+    <div id="agent-status" class="agent-status hidden"></div>
+    <div class="agent-input-row">
+      <textarea id="agent-input" rows="1" placeholder="输入消息，Enter 发送（Shift+Enter 换行）"></textarea>
+      <button id="agent-send" class="btn primary icon-only" title="发送" aria-label="发送">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+      </button>
+    </div>
+  </aside>
+
+  <script src="lib/sql-wasm.js"></script>
+  <script src="generator.js"></script>
+  <script src="db-crypto.js"></script>
+  <script src="agent-core.js"></script>
+  <script src="agent-config.js"></script>
+  <script src="agent-config.local.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

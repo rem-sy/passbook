@@ -1,0 +1,25 @@
+{
+  "name": "passbook",
+  "version": "1.1.0",
+  "private": true,
+  "description": "密码本：强密码生成、随手保存、快速筛选查询，支持多端 .db 文件同步（桌面 SQLite + 手机浏览器本地存储）",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server.mjs",
+    "start:lan": "node --disable-warning=ExperimentalWarning server.mjs --lan",
+    "icons": "node scripts/make-icons.mjs",
+    "fetch:sqljs": "node scripts/download-sqljs.mjs",
+    "test": "node --disable-warning=ExperimentalWarning --test test/"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/cli": "^2.11.4",
+    "@tauri-apps/plugin-dialog": "^2.7.3",
+    "@tauri-apps/plugin-fs": "^2.5.2",
+    "@tauri-apps/plugin-sql": "^2.4.1"
+  }
+}

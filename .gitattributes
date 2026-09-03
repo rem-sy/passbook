@@ -1,0 +1,22 @@
+# 统一换行符策略：文本文件自动归一化（入库 LF），二进制文件保持原样
+* text=auto
+
+# 二进制资源
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.wasm binary
+*.jar binary
+*.so binary
+*.db binary
+*.keystore binary
+*.jks binary
+
+# shell 脚本强制 LF（跨平台构建脚本）
+*.sh text eol=lf
