@@ -1,4 +1,4 @@
-# 密码本 Android APK 构建脚本（无符号链接权限环境的旁路方案）
+﻿# 密码本 Android APK 构建脚本（无符号链接权限环境的旁路方案）
 # 用法：powershell -ExecutionPolicy Bypass -File scripts\build-android.ps1 [-DebugBuild] [-Clean]
 #   -Clean 构建纯净版（不预置 AI 渠道，产物名带 -纯净版 后缀）
 # 预置渠道来自 public\agent-config.local.js（不入库，本机文件）；

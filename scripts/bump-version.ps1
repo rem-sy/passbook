@@ -1,4 +1,4 @@
-# 密码本版本号同步工具：tauri.conf.json / Cargo.toml / package.json 三处统一
+﻿# 密码本版本号同步工具：tauri.conf.json / Cargo.toml / package.json 三处统一
 # 用法：powershell -ExecutionPolicy Bypass -File scripts\bump-version.ps1 -Version 1.2.0
 param([Parameter(Mandatory = $true)][string]$Version)
 

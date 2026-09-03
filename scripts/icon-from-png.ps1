@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # 从 assets/icon.png 生成密码本应用全套图标（桌面 + Android）
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing

@@ -1,4 +1,4 @@
-# 密码本桌面版双版本构建：预置渠道版 + 纯净版（无预置渠道）
+﻿# 密码本桌面版双版本构建：预置渠道版 + 纯净版（无预置渠道）
 # 用法：powershell -ExecutionPolicy Bypass -File scripts\build-desktop.ps1 [-SkipPreset] [-SkipClean]
 # 预置渠道来自 public\agent-config.local.js（不入库，本机文件）；
 # 纯净版构建时该文件被临时移出，产物不带任何渠道。
@@ -9,7 +9,10 @@ $ErrorActionPreference = 'Stop'
 $proj = 'D:\hobby\源码\密码本'
 $prod = 'D:\hobby\产物\密码本'
 $localCfg = "$proj\public\agent-config.local.js"
-$ver = '1.1.0'
+# 版本号从 tauri.conf.json 读取，与三处版本文件保持一致
+$ver = (Select-String -Path "$proj\src-tauri\tauri.conf.json" -Pattern '"version"\s*:\s*"([^"]+)"').Matches[0].Groups[1].Value
+if (-not $ver) { throw '无法从 tauri.conf.json 解析版本号' }
+Write-Host "版本：$ver"
 
 $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
 $env:CARGO_NET_OFFLINE = 'true'
