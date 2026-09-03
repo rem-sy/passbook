@@ -45,6 +45,7 @@ db.exec(`
     category TEXT NOT NULL DEFAULT '',
     note TEXT NOT NULL DEFAULT '',
     totp_secret TEXT NOT NULL DEFAULT '',
+    history TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -52,10 +53,11 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_entries_account ON entries(account);
   CREATE INDEX IF NOT EXISTS idx_entries_category ON entries(category);
 `);
-// v1.3.0 迁移：为旧库补 totp_secret 列（幂等）
+// v1.3.0/v1.5.0 迁移：为旧库补 totp_secret / history 列（幂等）
 {
   const cols = db.prepare('PRAGMA table_info(entries)').all().map((c) => c.name);
   if (!cols.includes('totp_secret')) db.exec("ALTER TABLE entries ADD COLUMN totp_secret TEXT NOT NULL DEFAULT ''");
+  if (!cols.includes('history')) db.exec("ALTER TABLE entries ADD COLUMN history TEXT NOT NULL DEFAULT ''");
 }
 
 // ---------- 工具 ----------
@@ -99,7 +101,17 @@ function nowIso() { return new Date().toISOString(); }
 function escLike(s) { return s.replace(/[\\%_]/g, (m) => '\\' + m); }
 
 // ---------- 业务逻辑 ----------
-const FIELDS = ['owner', 'account', 'password', 'url', 'category', 'note', 'totp_secret'];
+const FIELDS = ['owner', 'account', 'password', 'url', 'category', 'note', 'totp_secret', 'history'];
+
+/** 密码历史：追加旧密码（时间正序，最多保留 cap 条） */
+function appendHistory(histJson, oldPassword, changedAtIso, cap = 20) {
+  if (!oldPassword) return histJson || '';
+  let list = [];
+  try { const a = JSON.parse(histJson || '[]'); if (Array.isArray(a)) list = a; } catch { /* 损坏则重建 */ }
+  list.push({ password: oldPassword, changedAt: changedAtIso });
+  if (list.length > cap) list = list.slice(list.length - cap);
+  return JSON.stringify(list);
+}
 function normalizeEntry(body = {}) {
   const e = {};
   for (const f of FIELDS) e[f] = typeof body[f] === 'string' ? body[f] : '';
@@ -207,10 +219,10 @@ async function handleApi(req, res, pathname, search) {
     }
     const now = nowIso();
     const stmt = db.prepare(
-      `INSERT INTO entries (owner, account, password, url, category, note, totp_secret, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO entries (owner, account, password, url, category, note, totp_secret, history, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
-    const r = stmt.run(e.owner, e.account, e.password, e.url, e.category, e.note, e.totp_secret, now, now);
+    const r = stmt.run(e.owner, e.account, e.password, e.url, e.category, e.note, e.totp_secret, e.history ?? '', now, now);
     const row = db.prepare('SELECT * FROM entries WHERE id = ?').get(Number(r.lastInsertRowid));
     return sendJson(res, 201, row);
   }
@@ -224,10 +236,14 @@ async function handleApi(req, res, pathname, search) {
       const existing = db.prepare('SELECT * FROM entries WHERE id = ?').get(id);
       if (!existing) return sendJson(res, 404, { error: '记录不存在' });
       const merged = { ...existing, ...patch };
+      // 密码变更时自动归档旧密码（忽略客户端传入的 history，始终服务端计算）
+      const hist = merged.password !== existing.password
+        ? appendHistory(existing.history, existing.password, nowIso())
+        : (existing.history || '');
       const stmt = db.prepare(
-        `UPDATE entries SET owner=?, account=?, password=?, url=?, category=?, note=?, totp_secret=?, updated_at=? WHERE id=?`
+        `UPDATE entries SET owner=?, account=?, password=?, url=?, category=?, note=?, totp_secret=?, history=?, updated_at=? WHERE id=?`
       );
-      stmt.run(merged.owner, merged.account, merged.password, merged.url, merged.category, merged.note, merged.totp_secret ?? '', nowIso(), id);
+      stmt.run(merged.owner, merged.account, merged.password, merged.url, merged.category, merged.note, merged.totp_secret ?? '', hist, nowIso(), id);
       const row = db.prepare('SELECT * FROM entries WHERE id = ?').get(id);
       return sendJson(res, 200, row);
     }
@@ -260,8 +276,8 @@ async function handleApi(req, res, pathname, search) {
     }
 
     const insert = db.prepare(
-      `INSERT INTO entries (owner, account, password, url, category, note, totp_secret, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO entries (owner, account, password, url, category, note, totp_secret, history, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
     const now = nowIso();
     let imported = 0, skipped = 0;
@@ -273,7 +289,7 @@ async function handleApi(req, res, pathname, search) {
         const e = normalizeEntry(raw);
         const key = `${e.owner}\u0000${e.account}\u0000${e.password}`;
         if (mode === 'merge' && existingKeys.has(key)) { skipped++; continue; }
-        insert.run(e.owner, e.account, e.password, e.url, e.category, e.note, e.totp_secret, now, now);
+        insert.run(e.owner, e.account, e.password, e.url, e.category, e.note, e.totp_secret, e.history ?? '', now, now);
         existingKeys.add(key);
         imported++;
       }

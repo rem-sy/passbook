@@ -168,6 +168,42 @@ test('导入：totp_secret 字段随条目入库', async () => {
   assert.equal(all.data.items[0].totp_secret, 'MFRGGZDF');
 });
 
+test('密码历史：修改密码自动归档旧密码；未改密码不追加；客户端伪造 history 被忽略', async () => {
+  const { data } = await j('POST', '/api/entries', { owner: 'H1', account: 'a', password: 'Old#Pass1' });
+  const id = data.id;
+  assert.equal(data.history, '');
+
+  const up = await j('PUT', `/api/entries/${id}`, { owner: 'H1', account: 'a', password: 'New#Pass2', history: '["fake"]' });
+  assert.equal(up.data.password, 'New#Pass2');
+  const hist1 = JSON.parse(up.data.history || '[]');
+  assert.equal(hist1.length, 1);
+  assert.equal(hist1[0].password, 'Old#Pass1');
+  assert.ok(hist1[0].changedAt);
+  assert.ok(!up.data.history.includes('fake')); // 伪造值被忽略
+
+  // 未改密码的更新：历史保持不变
+  const up2 = await j('PUT', `/api/entries/${id}`, { owner: 'H1x', account: 'a', password: 'New#Pass2' });
+  assert.equal(JSON.parse(up2.data.history).length, 1);
+
+  // 再改两次 → 历史 3 条，时间正序
+  await j('PUT', `/api/entries/${id}`, { owner: 'H1x', account: 'a', password: 'New#Pass3' });
+  const up4 = await j('PUT', `/api/entries/${id}`, { owner: 'H1x', account: 'a', password: 'New#Pass4' });
+  const hist4 = JSON.parse(up4.data.history);
+  assert.equal(hist4.length, 3);
+  assert.deepEqual(hist4.map((h) => h.password), ['Old#Pass1', 'New#Pass2', 'New#Pass3']);
+});
+
+test('密码历史：历史随 JSON 导出与导入往返', async () => {
+  const exp = await (await fetch(base + '/api/export')).json();
+  const withHist = exp.items.find((x) => x.history && JSON.parse(x.history).length > 0);
+  assert.ok(withHist, '导出应包含带历史的条目');
+  // 覆盖导入后历史仍在
+  const { status } = await j('POST', '/api/import', { items: [withHist], mode: 'replace' });
+  assert.equal(status, 200);
+  const all = await j('GET', '/api/entries');
+  assert.equal(JSON.parse(all.data.items[0].history).length, JSON.parse(withHist.history).length);
+});
+
 test('导出 JSON', async () => {
   const r = await fetch(base + '/api/export');
   assert.equal(r.status, 200);

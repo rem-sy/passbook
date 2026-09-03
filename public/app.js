@@ -22,6 +22,7 @@ const ICONS = {
   wand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/><path d="m14 7 3 3"/><path d="M5 6v4"/><path d="M19 14v4"/><path d="M10 2v2"/><path d="M7 8H3"/><path d="M21 16h-4"/><path d="M11 3H9"/></svg>',
   x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+  history: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>',
 };
 
 const LS_KEY = 'passbook-settings';
@@ -124,6 +125,7 @@ const SCHEMA_SQL = `
     category TEXT NOT NULL DEFAULT '',
     note TEXT NOT NULL DEFAULT '',
     totp_secret TEXT NOT NULL DEFAULT '',
+    history TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -132,9 +134,23 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_entries_category ON entries(category);
 `;
 
-const FIELDS = ['owner', 'account', 'password', 'url', 'category', 'note', 'totp_secret'];
+const FIELDS = ['owner', 'account', 'password', 'url', 'category', 'note', 'totp_secret', 'history'];
 
 function escLike(s) { return s.replace(/[\\%_]/g, (m) => '\\' + m); }
+
+/* ---------------- 密码历史（v1.5.0） ---------------- */
+/** 追加旧密码到历史（时间正序，最多保留 cap 条） */
+function appendHistory(histJson, oldPassword, changedAtIso, cap = 20) {
+  if (!oldPassword) return histJson || '';
+  let list = [];
+  try { const a = JSON.parse(histJson || '[]'); if (Array.isArray(a)) list = a; } catch { /* 损坏则重建 */ }
+  list.push({ password: oldPassword, changedAt: changedAtIso });
+  if (list.length > cap) list = list.slice(list.length - cap);
+  return JSON.stringify(list);
+}
+function parseHistory(histJson) {
+  try { const a = JSON.parse(histJson || '[]'); return Array.isArray(a) ? a : []; } catch { return []; }
+}
 
 /* ---------------- 存储层：服务端 ---------------- */
 const ServerStore = {
@@ -282,12 +298,12 @@ const LocalStore = {
       this.db.run(SCHEMA_SQL);
       await this.persist();
     }
-    // v1.3.0 迁移：为旧库补 totp_secret 列（幂等）
+    // v1.3.0/v1.5.0 迁移：为旧库补 totp_secret / history 列（幂等）
     const cols = this.query('PRAGMA table_info(entries)').map((c) => c.name);
-    if (!cols.includes('totp_secret')) {
-      this.db.run("ALTER TABLE entries ADD COLUMN totp_secret TEXT NOT NULL DEFAULT ''");
-      await this.persist();
-    }
+    let migrated = false;
+    if (!cols.includes('totp_secret')) { this.db.run("ALTER TABLE entries ADD COLUMN totp_secret TEXT NOT NULL DEFAULT ''"); migrated = true; }
+    if (!cols.includes('history')) { this.db.run("ALTER TABLE entries ADD COLUMN history TEXT NOT NULL DEFAULT ''"); migrated = true; }
+    if (migrated) await this.persist();
   },
   /** 读取底层原始字节：Tauri 下从数据库文件读，否则从 IndexedDB 读 */
   async _readRaw() {
@@ -382,8 +398,8 @@ const LocalStore = {
   async create(entry) {
     const now = new Date().toISOString();
     this.db.run(
-      'INSERT INTO entries (owner, account, password, url, category, note, totp_secret, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
-      [entry.owner, entry.account, entry.password, entry.url, entry.category, entry.note, entry.totp_secret ?? '', now, now]
+      'INSERT INTO entries (owner, account, password, url, category, note, totp_secret, history, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+      [entry.owner, entry.account, entry.password, entry.url, entry.category, entry.note, entry.totp_secret ?? '', entry.history ?? '', now, now]
     );
     const id = this.lastInsertId();
     await this.persist();
@@ -393,9 +409,13 @@ const LocalStore = {
     const cur = this.query('SELECT * FROM entries WHERE id = ?', [id])[0];
     if (!cur) throw new Error('记录不存在');
     const merged = { ...cur, ...patch };
+    // 密码变更时自动归档旧密码（忽略客户端传入的 history，始终服务端计算）
+    const hist = merged.password !== cur.password
+      ? appendHistory(cur.history, cur.password, new Date().toISOString())
+      : (cur.history || '');
     this.db.run(
-      'UPDATE entries SET owner=?, account=?, password=?, url=?, category=?, note=?, totp_secret=?, updated_at=? WHERE id=?',
-      [merged.owner, merged.account, merged.password, merged.url, merged.category, merged.note, merged.totp_secret ?? '', new Date().toISOString(), id]
+      'UPDATE entries SET owner=?, account=?, password=?, url=?, category=?, note=?, totp_secret=?, history=?, updated_at=? WHERE id=?',
+      [merged.owner, merged.account, merged.password, merged.url, merged.category, merged.note, merged.totp_secret ?? '', hist, new Date().toISOString(), id]
     );
     await this.persist();
     return this.query('SELECT * FROM entries WHERE id = ?', [id])[0];
@@ -429,8 +449,8 @@ const LocalStore = {
         const key = `${e.owner}\u0000${e.account}\u0000${e.password}`;
         if (mode === 'merge' && existingKeys.has(key)) { skipped++; continue; }
         this.db.run(
-          'INSERT INTO entries (owner, account, password, url, category, note, totp_secret, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
-          [e.owner, e.account, e.password, e.url, e.category, e.note, e.totp_secret ?? '', now, now]
+          'INSERT INTO entries (owner, account, password, url, category, note, totp_secret, history, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+          [e.owner, e.account, e.password, e.url, e.category, e.note, e.totp_secret ?? '', typeof e.history === 'string' ? e.history : '', now, now]
         );
         existingKeys.add(key);
         imported++;
@@ -665,6 +685,7 @@ function renderEntries(items) {
           <div class="entry-side">
             <span class="entry-time">${fmtTime(it.updated_at)}</span>
             <div class="entry-ops">
+              ${parseHistory(it.history).length ? `<button data-act="history" title="密码历史">${ICONS.history}</button>` : ''}
               <button data-act="edit" title="编辑">${ICONS.edit}</button>
               <button data-act="del" class="del" title="删除">${ICONS.trash}</button>
             </div>
@@ -713,6 +734,9 @@ $('#entry-list').addEventListener('click', async (e) => {
     const secret = card.querySelector('.totp-code')?.dataset.totp;
     if (!secret) return;
     try { const { code } = await PassTotp.generateTotp(secret); await copyText(code); } catch (e) { toast(e.message, true); }
+  } else if (act === 'history') {
+    const item = (await store.list({})).items.find((x) => x.id === id);
+    if (item) openHistoryModal(item);
   } else if (act === 'edit') {
     const list = await store.list({});
     const item = list.items.find((x) => x.id === id);
@@ -1019,6 +1043,52 @@ function openEditModal(item = null, prefillPw = '') {
       refreshChips();
       refreshList();
     } catch (e) { toast(e.message, true); }
+  });
+}
+
+/* ---------------- 密码历史弹窗（v1.5.0） ---------------- */
+function openHistoryModal(item) {
+  const hist = parseHistory(item.history).slice().reverse(); // 新 → 旧
+  openModal(`
+    <div class="modal-head">
+      <h3>${ICONS.history} 密码历史 · ${escapeHtml(item.owner)}${item.account ? '/' + escapeHtml(item.account) : ''}</h3>
+      <button class="modal-close" aria-label="关闭">${ICONS.x}</button>
+    </div>
+    <div class="modal-body">
+      <div id="hist-list">
+        ${hist.length ? hist.map((h) => `
+          <div class="hist-row">
+            <span class="hist-pw" data-pw="${escapeHtml(h.password)}">••••••••</span>
+            <span class="hist-time">${fmtTime(h.changedAt)}</span>
+            <div class="hist-actions">
+              <button class="hist-btn" data-hact="toggle" title="显示/隐藏">${ICONS.eye}</button>
+              <button class="hist-btn" data-hact="copy" title="复制">${ICONS.copy}</button>
+            </div>
+          </div>`).join('') : '<p class="hint">暂无历史记录</p>'}
+      </div>
+      <p class="hint">修改密码时自动归档旧密码，最多保留 20 条。</p>
+    </div>
+    <div class="modal-foot"><button class="btn" id="hist-close">关闭</button></div>
+  `, false);
+  $('#hist-close').addEventListener('click', closeModal);
+  $('#hist-list').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-hact]');
+    if (!btn) return;
+    const row = btn.closest('.hist-row');
+    const pwEl = row.querySelector('.hist-pw');
+    if (btn.dataset.hact === 'toggle') {
+      if (pwEl.classList.contains('revealed')) {
+        pwEl.classList.remove('revealed');
+        pwEl.textContent = '••••••••';
+        btn.innerHTML = ICONS.eye;
+      } else {
+        pwEl.classList.add('revealed');
+        pwEl.textContent = pwEl.dataset.pw;
+        btn.innerHTML = ICONS.eyeOff;
+      }
+    } else if (btn.dataset.hact === 'copy') {
+      await copyText(pwEl.dataset.pw);
+    }
   });
 }
 
