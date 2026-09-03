@@ -53,9 +53,11 @@
 - `prefers-color-scheme` 媒体查询 + 手动覆盖（localStorage 持久化）
 - Android `values-night` 状态栏配色联动
 
-### 2.0.0 发布（A 档收尾）
+### 2.0.0 发布（A 档收尾）✅ 已完成
 - 三处版本号统一为 2.0.0；双端双变体构建验证；README / 应用内指南更新
 - tag `v2.0.0` + GitHub Release 挂 6 个产物
+- Android 工程链重建（tauri android init + 旁路定制）：本地 Maven AAR（tauri-android 2.11.1 / tauri-plugin-dialog 2.7.1，由 `.android-dev\tauri-aar\` 聚合工程发布）、WRY 环境变量驱动 Kotlin 代码生成、release 签名（与 1.x 同证书，SHA-256 cc06eb3e…）、mipmap 图标、AGP 8.11 中文路径放行
+- 产物：桌面 4（setup/portable × 预置/纯净）+ Android arm64 2；82 项测试全绿
 
 ---
 
