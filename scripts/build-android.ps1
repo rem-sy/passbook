@@ -17,6 +17,9 @@ $api = '24'
 $profile = if ($DebugBuild) { 'debug' } else { 'release' }
 $suffix = if ($Clean) { '-clean' } else { '' }
 $localCfg = "$proj\public\agent-config.local.js"
+# 版本号从 tauri.conf.json 读取（与三处版本文件保持一致）
+$ver = (Select-String -Path "$srcTauri\tauri.conf.json" -Pattern '"version"\s*:\s*"([^"]+)"').Matches[0].Groups[1].Value
+if (-not $ver) { throw '无法从 tauri.conf.json 解析版本号' }
 
 $env:JAVA_HOME = "$dev\jdk"
 $env:ANDROID_HOME = "$dev\sdk"
@@ -29,6 +32,13 @@ $env:AR_aarch64_linux_android = "$ndkToolchain\llvm-ar.exe"
 $env:CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER = "$ndkToolchain\aarch64-linux-android$api-clang.cmd"
 # 环境变量里传 RUSTFLAGS 会整体覆盖 tauri 需要的默认值，这里只加链接参数
 $env:CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS = '-C link-arg=-landroid -C link-arg=-llog -C link-arg=-lOpenSLES'
+
+# WRY/TAURI Kotlin 代码生成（正常流程由 tauri-cli 注入；旁路模式手动设置，
+# wry/tauri 的 build.rs 会把 RustWebView.kt/TauriActivity.kt 等写入应用包目录）
+$env:WRY_ANDROID_KOTLIN_FILES_OUT_DIR = "$srcTauri\gen\android\app\src\main\java\com\passbook\app"
+$env:WRY_ANDROID_PACKAGE = 'com.passbook.app'
+$env:WRY_ANDROID_LIBRARY = 'passbook_desktop_lib'
+$env:TAURI_ANDROID_PROJECT_PATH = "$srcTauri\gen\android"
 
 # 纯净版：临时移出本机渠道文件（打包后恢复）
 $bak = $null
@@ -63,6 +73,17 @@ try {
   New-Item -ItemType Directory -Force $jniDir | Out-Null
   Copy-Item $so "$jniDir\libpassbook_desktop_lib.so" -Force
   Write-Host "    .so 已复制 $( [math]::Round((Get-Item $so).Length/1MB,1) )MB"
+  # TauriActivity.kt：tauri build.rs 的 codegen 不监听 WRY 环境变量变化（缓存命中时跳过），
+  # 旁路模式由脚本直接按上游模板生成（仅 {{package}} 占位符）
+  $ktDir = "$srcTauri\gen\android\app\src\main\java\com\passbook\app"
+  $regTpl = "$env:USERPROFILE\.cargo\registry\src\rsproxy.cn-e3de039b2554c837\tauri-2.11.1\mobile\android-codegen\TauriActivity.kt"
+  if (Test-Path $regTpl) {
+    $tpl = (Get-Content $regTpl -Raw -Encoding UTF8) -replace '\{\{package\}\}', 'com.passbook.app'
+    [System.IO.File]::WriteAllText("$ktDir\TauriActivity.kt", $tpl, [System.Text.UTF8Encoding]::new($false))
+    Write-Host "    TauriActivity.kt 已生成"
+  } else {
+    Write-Warning "未找到 tauri codegen 模板（$regTpl），TauriActivity.kt 保持现状"
+  }
   # APK assets 目录同步一份前端（兜底源；运行时以 .so 内嵌资源为准）
   $apkAssets = "$srcTauri\gen\android\app\src\main\assets"
   New-Item -ItemType Directory -Force $apkAssets | Out-Null
@@ -87,7 +108,7 @@ try {
   $apkDir = "$srcTauri\gen\android\app\build\outputs\apk\arm64\$profile"
   $apk = Get-ChildItem $apkDir -Filter '*.apk' | Select-Object -First 1
   if (!$apk) { throw "未找到 APK（预期在 $apkDir）" }
-  $dest = "D:\hobby\产物\密码本\Passbook-Android-1.1.0-arm64$suffix.apk"
+  $dest = "D:\hobby\产物\密码本\Passbook-Android-$ver-arm64$suffix.apk"
   Copy-Item $apk.FullName $dest -Force
   Write-Host "完成: $dest ($([math]::Round($apk.Length/1MB,1))MB)"
 } finally {

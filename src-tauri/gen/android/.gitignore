@@ -1,0 +1,24 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+key.properties
+keystore.properties
+
+/.tauri
+# tauri.settings.gradle 存根需要入库（旁路构建必需；正常流程 CLI 生成）
+
+# 旁路构建复制的真实目录（正常流程为符号链接，不入库）
+/app/src/main/assets/
+/app/src/main/jniLibs/

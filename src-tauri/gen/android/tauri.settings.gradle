@@ -1,0 +1,3 @@
+// 旁路存根：正常由 tauri-cli 在 android build 时生成（解析 tauri.conf.json 设默认 ABI 列表）。
+// 本项目用 PASSBOOK_SKIP_TAURI_SCRIPT=1 旁路 cargo/符号链接，ABI 由 gradlew -PabiList 等参数直接给定，
+// 此文件仅需存在以通过 settings.gradle 的 apply 检查。
