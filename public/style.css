@@ -672,6 +672,55 @@ body {
   border-radius: 5px;
 }
 
+/* ---------- 深色主题（v1.6.0）：html.dark 由 theme.js 按设置切换 ---------- */
+html.dark {
+  --bg: #12151c;
+  --card: #1a1e27;
+  --text: #e6e9f0;
+  --muted: #8a91a3;
+  --line: #272d3a;
+  --line-strong: #363e4f;
+  --primary: #7c8cf2;
+  --primary-2: #6a7bea;
+  --primary-soft: #232946;
+  --danger: #e06a6f;
+  --danger-soft: #322225;
+  --ok: #4db585;
+  --ok-soft: #1d2b25;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-lift: 0 6px 24px rgba(0, 0, 0, 0.50);
+  color-scheme: dark; /* 原生控件（滚动条、下拉、输入光标）跟随深色 */
+}
+
+/* 硬编码浅色位的深色覆盖 */
+html.dark .icon-btn:hover,
+html.dark .btn:hover,
+html.dark .btn.ghost:hover,
+html.dark .chip:hover,
+html.dark .pw-actions button:hover,
+html.dark .entry-ops button:hover,
+html.dark .modal-close:hover { background: rgba(255, 255, 255, 0.07); }
+
+html.dark .btn.danger:hover { border-color: #7a3a3d; }
+html.dark .wt-finding { background: rgba(255, 255, 255, 0.03); }
+html.dark .wt-chip.high, html.dark .wt-finding.high .wt-level { background: #3a2024; color: #f1948a; }
+html.dark .wt-chip.medium, html.dark .wt-finding.medium .wt-level { background: #3a2f1c; color: #f0b263; }
+html.dark .wt-chip.low, html.dark .wt-finding.low .wt-level { background: #1e2a44; color: #8fb0f0; }
+html.dark .wt-chip.info, html.dark .wt-finding.info .wt-level { background: #262b33; color: #aab3c0; }
+html.dark .wt-allclear { color: #6fce9e; }
+html.dark .entry-totp.expiring .totp-code,
+html.dark .entry-totp.expiring .totp-remain { color: #f1948a; }
+
+html.dark .import-preview,
+html.dark .agent-msg.sys,
+html.dark .agent-stopped,
+html.dark .guide-img,
+html.dark .guide-txt code { background: #232733; }
+html.dark .agent-msg.tool { border-color: #3b4370; color: #aab8ff; }
+html.dark .guide-txt p { color: #c6ccd8; }
+html.dark ::-webkit-scrollbar-thumb { background: #333a49; }
+html.dark ::-webkit-scrollbar-thumb:hover { background: #414a5d; }
+
 @media (max-width: 560px) {
   .agent-panel { width: 100vw; }
   .search-row { flex-wrap: wrap; }

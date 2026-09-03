@@ -8,6 +8,14 @@
   <link rel="icon" href="icons/icon-192.png" type="image/png" />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="style.css" />
+  <script>
+    // 防主题闪烁：CSS 加载后、首帧渲染前确定深浅（与 theme.js 的 resolveTheme 规则一致）
+    try {
+      var __t = (JSON.parse(localStorage.getItem('passbook-settings') || '{}').theme) || 'auto';
+      var __dark = __t === 'dark' || (__t === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      if (__dark) document.documentElement.classList.add('dark');
+    } catch (e) { /* 保持浅色 */ }
+  </script>
 </head>
 <body>
   <header class="topbar">
@@ -189,6 +197,7 @@
   <script src="watchtower.js"></script>
   <script src="totp.js"></script>
   <script src="autolock.js"></script>
+  <script src="theme.js"></script>
   <script src="db-crypto.js"></script>
   <script src="agent-core.js"></script>
   <script src="agent-config.js"></script>

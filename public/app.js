@@ -33,6 +33,7 @@ const DEFAULT_SETTINGS = {
   gen: {},             // 生成器偏好
   wt: { hibp: true, staleMonths: 12 }, // 安全体检：联网泄露检查 + 陈旧阈值（月，0=不检查）
   lock: { autoLock: 'never', clipboard: 0 }, // 自动锁定（never/60/300/hidden 秒）+ 复制后清剪贴板（0/15/30 秒）
+  theme: 'auto', // 外观：auto 跟随系统 | light | dark
 };
 
 function loadSettings() {
@@ -802,6 +803,19 @@ setInterval(() => {
 }, 5000);
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && PassLock.shouldLock({ hidden: true, cfg: loadSettings().lock })) doAutoLock();
+});
+
+/* ---------------- 主题（v1.6.0） ---------------- */
+function applyThemeNow() {
+  const eff = PassTheme.applyTheme(document, loadSettings().theme, window.matchMedia('(prefers-color-scheme: dark)').matches);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', eff === 'dark' ? '#12151c' : '#ffffff');
+  return eff;
+}
+applyThemeNow();
+// 跟随系统模式下，系统切换深浅时实时换肤
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  if (PassTheme.normalizeTheme(loadSettings().theme) === 'auto') applyThemeNow();
 });
 
 /* ---------------- 分类 chips ---------------- */
@@ -1674,6 +1688,13 @@ function openSettingsModal() {
           <option value="30" ${s.lock?.clipboard === 30 ? 'selected' : ''}>30 秒后</option>
         </select>
       </label>
+      <label class="field"><span>外观</span>
+        <select id="set-theme">
+          <option value="auto" ${(s.theme || 'auto') === 'auto' ? 'selected' : ''}>跟随系统</option>
+          <option value="light" ${s.theme === 'light' ? 'selected' : ''}>浅色</option>
+          <option value="dark" ${s.theme === 'dark' ? 'selected' : ''}>深色</option>
+        </select>
+      </label>
       <p class="hint">PIN 仅阻止他人直接打开界面。AI 查询结果已打码（真实密码只在应用卡片内展示/复制）；存、改密码时内容仍会发送给你配置的模型渠道，请只填自己信任的接口。</p>
     </div>
     <div class="modal-foot">
@@ -1784,6 +1805,12 @@ function openSettingsModal() {
     if (alEl) {
       ns.lock = { autoLock: $('#set-autolock').value, clipboard: Number($('#set-clipclear').value) || 0 };
       saveSettings(ns);
+    }
+    const themeEl = $('#set-theme');
+    if (themeEl) {
+      ns.theme = PassTheme.normalizeTheme(themeEl.value);
+      saveSettings(ns);
+      applyThemeNow();
     }
     closeModal();
     toast('设置已保存');
