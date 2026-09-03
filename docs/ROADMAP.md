@@ -76,7 +76,7 @@
 
 | 版本 | 功能 | 要点 |
 |---|---|---|
-| v2.5.0 | Android 防截屏 | MainActivity 加 `FLAG_SECURE`：后台卡片与截屏均不可见内容（几行 Kotlin） |
+| v2.5.0 | Android 防截屏 ✅ 已完成 | MainActivity 加 `FLAG_SECURE`：后台卡片与截屏均不可见内容（几行 Kotlin） |
 | v2.6.0 | 生物识别解锁 | Windows Hello / Android 指纹（BiometricPrompt），作为 PIN 的可选替代；失败回退 PIN |
 | v2.7.0 | 条目视觉增强 | 网站 favicon（本地缓存）、收藏/置顶、桌面端侧栏布局 |
 | 3.0.0 | 发布 | 全档收尾、双端验证、tag + Release |
