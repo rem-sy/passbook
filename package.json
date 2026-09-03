@@ -1,6 +1,6 @@
 {
   "name": "passbook",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "description": "密码本：强密码生成、随手保存、快速筛选查询，支持多端 .db 文件同步（桌面 SQLite + 手机浏览器本地存储）",
   "type": "module",

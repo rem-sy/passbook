@@ -34,6 +34,7 @@ const DEFAULT_SETTINGS = {
   wt: { hibp: true, staleMonths: 12 }, // 安全体检：联网泄露检查 + 陈旧阈值（月，0=不检查）
   lock: { autoLock: 'never', clipboard: 0 }, // 自动锁定（never/60/300/hidden 秒）+ 复制后清剪贴板（0/15/30 秒）
   theme: 'auto', // 外观：auto 跟随系统 | light | dark
+  backup: { enabled: true, keep: 5, intervalMin: 60 }, // 自动备份快照（v2.2.0）
 };
 
 function loadSettings() {
@@ -241,6 +242,24 @@ async function idbSet(key, val) {
   return new Promise((res, rej) => {
     const tx = db.transaction(IDB_STORE, 'readwrite');
     tx.objectStore(IDB_STORE).put(val, key);
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
+async function idbKeys() {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(IDB_STORE, 'readonly');
+    const rq = tx.objectStore(IDB_STORE).getAllKeys();
+    rq.onsuccess = () => res(rq.result || []);
+    rq.onerror = () => rej(rq.error);
+  });
+}
+async function idbDel(key) {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).delete(key);
     tx.oncomplete = () => res();
     tx.onerror = () => rej(tx.error);
   });
@@ -839,6 +858,9 @@ applyThemeNow();
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if (PassTheme.normalizeTheme(loadSettings().theme) === 'auto') applyThemeNow();
 });
+
+// 自动备份调度（v2.2.0）：延迟启动避免与首屏竞争
+scheduleAutoBackup();
 
 /* ---------------- 分类 chips ---------------- */
 async function refreshChips() {
@@ -1664,6 +1686,23 @@ function openSettingsModal() {
       <div class="field"><span>数据库加密</span>
         <p class="hint">服务器存储模式的数据库由服务端管理，暂不支持应用内加密；重要数据请用「导出」定期备份。</p>
       </div>`;
+  const bk = { ...DEFAULT_SETTINGS.backup, ...(s.backup || {}) };
+  const backupField = currentMode === 'local' ? `
+      <div class="field"><span>自动备份快照（${IS_TAURI ? '存于应用数据目录 backups\\' : '存于本机浏览器存储'}，加密库快照保持密文）</span>
+        <div class="chk-group" style="padding-top:2px">
+          <label><input type="checkbox" id="set-backup-enabled" ${bk.enabled ? 'checked' : ''} /> 自动备份（每 ${bk.intervalMin} 分钟内至多一次）</label>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center">
+          <label style="display:flex;gap:6px;align-items:center;font-size:13px">保留份数
+            <select id="set-backup-keep" style="width:auto;padding:6px 8px">
+              ${[3, 5, 10, 20].map((n) => `<option value="${n}" ${bk.keep === n ? 'selected' : ''}>${n} 份</option>`).join('')}
+            </select>
+          </label>
+          <button class="btn" id="btn-backup-now" type="button">立即备份</button>
+        </div>
+        <div id="backup-list" class="backup-list" style="margin-top:10px"></div>
+        <p class="hint">快照与主库同格式（含加密态）。恢复 = 用快照覆盖当前主库后重启应用，请谨慎操作。</p>
+      </div>` : '';
 
   openModal(`
     <div class="modal-head">
@@ -1674,6 +1713,7 @@ function openSettingsModal() {
       ${modeField}
       ${dbPathField}
       ${encField}
+      ${backupField}
       ${agentField}
       <div class="field"><span>安全体检</span>
         <div class="chk-group" style="padding-top:2px">
@@ -1834,10 +1874,78 @@ function openSettingsModal() {
       saveSettings(ns);
       applyThemeNow();
     }
+    const bkKeep = $('#set-backup-keep');
+    if (bkKeep) {
+      ns.backup = {
+        ...(ns.backup || DEFAULT_SETTINGS.backup),
+        enabled: !!$('#set-backup-enabled').checked,
+        keep: Number(bkKeep.value) || 5,
+      };
+      saveSettings(ns);
+    }
     closeModal();
     toast('设置已保存');
     if (!IS_TAURI) location.reload();
   });
+
+  // 备份区交互：列表渲染 / 立即备份 / 恢复 / 删除
+  async function renderBackupList() {
+    const box = $('#backup-list');
+    if (!box) return;
+    box.innerHTML = '<p class="hint">快照读取中…</p>';
+    try {
+      const list = await BackupAdapter.list();
+      if (!list.length) { box.innerHTML = '<p class="hint">暂无快照。点击「立即备份」创建第一个。</p>'; return; }
+      box.innerHTML = list.map((f) => `
+        <div class="backup-item" data-name="${escapeHtml(f.name)}">
+          <span class="backup-time">${PassBackup.formatBackupLabel(f.name)}</span>
+          <span class="backup-size">${PassBackup.formatSize(f.size)}</span>
+          <span class="backup-ops">
+            <button class="btn" data-bact="restore">恢复</button>
+            <button class="btn" data-bact="del">删除</button>
+          </span>
+        </div>`).join('');
+    } catch (e) {
+      box.innerHTML = `<p class="hint" style="color:var(--danger)">快照读取失败：${escapeHtml(e.message)}</p>`;
+    }
+  }
+  const bkNowBtn = $('#btn-backup-now');
+  if (bkNowBtn) {
+    bkNowBtn.addEventListener('click', async () => {
+      bkNowBtn.disabled = true;
+      try { await runBackup(true); await renderBackupList(); }
+      catch (e) { toast('备份失败：' + e.message, true); }
+      finally { bkNowBtn.disabled = false; }
+    });
+    renderBackupList();
+    $('#backup-list').addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-bact]');
+      if (!btn) return;
+      const item = btn.closest('.backup-item');
+      const name = item?.dataset.name;
+      if (!name) return;
+      if (btn.dataset.bact === 'del') {
+        if (!confirm(`删除快照 ${PassBackup.formatBackupLabel(name)}？`)) return;
+        try { await BackupAdapter.remove(name); await renderBackupList(); }
+        catch (err) { toast('删除失败：' + err.message, true); }
+      } else if (btn.dataset.bact === 'restore') {
+        if (!confirm(`用快照 ${PassBackup.formatBackupLabel(name)} 覆盖当前数据库并重启应用？\n当前未保存的修改将丢失。`)) return;
+        try {
+          const bytes = await BackupAdapter.read(name);
+          if (!bytes || !bytes.byteLength) throw new Error('快照为空');
+          // 写回主库位置，走启动加载链（自动处理加密/迁移）
+          if (IS_TAURI) {
+            const path = await getTauriDbPath();
+            await tauriInvoke('write_db_file', { path, bytes: Array.from(bytes) });
+          } else {
+            await idbSet('db', bytes);
+          }
+          toast('已恢复，正在重载…');
+          setTimeout(() => location.reload(), 600);
+        } catch (err) { toast('恢复失败：' + err.message, true); }
+      }
+    });
+  }
 }
 $('#btn-settings').addEventListener('click', openSettingsModal);
 
@@ -1885,6 +1993,99 @@ $('#sort').addEventListener('change', (e) => {
   state.sort = e.target.value;
   refreshList();
 });
+
+/* ---------------- 自动备份快照（v2.2.0） ---------------- */
+const BackupAdapter = {
+  /** 快照目录（Tauri 文件模式）；浏览器模式返回 null */
+  async dir() {
+    if (!IS_TAURI) return null;
+    return await tauriInvoke('get_backups_dir');
+  },
+  /** 列出全部快照 [{name, size, mtime}] 按时间降序 */
+  async list() {
+    if (IS_TAURI) {
+      const dir = await this.dir();
+      const files = await tauriInvoke('list_dir_files', { dir, ext: 'db' });
+      return (files || [])
+        .filter((f) => PassBackup.parseBackupName(f.name))
+        .map((f) => ({ name: f.name, size: f.size, at: new Date(PassBackup.parseBackupName(f.name)).getTime() }))
+        .sort((a, b) => b.at - a.at);
+    }
+    const keys = await idbKeys();
+    const names = keys.map(PassBackup.nameFromIdbKey).filter(Boolean).filter((n) => PassBackup.parseBackupName(n));
+    const out = [];
+    for (const n of PassBackup.sortDesc(names)) {
+      const v = await idbGet(PassBackup.idbKey(n));
+      out.push({ name: n, size: v && v.byteLength ? v.byteLength : (v ? v.length : 0), at: PassBackup.parseBackupName(n).getTime() });
+    }
+    return out;
+  },
+  /** 写入快照（bytes 为当前库原始持久化字节） */
+  async write(name, bytes) {
+    if (IS_TAURI) {
+      const dir = await this.dir();
+      await tauriInvoke('write_db_file', { path: dir + '\\' + name, bytes: Array.from(bytes) });
+      return;
+    }
+    await idbSet(PassBackup.idbKey(name), bytes);
+  },
+  /** 读取快照字节 */
+  async read(name) {
+    if (IS_TAURI) {
+      const dir = await this.dir();
+      const b = await tauriInvoke('read_db_file', { path: dir + '\\' + name });
+      return b && b.length ? new Uint8Array(b) : null;
+    }
+    return await idbGet(PassBackup.idbKey(name));
+  },
+  async remove(name) {
+    if (IS_TAURI) {
+      const dir = await this.dir();
+      await tauriInvoke('delete_file', { path: dir + '\\' + name });
+      return;
+    }
+    await idbDel(PassBackup.idbKey(name));
+  },
+  /** 最近一次快照时间（ms）或 null */
+  async lastBackupAt() {
+    const list = await this.list();
+    return list.length ? list[0].at : null;
+  },
+};
+
+/** 执行一次备份（快照 + 滚动清理）。manual=true 跳过节流。仅本地存储模式。 */
+async function runBackup(manual = false) {
+  if (currentMode !== 'local') {
+    if (manual) toast('服务器存储模式由服务端管理数据，请用「导出」备份', true);
+    return null;
+  }
+  const s = loadSettings();
+  const bk = s.backup || DEFAULT_SETTINGS.backup;
+  if (!manual) {
+    const last = await BackupAdapter.lastBackupAt();
+    if (!PassBackup.shouldAutoBackup({ enabled: bk.enabled, lastBackupAt: last, intervalMin: bk.intervalMin })) return null;
+  }
+  const bytes = await LocalStore._readRaw();
+  if (!bytes || !bytes.byteLength) { if (manual) toast('当前无数据可备份', true); return null; }
+  const name = PassBackup.backupFileName(new Date());
+  await BackupAdapter.write(name, bytes);
+  // 滚动清理
+  const list = await BackupAdapter.list();
+  for (const f of PassBackup.toDelete(list.map((x) => x.name), bk.keep)) {
+    try { await BackupAdapter.remove(f); } catch { /* 忽略单个清理失败 */ }
+  }
+  if (manual) toast(`已备份：${PassBackup.formatBackupLabel(name)}（${PassBackup.formatSize(bytes.byteLength)}）`);
+  return name;
+}
+
+/** 应用空闲备件：启动 30 秒后首次检查，之后每 15 分钟检查（内部节流 intervalMin） */
+function scheduleAutoBackup() {
+  const tick = async () => {
+    try { await runBackup(false); } catch (e) { console.warn('[backup]', e?.message || e); }
+  };
+  setTimeout(tick, 30 * 1000);
+  setInterval(tick, 15 * 60 * 1000);
+}
 
 /* ---------------- Markdown 轻量渲染 ---------------- */
 /** 先把 HTML 转义，再安全地将 Markdown 语法转为 HTML 标签（零依赖） */

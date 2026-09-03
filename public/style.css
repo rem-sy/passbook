@@ -279,6 +279,18 @@ mark.hl {
 }
 html.dark mark.hl { background: rgba(255, 193, 7, 0.38); color: #ffe9b0; }
 .entry mark.hl { font-weight: 600; }
+
+/* ---------- 自动备份快照列表（v2.2.0） ---------- */
+.backup-list { display: flex; flex-direction: column; gap: 6px; }
+.backup-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px;
+  font-size: 13px; background: var(--card);
+}
+.backup-time { font-variant-numeric: tabular-nums; }
+.backup-size { color: var(--muted); flex: 1; }
+.backup-ops { display: flex; gap: 6px; }
+.backup-ops .btn { padding: 4px 10px; font-size: 12px; }
 .search-wrap input::-webkit-search-cancel-button { -webkit-appearance: none; }
 .sort-select {
   border: 1px solid var(--line);

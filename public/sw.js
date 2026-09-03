@@ -1,5 +1,5 @@
 /* 密码本 · Service Worker：离线可用（PWA） */
-const CACHE_NAME = 'passbook-v19';
+const CACHE_NAME = 'passbook-v20';
 const ASSETS = [
   './',
   './index.html',
@@ -11,6 +11,7 @@ const ASSETS = [
   './autolock.js',
   './theme.js',
   './search.js',
+  './backup.js',
   './db-crypto.js',
   './agent-core.js',
   './agent-config.js',

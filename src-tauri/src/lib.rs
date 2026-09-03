@@ -48,6 +48,70 @@ fn write_db_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
     })
 }
 
+/// 备份快照文件元信息（v2.2.0 自动备份）
+#[derive(serde::Serialize)]
+struct BackupFileInfo {
+    name: String,
+    size: u64,
+    mtime_ms: i64,
+}
+
+/// 备份快照目录：<数据根目录>/backups
+#[tauri::command]
+fn get_backups_dir(app: AppHandle) -> String {
+    let dir = match app.try_state::<DataRoot>() {
+        Some(root) => root.0.join("backups"),
+        None => PathBuf::from("backups"),
+    };
+    let _ = fs::create_dir_all(&dir);
+    dir.to_string_lossy().to_string()
+}
+
+/// 列出目录内指定后缀的文件（按修改时间降序由前端排序，此处保持任意序）
+#[tauri::command]
+fn list_dir_files(dir: String, ext: String) -> Result<Vec<BackupFileInfo>, String> {
+    let p = PathBuf::from(&dir);
+    if !p.exists() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for entry in fs::read_dir(&p).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let matches_ext = if ext.is_empty() {
+            true
+        } else {
+            path.extension().map(|e| e.to_string_lossy().eq_ignore_ascii_case(&ext)).unwrap_or(false)
+        };
+        if !matches_ext {
+            continue;
+        }
+        let meta = entry.metadata().map_err(|e| e.to_string())?;
+        let mtime_ms = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        out.push(BackupFileInfo { name, size: meta.len(), mtime_ms });
+    }
+    Ok(out)
+}
+
+/// 删除文件（用于备份滚动清理；不存在视为成功）
+#[tauri::command]
+fn delete_file(path: String) -> Result<(), String> {
+    let p = PathBuf::from(&path);
+    if !p.exists() {
+        return Ok(());
+    }
+    fs::remove_file(&p).map_err(|e| e.to_string())
+}
+
 /// 弹出保存对话框，让用户选择数据库文件的新位置
 #[tauri::command]
 async fn pick_db_path(app: AppHandle) -> Result<Option<String>, String> {
@@ -378,6 +442,9 @@ pub fn run() {
             export_db,
             export_json,
             pick_import_db,
+            get_backups_dir,
+            list_dir_files,
+            delete_file,
             agent_http,
             agent_http_stream,
             agent_abort,
