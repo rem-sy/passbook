@@ -31,6 +31,7 @@ const DEFAULT_SETTINGS = {
   pinHash: '',         // SHA-256(pin)，空 = 未启用
   gen: {},             // 生成器偏好
   wt: { hibp: true, staleMonths: 12 }, // 安全体检：联网泄露检查 + 陈旧阈值（月，0=不检查）
+  lock: { autoLock: 'never', clipboard: 0 }, // 自动锁定（never/60/300/hidden 秒）+ 复制后清剪贴板（0/15/30 秒）
 };
 
 function loadSettings() {
@@ -743,7 +744,41 @@ async function copyText(text) {
     ta.remove();
     toast('已复制到剪贴板');
   }
+  scheduleClipboardClear();
 }
+
+/* ---------------- 自动锁定 + 剪贴板自动清除（v1.4.0） ---------------- */
+let clipClearTimer = null;
+let lastUserActivity = Date.now();
+['pointerdown', 'keydown', 'touchstart', 'wheel'].forEach((ev) =>
+  document.addEventListener(ev, () => { lastUserActivity = Date.now(); }, { passive: true, capture: true })
+);
+
+function scheduleClipboardClear() {
+  const ms = PassLock.msUntilClear(loadSettings().lock);
+  if (!ms) return;
+  clearTimeout(clipClearTimer);
+  clipClearTimer = setTimeout(async () => {
+    try { await navigator.clipboard.writeText(' '); } catch { /* 尽力而为 */ }
+    try { await navigator.clipboard.writeText(''); } catch { /* 部分平台不接受空串 */ }
+    toast('剪贴板已自动清除');
+  }, ms);
+}
+
+function doAutoLock() {
+  if (!loadSettings().pinHash) return; // 未启用启动锁则无锁可上
+  unlocked = false;
+  closeModal();
+  refreshList(); // 重新打码已显示的密码与验证码
+  showLockIfNeeded();
+}
+
+setInterval(() => {
+  if (PassLock.shouldLock({ lastActivity: lastUserActivity, now: Date.now(), hidden: document.hidden, cfg: loadSettings().lock })) doAutoLock();
+}, 5000);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && PassLock.shouldLock({ hidden: true, cfg: loadSettings().lock })) doAutoLock();
+});
 
 /* ---------------- 分类 chips ---------------- */
 async function refreshChips() {
@@ -1554,6 +1589,21 @@ function openSettingsModal() {
         </div>
         <input id="set-pin" type="password" placeholder="${s.pinHash ? '留空保持不变，输入新 PIN 可更换' : '设置 4-12 位 PIN'}" autocomplete="new-password" ${s.pinHash ? '' : 'disabled'} />
       </div>
+      <label class="field"><span>自动锁定（需已启用启动锁）</span>
+        <select id="set-autolock">
+          <option value="never" ${(s.lock?.autoLock || 'never') === 'never' ? 'selected' : ''}>永不</option>
+          <option value="60" ${s.lock?.autoLock === '60' ? 'selected' : ''}>无操作 1 分钟后</option>
+          <option value="300" ${s.lock?.autoLock === '300' ? 'selected' : ''}>无操作 5 分钟后</option>
+          <option value="hidden" ${s.lock?.autoLock === 'hidden' ? 'selected' : ''}>切到后台立即锁定</option>
+        </select>
+      </label>
+      <label class="field"><span>复制后自动清空剪贴板</span>
+        <select id="set-clipclear">
+          <option value="0" ${(s.lock?.clipboard || 0) === 0 ? 'selected' : ''}>关闭</option>
+          <option value="15" ${s.lock?.clipboard === 15 ? 'selected' : ''}>15 秒后（推荐）</option>
+          <option value="30" ${s.lock?.clipboard === 30 ? 'selected' : ''}>30 秒后</option>
+        </select>
+      </label>
       <p class="hint">PIN 仅阻止他人直接打开界面。AI 查询结果已打码（真实密码只在应用卡片内展示/复制）；存、改密码时内容仍会发送给你配置的模型渠道，请只填自己信任的接口。</p>
     </div>
     <div class="modal-foot">
@@ -1658,6 +1708,11 @@ function openSettingsModal() {
     const wtEl = $('#set-wt-hibp');
     if (wtEl) {
       ns.wt = { hibp: wtEl.checked, staleMonths: Number($('#set-wt-stale').value) || 0 };
+      saveSettings(ns);
+    }
+    const alEl = $('#set-autolock');
+    if (alEl) {
+      ns.lock = { autoLock: $('#set-autolock').value, clipboard: Number($('#set-clipclear').value) || 0 };
       saveSettings(ns);
     }
     closeModal();
