@@ -112,6 +112,32 @@ fn delete_file(path: String) -> Result<(), String> {
     fs::remove_file(&p).map_err(|e| e.to_string())
 }
 
+/// 附件等二进制另存为（v2.4.0）：弹保存对话框写文件
+#[tauri::command]
+async fn export_bytes(app: AppHandle, bytes: Vec<u8>, suggested_name: String) -> Result<Option<String>, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("保存附件")
+        .set_file_name(&suggested_name)
+        .save_file(move |f| {
+            let _ = tx.send(f.and_then(|fp| match fp {
+                FilePath::Path(p) => Some(p),
+                _ => None,
+            }));
+        });
+    let dest = rx.await.unwrap_or(None);
+    if let Some(dest) = dest {
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        fs::write(&dest, &bytes).map_err(|e| e.to_string())?;
+        Ok(Some(dest.to_string_lossy().to_string()))
+    } else {
+        Ok(None)
+    }
+}
+
 /// 弹出保存对话框，让用户选择数据库文件的新位置
 #[tauri::command]
 async fn pick_db_path(app: AppHandle) -> Result<Option<String>, String> {
@@ -445,6 +471,7 @@ pub fn run() {
             get_backups_dir,
             list_dir_files,
             delete_file,
+            export_bytes,
             agent_http,
             agent_http_stream,
             agent_abort,

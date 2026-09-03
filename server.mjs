@@ -52,6 +52,16 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_entries_owner   ON entries(owner);
   CREATE INDEX IF NOT EXISTS idx_entries_account ON entries(account);
   CREATE INDEX IF NOT EXISTS idx_entries_category ON entries(category);
+  CREATE TABLE IF NOT EXISTS attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    mime TEXT NOT NULL DEFAULT 'application/octet-stream',
+    size INTEGER NOT NULL DEFAULT 0,
+    data BLOB,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_attachments_entry ON attachments(entry_id);
 `);
 // v1.3.0/v1.5.0 迁移：为旧库补 totp_secret / history 列（幂等）
 {
@@ -59,6 +69,11 @@ db.exec(`
   if (!cols.includes('totp_secret')) db.exec("ALTER TABLE entries ADD COLUMN totp_secret TEXT NOT NULL DEFAULT ''");
   if (!cols.includes('history')) db.exec("ALTER TABLE entries ADD COLUMN history TEXT NOT NULL DEFAULT ''");
 }
+
+/** 附件单文件上限（2MB） */
+const ATTACHMENT_MAX_BYTES = 2 * 1024 * 1024;
+/** base64 → Buffer */
+function b64ToBuffer(b64) { return Buffer.from(String(b64 || ''), 'base64'); }
 
 // ---------- 工具 ----------
 const MIME = {
@@ -250,8 +265,61 @@ async function handleApi(req, res, pathname, search) {
     if (req.method === 'DELETE') {
       const r = db.prepare('DELETE FROM entries WHERE id = ?').run(id);
       if (r.changes === 0) return sendJson(res, 404, { error: '记录不存在' });
+      db.prepare('DELETE FROM attachments WHERE entry_id = ?').run(id); // 级联清理附件
       return sendJson(res, 200, { ok: true });
     }
+  }
+
+  // ---------- 附件（v2.4.0） ----------
+  if (pathname === '/api/attachments' && req.method === 'GET') {
+    const entryId = Number(search.get('entry_id'));
+    if (!Number.isInteger(entryId) || entryId <= 0) return sendJson(res, 400, { error: '缺少 entry_id' });
+    const rows = db.prepare(
+      'SELECT id, entry_id, name, mime, size, created_at FROM attachments WHERE entry_id = ? ORDER BY id'
+    ).all(entryId);
+    return sendJson(res, 200, rows);
+  }
+  if (pathname === '/api/attachments' && req.method === 'POST') {
+    const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
+    const entryId = Number(body.entryId);
+    if (!Number.isInteger(entryId) || entryId <= 0) return sendJson(res, 400, { error: '缺少 entryId' });
+    if (!db.prepare('SELECT id FROM entries WHERE id = ?').get(entryId)) {
+      return sendJson(res, 404, { error: '条目不存在' });
+    }
+    const name = String(body.name || '').trim().slice(0, 200);
+    if (!name) return sendJson(res, 400, { error: '附件名不能为空' });
+    const buf = b64ToBuffer(body.dataB64);
+    if (!buf.length) return sendJson(res, 400, { error: '附件内容为空' });
+    if (buf.length > ATTACHMENT_MAX_BYTES) return sendJson(res, 413, { error: '附件超过 2MB 上限' });
+    const mime = String(body.mime || 'application/octet-stream').slice(0, 120);
+    const r = db.prepare(
+      'INSERT INTO attachments (entry_id, name, mime, size, data, created_at) VALUES (?,?,?,?,?,?)'
+    ).run(entryId, name, mime, buf.length, buf, nowIso());
+    return sendJson(res, 200, { id: Number(r.lastInsertRowid) });
+  }
+  {
+    const m = /^\/api\/attachments\/(\d+)$/.exec(pathname);
+    if (m) {
+      const id = Number(m[1]);
+      if (req.method === 'GET') {
+        const row = db.prepare('SELECT * FROM attachments WHERE id = ?').get(id);
+        if (!row) return sendJson(res, 404, { error: '附件不存在' });
+        // node:sqlite 的 BLOB 是 Uint8Array（不一定是 Buffer），统一转 base64
+        row.data = row.data == null ? '' : Buffer.from(row.data).toString('base64');
+        return sendJson(res, 200, row);
+      }
+      if (req.method === 'DELETE') {
+        const r = db.prepare('DELETE FROM attachments WHERE id = ?').run(id);
+        if (r.changes === 0) return sendJson(res, 404, { error: '附件不存在' });
+        return sendJson(res, 200, { ok: true });
+      }
+    }
+  }
+  if (pathname === '/api/attachments-count' && req.method === 'GET') {
+    const rows = db.prepare('SELECT entry_id, COUNT(*) AS n FROM attachments GROUP BY entry_id').all();
+    const map = {};
+    for (const r of rows) map[r.entry_id] = r.n;
+    return sendJson(res, 200, map);
   }
 
   if (pathname === '/api/categories' && req.method === 'GET') {

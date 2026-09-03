@@ -235,3 +235,63 @@ test('数据目录包含数据库文件', () => {
   const files = readdirSync(DATA_DIR);
   assert.ok(files.includes('passwords.db'), `实际文件: ${files.join(', ')}`);
 });
+
+/* ---------- 附件（v2.4.0） ---------- */
+test('附件：上传 → 列表 → 读取（base64 往返）→ 计数', async () => {
+  const created = await j('POST', '/api/entries', { owner: '附件测试', account: 'att@x.com', password: 'p1' });
+  const id = created.data.id;
+  const payload = Buffer.from('hello-attachment-密码本').toString('base64');
+  const up = await j('POST', '/api/attachments', { entryId: id, name: '说明.txt', mime: 'text/plain', dataB64: payload });
+  assert.equal(up.status, 200);
+  assert.ok(Number.isInteger(up.data.id));
+
+  const list = await j('GET', `/api/attachments?entry_id=${id}`);
+  assert.equal(list.status, 200);
+  assert.equal(list.data.length, 1);
+  assert.equal(list.data[0].name, '说明.txt');
+  assert.equal(list.data[0].size, Buffer.from('hello-attachment-密码本').length);
+  assert.ok(!('data' in list.data[0]), '列表不应包含 data');
+
+  const one = await j('GET', `/api/attachments/${up.data.id}`);
+  assert.equal(one.status, 200);
+  assert.equal(Buffer.from(one.data.data, 'base64').toString(), 'hello-attachment-密码本');
+
+  const counts = await j('GET', '/api/attachments-count');
+  assert.equal(counts.data[id], 1);
+});
+
+test('附件：2MB 上限拒绝（413）', async () => {
+  const created = await j('POST', '/api/entries', { owner: '附件上限', account: 'big@x.com', password: 'p2' });
+  const big = 'A'.repeat(2 * 1024 * 1024 + 1);
+  const r = await j('POST', '/api/attachments', { entryId: created.data.id, name: 'big.bin', dataB64: Buffer.from(big).toString('base64') });
+  assert.equal(r.status, 413);
+});
+
+test('附件：参数校验与不存在条目', async () => {
+  const r1 = await j('POST', '/api/attachments', { entryId: 999999, name: 'x', dataB64: 'eA==' });
+  assert.equal(r1.status, 404);
+  const r2 = await j('POST', '/api/attachments', { name: 'x', dataB64: 'eA==' });
+  assert.equal(r2.status, 400);
+  const created = await j('POST', '/api/entries', { owner: '附件校验', account: 'v@x.com', password: 'p4' });
+  const r3 = await j('POST', '/api/attachments', { entryId: created.data.id, name: '', dataB64: 'eA==' });
+  assert.equal(r3.status, 400);
+});
+
+test('附件：删除附件与条目级联删除', async () => {
+  const created = await j('POST', '/api/entries', { owner: '级联', account: 'c@x.com', password: 'p3' });
+  const id = created.data.id;
+  const up1 = await j('POST', '/api/attachments', { entryId: id, name: 'a.txt', dataB64: 'YQ==' });
+  const up2 = await j('POST', '/api/attachments', { entryId: id, name: 'b.txt', dataB64: 'Yg==' });
+  // 删一个
+  const del = await j('DELETE', `/api/attachments/${up1.data.id}`);
+  assert.equal(del.status, 200);
+  const list = await j('GET', `/api/attachments?entry_id=${id}`);
+  assert.equal(list.data.length, 1);
+  assert.equal(list.data[0].name, 'b.txt');
+  // 删条目 → 附件级联清空
+  await j('DELETE', `/api/entries/${id}`);
+  const after = await j('GET', `/api/attachments?entry_id=${id}`);
+  assert.equal(after.data.length, 0);
+  const gone = await j('GET', `/api/attachments/${up2.data.id}`);
+  assert.equal(gone.status, 404);
+});

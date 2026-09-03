@@ -23,6 +23,7 @@ const ICONS = {
   x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
   history: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>',
+  paperclip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>',
 };
 
 const LS_KEY = 'passbook-settings';
@@ -134,7 +135,20 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_entries_owner ON entries(owner);
   CREATE INDEX IF NOT EXISTS idx_entries_account ON entries(account);
   CREATE INDEX IF NOT EXISTS idx_entries_category ON entries(category);
+  CREATE TABLE IF NOT EXISTS attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    mime TEXT NOT NULL DEFAULT 'application/octet-stream',
+    size INTEGER NOT NULL DEFAULT 0,
+    data BLOB,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_attachments_entry ON attachments(entry_id);
 `;
+
+/** 附件大小上限（字节）：单文件 2MB */
+const ATTACHMENT_MAX_BYTES = 2 * 1024 * 1024;
 
 const FIELDS = ['owner', 'account', 'password', 'url', 'category', 'note', 'totp_secret', 'history'];
 
@@ -213,6 +227,40 @@ const ServerStore = {
   async dbPath() {
     const h = await this.health();
     return h.dbPath;
+  },
+
+  /* ---------------- 附件（v2.4.0）：服务端存储，BLOB 存库 ---------------- */
+  attachments: {
+    async list(entryId) {
+      const r = await fetch('/api/attachments?entry_id=' + encodeURIComponent(entryId), { cache: 'no-store' });
+      if (!r.ok) throw new Error('获取附件失败');
+      return r.json();
+    },
+    async add(entryId, { name, mime, dataB64 }) {
+      const bytes = base64ToBytes(dataB64);
+      if (bytes.byteLength > ATTACHMENT_MAX_BYTES) throw new Error('附件超过 2MB 上限');
+      const r = await fetch('/api/attachments', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ entryId, name, mime, dataB64 }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || '上传失败');
+      return j.id;
+    },
+    async get(id) {
+      const r = await fetch('/api/attachments/' + encodeURIComponent(id), { cache: 'no-store' });
+      if (!r.ok) throw new Error('读取附件失败');
+      return r.json();
+    },
+    async remove(id) {
+      const r = await fetch('/api/attachments/' + encodeURIComponent(id), { method: 'DELETE' });
+      if (!r.ok) throw new Error('删除附件失败');
+    },
+    async countByEntry() {
+      const r = await fetch('/api/attachments-count', { cache: 'no-store' });
+      if (!r.ok) throw new Error('获取附件计数失败');
+      return r.json();
+    },
   },
 };
 
@@ -442,6 +490,7 @@ const LocalStore = {
   },
   async remove(id) {
     this.db.run('DELETE FROM entries WHERE id = ?', [id]);
+    this.db.run('DELETE FROM attachments WHERE entry_id = ?', [id]); // 级联清理附件（v2.4.0）
     await this.persist();
   },
   async categories() {
@@ -507,7 +556,55 @@ const LocalStore = {
     return null;
   },
   async dbPath() { return '浏览器本地 (IndexedDB)'; },
+
+  /* ---------------- 附件（v2.4.0）：BLOB 存库，随库文件整体加密 ---------------- */
+  attachments: {
+    async list(entryId) {
+      return LocalStore.query(
+        'SELECT id, entry_id, name, mime, size, created_at FROM attachments WHERE entry_id = ? ORDER BY id',
+        [entryId],
+      );
+    },
+    async add(entryId, { name, mime, dataB64 }) {
+      const bytes = base64ToBytes(dataB64);
+      if (bytes.byteLength > ATTACHMENT_MAX_BYTES) throw new Error('附件超过 2MB 上限');
+      LocalStore.db.run(
+        'INSERT INTO attachments (entry_id, name, mime, size, data, created_at) VALUES (?,?,?,?,?,?)',
+        [entryId, name, mime || 'application/octet-stream', bytes.byteLength, bytes, new Date().toISOString()],
+      );
+      await LocalStore.persist();
+      return LocalStore.lastInsertId();
+    },
+    async get(id) {
+      return LocalStore.query('SELECT * FROM attachments WHERE id = ?', [id])[0] || null;
+    },
+    async remove(id) {
+      LocalStore.db.run('DELETE FROM attachments WHERE id = ?', [id]);
+      await LocalStore.persist();
+    },
+    async countByEntry() {
+      const rows = LocalStore.query('SELECT entry_id, COUNT(*) AS n FROM attachments GROUP BY entry_id');
+      const map = {};
+      for (const r of rows) map[r.entry_id] = r.n;
+      return map;
+    },
+  },
 };
+
+/** base64 → Uint8Array */
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+/** Uint8Array → base64（分块避免参数栈溢出） */
+function bytesToBase64(bytes) {
+  let bin = '';
+  const CH = 0x8000;
+  for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  return btoa(bin);
+}
 
 /* ---------------- 存储层选择 ---------------- */
 let store = null;
@@ -682,9 +779,20 @@ async function refreshList() {
     const filtered = state.q && shown.length !== total ? `${shown.length}/` : '';
     $('#count').textContent = `共 ${filtered}${total} 条`;
     $('#empty-state').classList.toggle('hidden', shown.length > 0);
+    // 附件计数徽标（v2.4.0，失败静默——旧服务端无该接口）
+    refreshAttachCounts().then(() => {
+      if (!_attachCounts || !Object.keys(_attachCounts).length) return;
+      renderEntries(shown, hitsMap);
+    }).catch(() => {});
   } catch (e) {
     toast(e.message, true);
   }
+}
+
+let _attachCounts = {};
+async function refreshAttachCounts() {
+  try { _attachCounts = await store.attachments.countByEntry() || {}; }
+  catch { _attachCounts = {}; }
 }
 
 function renderEntries(items, hitsMap) {
@@ -696,6 +804,9 @@ function renderEntries(items, hitsMap) {
   };
   list.innerHTML = items.map((it) => {
     const cat = it.category ? `<span class="entry-cat">${hl('category', it.id, it.category)}</span>` : '';
+    const attachBadge = _attachCounts[it.id]
+      ? `<button class="entry-attach" data-act="attach" data-aname="${escapeHtml(it.owner)}" title="附件 ×${_attachCounts[it.id]}">${ICONS.paperclip}<span>${_attachCounts[it.id]}</span></button>`
+      : '';
     const url = it.url ? `<a class="entry-url" href="${escapeHtml(it.url)}" target="_blank" rel="noopener noreferrer">${hl('url', it.id, it.url)}</a>` : '';
     const note = it.note ? `<div class="entry-note">${hl('note', it.id, it.note)}</div>` : '';
     return `
@@ -705,6 +816,7 @@ function renderEntries(items, hitsMap) {
             <div class="entry-title">
               <span class="entry-owner">${hl('owner', it.id, it.owner)}</span>
               ${cat}
+              ${attachBadge}
             </div>
             <div class="entry-account">${hl('account', it.id, it.account)}</div>
             ${url}
@@ -735,6 +847,40 @@ function renderEntries(items, hitsMap) {
         </div>
       </div>`;
   }).join('');
+}
+
+/** 卡片附件入口弹窗（v2.4.0）：列出该条目附件，点击查看/下载 */
+async function openAttachmentsModal(entryId, title) {
+  let list;
+  try { list = await store.attachments.list(entryId); }
+  catch (e) { toast(e.message, true); return; }
+  openModal(`
+    <div class="modal-head">
+      <h3>${ICONS.paperclip} ${escapeHtml(title || '附件')}</h3>
+      <button class="modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div class="attach-list modal-attach-list">
+        ${list.length ? list.map((a) => `
+          <div class="attach-item" data-aid="${a.id}" data-aname="${escapeHtml(a.name)}">
+            <span class="attach-name" title="${escapeHtml(a.name)}">${escapeHtml(a.name)}</span>
+            <span class="attach-size">${fmtSize(a.size)}</span>
+            <button class="btn" data-aact="view">查看</button>
+          </div>`).join('') : '<p class="hint">无附件。编辑条目时可添加。</p>'}
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn primary" id="btn-attm-close">关闭</button>
+    </div>
+  `, false);
+  $('#btn-attm-close').addEventListener('click', closeModal);
+  $('.modal-attach-list')?.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-aact]');
+    if (!btn) return;
+    const row = btn.closest('.attach-item');
+    try { await openAttachmentViewer(Number(row.dataset.aid), row.dataset.aname || 'attachment'); }
+    catch (err) { toast('读取失败：' + err.message, true); }
+  });
 }
 
 /* TOTP 码每秒刷新（只更新可见的动态码元素，无则空转） */
@@ -779,6 +925,8 @@ $('#entry-list').addEventListener('click', async (e) => {
   } else if (act === 'history') {
     const item = (await store.list({})).items.find((x) => x.id === id);
     if (item) openHistoryModal(item);
+  } else if (act === 'attach') {
+    openAttachmentsModal(id, btn.dataset.aname || '');
   } else if (act === 'edit') {
     const list = await store.list({});
     const item = list.items.find((x) => x.id === id);
@@ -1030,9 +1178,75 @@ $('#btn-gen-close').addEventListener('click', () => {
 });
 
 /* ---------------- 编辑 / 新建弹窗 ---------------- */
+/* ---------------- 附件查看/下载（v2.4.0）：BLOB → 内存 URL，不落盘 ---------------- */
+let _attachUrl = null;
+function revokeAttachUrl() {
+  if (_attachUrl) { URL.revokeObjectURL(_attachUrl); _attachUrl = null; }
+}
+
+/** File → base64 */
+function fileToBase64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).split(',')[1] || '');
+    r.onerror = () => rej(r.error || new Error('读取文件失败'));
+    r.readAsDataURL(file);
+  });
+}
+
+function fmtSize(n) {
+  const b = Number(n) || 0;
+  if (b < 1024) return b + ' B';
+  if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KiB';
+  return (b / 1024 / 1024).toFixed(2) + ' MiB';
+}
+
+/** 附件查看弹窗：图片直接预览；任意类型可另存（Tauri 对话框 / 浏览器下载） */
+async function openAttachmentViewer(aid, name) {
+  const a = await store.attachments.get(aid);
+  if (!a || !a.data) throw new Error('附件内容为空');
+  const bytes = base64ToBytes(a.data);
+  const blob = new Blob([bytes], { type: a.mime || 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  revokeAttachUrl();
+  _attachUrl = url;
+  const isImage = /^image\//.test(a.mime || '');
+  const preview = isImage
+    ? `<img class="attach-preview" src="${url}" alt="${escapeHtml(name)}" />`
+    : `<div class="attach-nopreview">${escapeHtml(name)}</div>`;
+  openModal(`
+    <div class="modal-head">
+      <h3>${escapeHtml(name)}</h3>
+      <button class="modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="modal-body">
+      ${preview}
+      <p class="hint">${escapeHtml(a.mime || '未知类型')} · ${fmtSize(bytes.byteLength)}</p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="btn-attach-save">另存为…</button>
+      <button class="btn primary" id="btn-attach-close">关闭</button>
+    </div>
+  `, false);
+  $('#btn-attach-close').addEventListener('click', () => { revokeAttachUrl(); closeModal(); });
+  document.querySelector('.modal-close')?.addEventListener('click', revokeAttachUrl);
+  $('#btn-attach-save').addEventListener('click', async () => {
+    try {
+      if (IS_TAURI) {
+        const dest = await tauriInvoke('export_bytes', { bytes: Array.from(bytes), suggestedName: name });
+        if (dest) toast('已保存：' + dest);
+      } else {
+        const el = document.createElement('a');
+        el.href = url;
+        el.download = name;
+        el.click();
+      }
+    } catch (e) { toast('保存失败：' + e.message, true); }
+  });
+}
+
 function openEditModal(item = null, prefillPw = '') {
-  const isNew = !item;
-  const v = (x) => (item && item[x]) ?? '';
+  const isNew = !item;  const v = (x) => (item && item[x]) ?? '';
   openModal(`
     <div class="modal-head">
       <h3>${isNew ? '保存到密码本' : '编辑密码'}</h3>
@@ -1070,6 +1284,14 @@ function openEditModal(item = null, prefillPw = '') {
       <label class="field"><span>备注（可选）</span>
         <textarea id="f-note" placeholder="如：安全问题答案、注册邮箱…">${escapeHtml(v('note'))}</textarea>
       </label>
+      ${isNew ? '' : `
+      <div class="field"><span>附件（最多 2MB/个，随数据库加密存储）</span>
+        <div class="attach-box">
+          <input type="file" id="f-attach-file" class="hidden" />
+          <button class="btn" id="btn-attach-add" type="button">＋ 添加附件</button>
+          <div id="attach-list" class="attach-list"></div>
+        </div>
+      </div>`}
     </div>
     <div class="modal-foot">
       ${isNew ? '' : '<button class="btn danger" id="btn-del-from-modal">删除</button>'}
@@ -1109,6 +1331,56 @@ function openEditModal(item = null, prefillPw = '') {
   })();
 
   $('#btn-cancel')?.addEventListener('click', closeModal);
+
+  // 附件区（v2.4.0，仅编辑已有条目）
+  if (!isNew) {
+    const renderAttachList = async () => {
+      const box = $('#attach-list');
+      if (!box) return;
+      try {
+        const list = await store.attachments.list(item.id);
+        box.innerHTML = list.length ? list.map((a) => `
+          <div class="attach-item" data-aid="${a.id}" data-aname="${escapeHtml(a.name)}">
+            <span class="attach-name" title="${escapeHtml(a.name)}">${escapeHtml(a.name)}</span>
+            <span class="attach-size">${fmtSize(a.size)}</span>
+            <button class="btn" data-aact="view" title="查看/下载">查看</button>
+            <button class="btn" data-aact="del" title="删除">×</button>
+          </div>`).join('') : '<p class="hint">无附件</p>';
+      } catch (e) {
+        box.innerHTML = `<p class="hint" style="color:var(--danger)">${escapeHtml(e.message)}</p>`;
+      }
+    };
+    $('#btn-attach-add')?.addEventListener('click', () => $('#f-attach-file')?.click());
+    $('#f-attach-file')?.addEventListener('change', async (e) => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+      if (f.size > ATTACHMENT_MAX_BYTES) { toast('附件超过 2MB 上限', true); e.target.value = ''; return; }
+      try {
+        const dataB64 = await fileToBase64(f);
+        await store.attachments.add(item.id, { name: f.name, mime: f.type || 'application/octet-stream', dataB64 });
+        toast('附件已添加');
+        await renderAttachList();
+      } catch (err) { toast('添加失败：' + err.message, true); }
+      e.target.value = '';
+    });
+    $('#attach-list')?.addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-aact]');
+      if (!btn) return;
+      const row = btn.closest('.attach-item');
+      const aid = Number(row?.dataset.aid);
+      const aname = row?.dataset.aname || 'attachment';
+      if (btn.dataset.aact === 'del') {
+        if (!confirm(`删除附件 ${aname}？`)) return;
+        try { await store.attachments.remove(aid); await renderAttachList(); }
+        catch (err) { toast('删除失败：' + err.message, true); }
+      } else {
+        try { await openAttachmentViewer(aid, aname); }
+        catch (err) { toast('读取失败：' + err.message, true); }
+      }
+    });
+    renderAttachList();
+  }
+
   $('#btn-gen-again')?.addEventListener('click', () => {
     try {
       const o = genOptsFromUi();

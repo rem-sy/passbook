@@ -302,6 +302,36 @@ html.dark mark.hl { background: rgba(255, 193, 7, 0.38); color: #ffe9b0; }
 .gen-tab.active {
   background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600;
 }
+
+/* ---------- 附件（v2.4.0） ---------- */
+.entry-attach {
+  display: inline-flex; align-items: center; gap: 3px;
+  border: none; background: transparent; color: var(--muted);
+  font-size: 12px; cursor: pointer; padding: 2px 6px;
+  border-radius: 999px; border: 1px solid var(--line);
+}
+.entry-attach:hover { color: var(--primary); border-color: var(--primary); }
+.entry-attach svg { width: 12px; height: 12px; }
+.attach-list { display: flex; flex-direction: column; gap: 6px; }
+.attach-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; border: 1px solid var(--line); border-radius: 10px;
+  font-size: 13px;
+}
+.attach-name {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 260px;
+}
+.attach-size { color: var(--muted); font-variant-numeric: tabular-nums; }
+.attach-item .btn { padding: 3px 10px; font-size: 12px; }
+.attach-preview {
+  max-width: 100%; max-height: 50vh; border-radius: 10px;
+  border: 1px solid var(--line); display: block; margin: 0 auto;
+}
+.attach-nopreview {
+  padding: 28px 16px; text-align: center; color: var(--muted);
+  border: 1px dashed var(--line-strong); border-radius: 10px;
+}
 .search-wrap input::-webkit-search-cancel-button { -webkit-appearance: none; }
 .sort-select {
   border: 1px solid var(--line);
