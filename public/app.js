@@ -871,6 +871,7 @@ function attachSuggest(inputEl, getItems) {
  * 经 favicon_fetch 下载图标转 data:URL 注入；内存 Map 缓存（domain →
  * dataUrl | null 已知失败）防止重渲染反复请求；「重试加载全部图标」清缓存。 */
 const faviconDataCache = new Map();
+let lastHydration = null; // 最近一次列表水合的 Promise（重试统计要接它）
 async function hydrateFavicons() {
   if (!IS_TAURI) return { ok: 0, fail: 0 };
   let ok = 0, fail = 0; const jobs = []; // v3.2.0：统计供「重试加载」完成提示
@@ -1002,7 +1003,7 @@ function renderEntries(items, hitsMap) {
         </div>
       </div>`;
   }).join('');
-  hydrateFavicons(); // v3.0.9：Tauri 环境经 Rust 下载图标注入 data:URL（内部自守卫）
+  lastHydration = hydrateFavicons(); // v3.0.9：Tauri 环境经 Rust 下载图标注入 data:URL（内部自守卫）
 }
 
 /** 卡片附件入口弹窗（v2.4.0）：列出该条目附件，点击查看/下载 */
@@ -3223,8 +3224,8 @@ document.addEventListener('click', async (e) => {
   saveSettings({ ...cur, faviconRev: (cur.faviconRev || 0) + 1 });
   faviconDataCache.clear(); // 清 Rust 下载缓存，强制全部重取
   toast('开始加载图标…');
-  refreshList();
+  await refreshList(); // v3.2.1：等列表重建完（旧节点已标 hydrated，之前秒扫到 0 个任务）
   // v3.2.0：开始/完成两级提示（完成带成功/失败统计）；探针已退役
-  const st = await hydrateFavicons().catch(() => ({ ok: 0, fail: 0 }));
+  const st = await (lastHydration || hydrateFavicons()).catch(() => ({ ok: 0, fail: 0 }));
   toast('图标加载完成：成功 ' + st.ok + ' 个' + (st.fail ? '，失败 ' + st.fail + ' 个' : ''));
 });
