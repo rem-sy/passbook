@@ -872,7 +872,8 @@ function attachSuggest(inputEl, getItems) {
  * dataUrl | null 已知失败）防止重渲染反复请求；「重试加载全部图标」清缓存。 */
 const faviconDataCache = new Map();
 async function hydrateFavicons() {
-  if (!IS_TAURI) return;
+  if (!IS_TAURI) return { ok: 0, fail: 0 };
+  let ok = 0, fail = 0; const jobs = []; // v3.2.0：统计供「重试加载」完成提示
   const imgs = document.querySelectorAll('img[data-fd]:not([data-hydrated])');
   for (const img of imgs) {
     const domain = img.dataset.fd;
@@ -886,7 +887,7 @@ async function hydrateFavicons() {
       img.style.opacity = '1';
     };
     if (faviconDataCache.has(domain)) { apply(faviconDataCache.get(domain)); continue; }
-    (async () => {
+    jobs.push((async () => {
       let dataUrl = null;
       try {
         const r1 = await tauriInvoke('favicon_fetch', { url: `https://${domain}/favicon.ico` });
@@ -897,8 +898,11 @@ async function hydrateFavicons() {
       } catch { dataUrl = null; }
       faviconDataCache.set(domain, dataUrl);
       apply(dataUrl);
-    })();
+      dataUrl ? ok++ : fail++;
+    })());
   }
+  await Promise.all(jobs);
+  return { ok, fail };
 }
 
 /* ---------------- 列表渲染 ---------------- */
@@ -3212,20 +3216,15 @@ $('#btn-guide').addEventListener('click', openGuideModal);
  * v3.0.8 诊断探针：同时用 fetch(no-cors) 探测外网连通性——
  * 下次回报即可区分「fetch 通而 img 不通」（tauri 拦截层问题，走 Rust 侧下载）
  * 还是「都不通」（纯网络问题） */
-document.addEventListener('click', (e) => {
+document.addEventListener('click', async (e) => {
   const b = e.target && e.target.closest ? e.target.closest('#btn-favicon-refresh') : null;
   if (!b) return;
   const cur = loadSettings();
   saveSettings({ ...cur, faviconRev: (cur.faviconRev || 0) + 1 });
-  faviconDataCache.clear(); // v3.0.9：清 Rust 下载缓存，强制全部重取
+  faviconDataCache.clear(); // 清 Rust 下载缓存，强制全部重取
+  toast('开始加载图标…');
   refreshList();
-  toast('已重新请求全部站点图标');
-  // v3.0.10：探测改走 Rust 通道（favicon_fetch，与图标加载同路径）
-  if (window.__TAURI__ || window.__TAURI_INTERNALS__) {
-    ['https://www.baidu.com/favicon.ico', 'https://github.com/favicon.ico'].forEach((u) => {
-      Promise.resolve(tauriInvoke('favicon_fetch', { url: u }))
-        .then((r) => toast(u.includes('baidu') ? '百度: ' + (r ? '取回 ' + Math.round(r.length / 1.4 / 1024) + 'KB' : '无有效图标') : 'GitHub: ' + (r ? '取回 ' + Math.round(r.length / 1.4 / 1024) + 'KB' : '无有效图标')))
-        .catch((err) => toast(u.includes('baidu') ? '百度: ' : 'GitHub: ' + (err && err.message ? err.message : err)));
-    });
-  }
+  // v3.2.0：开始/完成两级提示（完成带成功/失败统计）；探针已退役
+  const st = await hydrateFavicons().catch(() => ({ ok: 0, fail: 0 }));
+  toast('图标加载完成：成功 ' + st.ok + ' 个' + (st.fail ? '，失败 ' + st.fail + ' 个' : ''));
 });

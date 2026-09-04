@@ -541,7 +541,7 @@ html.dark .pw-input-row .btn.danger { background: #b03a2e; border-color: #b03a2e
 .export-item .d { font-size: 12px; color: var(--muted); }
 
 /* Toast */
-#toast-root { position: fixed; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%); z-index: 200; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+#toast-root { position: fixed; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%); z-index: 900; display: flex; flex-direction: column; gap: 8px; align-items: center; }
 .toast {
   background: #23262e;
   color: #fff;
@@ -878,6 +878,8 @@ html.dark .entry-fav.active { color: #ffc45e; }
 @media (max-width: 899.98px) {
   .side-menu-btn { display: inline-flex; }
   .sidebar {
+    top: 0;
+    padding-top: calc(env(safe-area-inset-top, 0px) + 12px);
     transform: translateX(-100%);
     transition: transform 0.22s ease;
     box-shadow: 12px 0 32px rgba(18, 21, 30, 0.10);
