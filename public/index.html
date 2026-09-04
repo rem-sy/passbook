@@ -27,6 +27,9 @@
       <span id="mode-badge" class="mode-badge" title="当前存储模式"></span>
     </div>
     <div class="top-actions">
+      <button id="btn-side-menu" class="icon-btn side-menu-btn" title="分类导航" aria-label="分类导航">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></svg>
+      </button>
       <button id="btn-guide" class="icon-btn" title="使用说明" aria-label="使用说明">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
       </button>
@@ -38,6 +41,13 @@
       </button>
     </div>
   </header>
+
+  <!-- 分类侧栏（v2.7.0）：桌面常驻左侧，手机为抽屉 -->
+  <div id="side-mask" class="side-mask"></div>
+  <aside id="sidebar" class="sidebar" aria-label="分类导航">
+    <div class="side-head">分类</div>
+    <nav id="sidebar-nav"></nav>
+  </aside>
 
   <main class="container">
     <!-- 生成器 -->
@@ -159,7 +169,6 @@
           体检
         </button>
       </div>
-      <div id="category-chips" class="chips"></div>
     </section>
 
     <!-- 安全体检面板 -->

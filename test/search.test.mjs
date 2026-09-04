@@ -155,3 +155,44 @@ test('highlightHtml：转义 + mark 包裹', () => {
   const html = S.highlightHtml('a<b>c', [[2, 3]]);
   assert.equal(html, 'a&lt;<mark class="hl">b</mark>&gt;c');
 });
+
+test('parseQuery：收藏操作符（v2.7.0）', () => {
+  const r = S.parseQuery('有收藏');
+  assert.equal(r.filters.hasFav, true);
+  assert.deepEqual(r.terms, []);
+  const r2 = S.parseQuery('无收藏');
+  assert.equal(r2.filters.hasFav, false);
+  const r3 = S.parseQuery('github 收藏');
+  assert.equal(r3.filters.hasFav, true);
+  assert.deepEqual(r3.terms, ['github']);
+});
+
+test('scoreEntry：hasFav 过滤（v2.7.0）', () => {
+  const fav = { owner: 'GitHub', account: 'a', password: 'p', fav: 1 };
+  const nofav = { owner: 'WeChat', account: 'b', password: 'p', fav: 0 };
+  assert.ok(S.scoreEntry(fav, [], { hasFav: true }));
+  assert.equal(S.scoreEntry(nofav, [], { hasFav: true }), null);
+  assert.ok(S.scoreEntry(nofav, [], { hasFav: false }));
+  assert.equal(S.scoreEntry(fav, [], { hasFav: false }), null);
+  // fav 缺省（旧数据）视为未收藏
+  assert.equal(S.scoreEntry({ owner: 'x', fav: undefined }, [], { hasFav: true }), null);
+});
+
+test('searchEntries：有收藏 + 关键词组合（v2.7.0）', () => {
+  const list = [
+    { id: 1, owner: 'GitHub', account: 'a', password: 'p', fav: 1 },
+    { id: 2, owner: 'GitLab', account: 'b', password: 'p', fav: 0 },
+    { id: 3, owner: 'Gitee', account: 'c', password: 'p', fav: 1 },
+  ];
+  const out = S.searchEntries(list, 'git 有收藏');
+  assert.deepEqual(out.map((r) => r.entry.id), [1, 3]);
+});
+
+test('extractDomain：域名提取（v2.7.0）', () => {
+  assert.equal(S.extractDomain('https://github.com/login'), 'github.com');
+  assert.equal(S.extractDomain('http://a.b.com'), 'a.b.com');
+  assert.equal(S.extractDomain('github.com'), 'github.com'); // 无协议自动补
+  assert.equal(S.extractDomain(''), '');
+  assert.equal(S.extractDomain(null), '');
+  assert.equal(S.extractDomain('not a url ..'), '');
+});

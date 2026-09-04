@@ -24,6 +24,9 @@ const ICONS = {
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
   history: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>',
   paperclip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>',
+  star: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17.25 6.16 20.4l1.26-6.5-4.72-4.6 6.53-.95L12 2.75l2.77 5.6 6.53.95-4.72 4.6 1.26 6.5Z"/></svg>',
+  starFill: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17.25 6.16 20.4l1.26-6.5-4.72-4.6 6.53-.95L12 2.75l2.77 5.6 6.53.95-4.72 4.6 1.26 6.5Z"/></svg>',
+  menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></svg>',
 };
 
 const LS_KEY = 'passbook-settings';
@@ -36,6 +39,7 @@ const DEFAULT_SETTINGS = {
   lock: { autoLock: 'never', clipboard: 0 }, // 自动锁定（never/60/300/hidden 秒）+ 复制后清剪贴板（0/15/30 秒）
   theme: 'auto', // 外观：auto 跟随系统 | light | dark
   backup: { enabled: true, keep: 5, intervalMin: 60 }, // 自动备份快照（v2.2.0）
+  favicons: false, // 站点图标（v2.7.0）：联网经 DuckDuckGo 图标服务，默认关
 };
 
 function loadSettings() {
@@ -129,6 +133,7 @@ const SCHEMA_SQL = `
     note TEXT NOT NULL DEFAULT '',
     totp_secret TEXT NOT NULL DEFAULT '',
     history TEXT NOT NULL DEFAULT '',
+    fav INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -175,11 +180,20 @@ const ServerStore = {
     if (!r.ok) throw new Error('服务端不可用');
     return r.json();
   },
-  async list({ q = '', category = '', sort = 'updated' } = {}) {
+  async list({ q = '', category = '', sort = 'updated', favOnly = false } = {}) {
     const p = new URLSearchParams({ q, category, sort });
+    if (favOnly) p.set('fav', '1');
     const r = await fetch('/api/entries?' + p, { cache: 'no-store' });
     if (!r.ok) throw new Error('获取列表失败');
     return r.json();
+  },
+  async setFav(id, fav) {
+    const r = await fetch('/api/entries/' + id + '/fav', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fav: fav ? 1 : 0 }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || '操作失败');
+    return j;
   },
   async create(entry) {
     const r = await fetch('/api/entries', {
@@ -366,11 +380,12 @@ const LocalStore = {
       this.db.run(SCHEMA_SQL);
       await this.persist();
     }
-    // v1.3.0/v1.5.0 迁移：为旧库补 totp_secret / history 列（幂等）
+    // v1.3.0/v1.5.0/v2.7.0 迁移：为旧库补 totp_secret / history / fav 列（幂等）
     const cols = this.query('PRAGMA table_info(entries)').map((c) => c.name);
     let migrated = false;
     if (!cols.includes('totp_secret')) { this.db.run("ALTER TABLE entries ADD COLUMN totp_secret TEXT NOT NULL DEFAULT ''"); migrated = true; }
     if (!cols.includes('history')) { this.db.run("ALTER TABLE entries ADD COLUMN history TEXT NOT NULL DEFAULT ''"); migrated = true; }
+    if (!cols.includes('fav')) { this.db.run('ALTER TABLE entries ADD COLUMN fav INTEGER NOT NULL DEFAULT 0'); migrated = true; }
     if (migrated) await this.persist();
   },
   /** 读取底层原始字节：Tauri 下从数据库文件读，否则从 IndexedDB 读 */
@@ -447,7 +462,7 @@ const LocalStore = {
     const rows = this.query('SELECT last_insert_rowid() AS id');
     return rows[0].id;
   },
-  async list({ q = '', category = '', sort = 'updated' } = {}) {
+  async list({ q = '', category = '', sort = 'updated', favOnly = false } = {}) {
     const where = [];
     const params = [];
     if (q) {
@@ -456,12 +471,19 @@ const LocalStore = {
       params.push(like, like, like, like, like);
     }
     if (category) { where.push('category = ?'); params.push(category); }
+    if (favOnly) where.push('fav = 1'); // 收藏筛选（v2.7.0）
     let order = 'updated_at DESC, id DESC';
     if (sort === 'created') order = 'created_at DESC, id DESC';
     if (sort === 'owner') order = 'owner COLLATE NOCASE ASC, account COLLATE NOCASE ASC';
+    order = `fav DESC, ${order}`; // 收藏置顶（v2.7.0）
     const sql = `SELECT * FROM entries ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY ${order}`;
     const items = this.query(sql, params);
     return { items, total: items.length };
+  },
+  async setFav(id, fav) {
+    this.db.run('UPDATE entries SET fav = ? WHERE id = ?', [fav ? 1 : 0, id]);
+    await this.persist();
+    return this.query('SELECT * FROM entries WHERE id = ?', [id])[0];
   },
   async create(entry) {
     const now = new Date().toISOString();
@@ -518,8 +540,8 @@ const LocalStore = {
         const key = `${e.owner}\u0000${e.account}\u0000${e.password}`;
         if (mode === 'merge' && existingKeys.has(key)) { skipped++; continue; }
         this.db.run(
-          'INSERT INTO entries (owner, account, password, url, category, note, totp_secret, history, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
-          [e.owner, e.account, e.password, e.url, e.category, e.note, e.totp_secret ?? '', typeof e.history === 'string' ? e.history : '', now, now]
+          'INSERT INTO entries (owner, account, password, url, category, note, totp_secret, history, fav, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+          [e.owner, e.account, e.password, e.url, e.category, e.note, e.totp_secret ?? '', typeof e.history === 'string' ? e.history : '', raw && (raw.fav === 1 || raw.fav === true) ? 1 : 0, now, now]
         );
         existingKeys.add(key);
         imported++;
@@ -748,11 +770,31 @@ function showKeyBackup(key) {
 const state = {
   q: '',
   category: '',
+  favOnly: false, // 收藏筛选（v2.7.0 侧栏「收藏」）
   sort: 'updated',
   categories: [],
   total: 0,
   currentGenPw: '',
 };
+
+/** 字母头像颜色：按文本 hash 取 HSL（v2.7.0 favicon 回退） */
+function avatarHue(text) {
+  let h = 0;
+  const s = String(text || '');
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+
+/** 卡片图标位 HTML（v2.7.0）：默认首字头像；开启站点图标且有域名时用 DuckDuckGo 图标服务 */
+function faviconSlot(it) {
+  const domain = window.PassSearch ? PassSearch.extractDomain(it.url) : '';
+  const letter = escapeHtml(String(it.owner || '?').trim().charAt(0).toUpperCase() || '?');
+  const style = `background:hsl(${avatarHue(it.owner)} 62% 88%);color:hsl(${avatarHue(it.owner)} 45% 32%)`;
+  if (loadSettings().favicons && domain) {
+    return `<span class="entry-favicon" style="${style}">${letter}<img src="https://icons.duckduckgo.com/ip3/${encodeURIComponent(domain)}.ico" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()" /></span>`;
+  }
+  return `<span class="entry-favicon" style="${style}">${letter}</span>`;
+}
 
 /* ---------------- 列表渲染 ---------------- */
 async function refreshList() {
@@ -763,7 +805,7 @@ async function refreshList() {
     const pq = (window.PassSearch || { parseQuery: (q) => ({ terms: q ? [q.toLowerCase()] : [], filters: {}, unknown: [] }) }).parseQuery(state.q);
     const advanced = pq.terms.length > 1 || Object.keys(pq.filters).length > 0 || (pq.unknown && pq.unknown.length);
     const serverQ = advanced ? '' : (pq.terms[0] || '');
-    const { items, total } = await store.list({ q: serverQ, category: state.category, sort: state.sort });
+    const { items, total } = await store.list({ q: serverQ, category: state.category, sort: state.sort, favOnly: state.favOnly });
     state.total = total;
 
     let shown = items, hitsMap = null;
@@ -775,6 +817,8 @@ async function refreshList() {
         for (const r of res) hitsMap[r.entry.id] = r.fields;
       }
     }
+    // 收藏置顶（v2.7.0）：稳定排序保持既有相对顺序（服务端已排过的这里保持一致）
+    shown = [...shown].sort((a, b) => (b.fav ? 1 : 0) - (a.fav ? 1 : 0));
     renderEntries(shown, hitsMap);
     const filtered = state.q && shown.length !== total ? `${shown.length}/` : '';
     $('#count').textContent = `共 ${filtered}${total} 条`;
@@ -812,8 +856,10 @@ function renderEntries(items, hitsMap) {
     return `
       <div class="entry" data-id="${it.id}">
         <div class="entry-top">
+          ${faviconSlot(it)}
           <div class="entry-main">
             <div class="entry-title">
+              <button class="entry-fav ${it.fav ? 'active' : ''}" data-act="fav" title="${it.fav ? '取消收藏' : '收藏'}">${it.fav ? ICONS.starFill : ICONS.star}</button>
               <span class="entry-owner">${hl('owner', it.id, it.owner)}</span>
               ${cat}
               ${attachBadge}
@@ -925,6 +971,19 @@ $('#entry-list').addEventListener('click', async (e) => {
   } else if (act === 'history') {
     const item = (await store.list({})).items.find((x) => x.id === id);
     if (item) openHistoryModal(item);
+  } else if (act === 'fav') {
+    // 收藏星标（v2.7.0）：乐观切换 + 重排（收藏置顶）
+    const item = (await store.list({})).items.find((x) => x.id === id);
+    if (!item) return;
+    const next = !item.fav;
+    try {
+      await store.setFav(id, next);
+      btn.classList.toggle('active', next);
+      btn.innerHTML = next ? ICONS.starFill : ICONS.star;
+      btn.title = next ? '取消收藏' : '收藏';
+      refreshSidebar();
+      refreshList();
+    } catch (err) { toast(err.message, true); }
   } else if (act === 'attach') {
     openAttachmentsModal(id, btn.dataset.aname || '');
   } else if (act === 'edit') {
@@ -1010,24 +1069,48 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 // 自动备份调度（v2.2.0）：延迟启动避免与首屏竞争
 scheduleAutoBackup();
 
-/* ---------------- 分类 chips ---------------- */
-async function refreshChips() {
-  const { items } = await store.categories();
-  state.categories = items;
-  const box = $('#category-chips');
-  const all = `<span class="chip ${state.category === '' ? 'active' : ''}" data-cat="">全部</span>`;
-  const chips = items.map((c) =>
-    `<span class="chip ${state.category === c.category ? 'active' : ''}" data-cat="${escapeHtml(c.category)}">${escapeHtml(c.category)} (${c.count})</span>`
-  ).join('');
-  box.innerHTML = all + chips;
+/* ---------------- 分类侧栏（v2.7.0，替代旧分类 chips） ---------------- */
+async function refreshChips() { return refreshSidebar(); } // 旧调用点兼容
+
+let _favCount = 0;
+async function refreshSidebar() {
+  let cats = [];
+  try { cats = (await store.categories()).items || []; } catch { cats = []; }
+  state.categories = cats;
+  try { _favCount = (await store.list({ favOnly: true })).items.length; } catch { _favCount = 0; }
+  const box = $('#sidebar-nav');
+  if (!box) return;
+  const allActive = state.category === '' && !state.favOnly;
+  box.innerHTML = `
+    <button class="side-item ${allActive ? 'active' : ''}" data-side="all"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg><span>全部</span><em>${state.total ?? ''}</em></button>
+    <button class="side-item ${state.favOnly ? 'active' : ''}" data-side="fav">${ICONS.starFill}<span>收藏</span><em>${_favCount || ''}</em></button>
+    <div class="side-sep"></div>
+    ${cats.map((c) => `<button class="side-item ${!state.favOnly && state.category === c.category ? 'active' : ''}" data-side="cat" data-cat="${escapeHtml(c.category)}"><span class="side-dot" style="background:hsl(${avatarHue(c.category)} 60% 55%)"></span><span class="side-name" title="${escapeHtml(c.category)}">${escapeHtml(c.category)}</span><em>${c.count}</em></button>`).join('')}
+  `;
 }
-$('#category-chips').addEventListener('click', (e) => {
-  const chip = e.target.closest('.chip');
-  if (!chip) return;
-  state.category = chip.dataset.cat;
-  refreshChips();
+$('#sidebar-nav')?.addEventListener('click', (e) => {
+  const item = e.target.closest('[data-side]');
+  if (!item) return;
+  const side = item.dataset.side;
+  if (side === 'all') { state.category = ''; state.favOnly = false; }
+  else if (side === 'fav') { state.category = ''; state.favOnly = true; }
+  else { state.category = item.dataset.cat || ''; state.favOnly = false; }
+  refreshSidebar();
   refreshList();
+  closeSidebarDrawer(); // 手机端选择后收起抽屉
 });
+
+/* 手机端抽屉开合（v2.7.0） */
+function openSidebarDrawer() {
+  document.body.classList.add('side-open');
+}
+function closeSidebarDrawer() {
+  document.body.classList.remove('side-open');
+}
+$('#btn-side-menu')?.addEventListener('click', () => {
+  document.body.classList.contains('side-open') ? closeSidebarDrawer() : openSidebarDrawer();
+});
+$('#side-mask')?.addEventListener('click', closeSidebarDrawer);
 
 /* ---------------- 生成器 ---------------- */
 const GEN_DEFAULTS = { length: 16, upper: true, lower: true, digit: true, symbol: true, symbols: '', ensure: true, ambiguous: true, noadj: false, norepeat: false, noseq: false, exclude: '' };
@@ -2018,6 +2101,13 @@ function openSettingsModal() {
         <p class="hint">服务器存储模式的数据库由服务端管理，暂不支持应用内加密；重要数据请用「导出」定期备份。</p>
       </div>`;
   const bk = { ...DEFAULT_SETTINGS.backup, ...(s.backup || {}) };
+  // 站点图标（v2.7.0）：默认关；开启后经 DuckDuckGo 图标服务联网加载
+  const faviconField = `
+      <div class="field"><span>站点图标（列表卡片左侧）</span>
+        <div class="chk-group" style="padding-top:2px">
+          <label><input type="checkbox" id="set-favicons" ${s.favicons ? 'checked' : ''} /> 显示网站 favicon（联网，向 DuckDuckGo 图标服务请求对应域名；关闭时用首字头像，纯本地）</label>
+        </div>
+      </div>`;
   const backupField = currentMode === 'local' ? `
       <div class="field"><span>自动备份快照（${IS_TAURI ? '存于应用数据目录 backups\\' : '存于本机浏览器存储'}，加密库快照保持密文）</span>
         <div class="chk-group" style="padding-top:2px">
@@ -2045,6 +2135,7 @@ function openSettingsModal() {
       ${dbPathField}
       ${encField}
       ${backupField}
+      ${faviconField}
       ${agentField}
       <div class="field"><span>安全体检</span>
         <div class="chk-group" style="padding-top:2px">
@@ -2215,6 +2306,7 @@ function openSettingsModal() {
       ns.pinHash = '';
     }
     ns.bioUnlock = !!bioEnabled && !!ns.pinHash; // 生物识别依赖启动锁（v2.6.0）
+    ns.favicons = !!$('#set-favicons')?.checked; // 站点图标（v2.7.0）
     saveSettings(ns);
     saveAgentConfig({
       baseUrl: $('#set-agent-url').value.trim(),
@@ -2907,8 +2999,9 @@ function openGuideModal() {
     </div>
     <div class="modal-body guide-body">
       ${guideSec('main.png', '① 界面总览与强搜索', `
-        <p>顶部<b>搜索框</b>支持多词与操作符：除了关键词（命中 所属 / 账户 / 网址 / 备注 / 分类，自动打分排序+高亮），还可以用 <code>分类：工作</code>、<code>有验证码</code>、<code>无验证码</code> 这样的过滤语法组合筛选。</p>
-        <p>每条记录默认打码，点 <b>眼睛</b> 看明文、<b>复制</b> 进剪贴板；带 <b>TOTP 动态码</b> 的记录会实时显示 6 位验证码与倒计时（点一下即复制）；带 <b>📎 徽标</b> 的记录挂着附件（点开即可查看/另存）。</p>`)}
+        <p>左侧<b>分类侧栏</b>（手机端点左上角 ☰ 按钮呼出）可按「全部 / 收藏 / 各分类」快速切换；卡片左侧的<b>星标</b> ☆ 可收藏常用条目，收藏的自动<b>置顶</b>显示。</p>
+        <p>顶部<b>搜索框</b>支持多词与操作符：除了关键词（命中 所属 / 账户 / 网址 / 备注 / 分类，自动打分排序+高亮），还可以用 <code>分类：工作</code>、<code>有验证码</code>、<code>有收藏</code> 这样的过滤语法组合筛选。</p>
+        <p>每条记录默认打码，点 <b>眼睛</b> 看明文、<b>复制</b> 进剪贴板；带 <b>TOTP 动态码</b> 的记录会实时显示 6 位验证码与倒计时（点一下即复制）；带 <b>📎 徽标</b> 的记录挂着附件（点开即可查看/另存）。卡片左侧默认显示<b>首字头像</b>，可在设置里开启<b>站点图标</b>（联网加载网站 favicon）。</p>`)}
       ${guideSec('manual.png', '② 存一条密码（手动录入）', `
         <p>点工具栏 <b>「＋ 手动录入」</b>，填写<b>所属</b>（应用/网站）、<b>账户</b>、<b>密码</b>三项必填。</p>
         <p>还可选填 <b>TOTP 密钥</b>（base32 或直接粘贴 otpauth:// 链接自动提取）、<b>分类</b>、<b>网址</b>、<b>备注</b>；编辑已有记录时能上传<b>附件</b>（每张 ≤2MB，随数据库加密存储）。</p>

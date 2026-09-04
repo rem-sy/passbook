@@ -40,8 +40,7 @@ body {
   height: calc(56px + env(safe-area-inset-top, 0px));
   background: var(--card);
   border-bottom: 1px solid var(--line);
-  position: sticky;
-  top: 0;
+  position: sticky;  top: 0;
   z-index: 30;
 }
 .brand { display: flex; align-items: center; gap: 10px; }
@@ -788,3 +787,93 @@ html.dark ::-webkit-scrollbar-thumb:hover { background: #414a5d; }
   .agent-panel { width: 100vw; }
   .search-row { flex-wrap: wrap; }
 }
+
+/* ---------------- 分类侧栏 / 收藏 / 站点图标（v2.7.0） ---------------- */
+/* 侧栏：≥900px 常驻左侧；<900px 抽屉（汉堡开关） */
+.sidebar {
+  position: fixed;
+  top: calc(56px + env(safe-area-inset-top, 0px));
+  left: 0;
+  bottom: 0;
+  width: 208px;
+  background: var(--card);
+  border-right: 1px solid var(--line);
+  padding: 12px 10px calc(12px + env(safe-area-inset-bottom, 0px));
+  overflow-y: auto;
+  z-index: 150;
+}
+.side-head {
+  font-size: 12px; font-weight: 650; color: var(--muted);
+  padding: 2px 10px 8px; letter-spacing: 0.12em;
+}
+.side-sep { height: 1px; background: var(--line); margin: 8px 10px; }
+.side-item {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; padding: 8px 10px; border-radius: 10px;
+  border: none; background: none; cursor: pointer;
+  font-size: 13.5px; color: var(--text); text-align: left;
+}
+.side-item svg { width: 16px; height: 16px; color: var(--muted); flex: none; }
+.side-item em {
+  margin-left: auto; font-style: normal; font-size: 12px;
+  color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.side-item .side-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-item:hover { background: var(--bg); }
+.side-item.active { background: var(--bg); font-weight: 650; box-shadow: inset 3px 0 0 var(--accent, #3b82f6); }
+.side-item.active svg { color: var(--accent, #3b82f6); }
+.side-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; margin: 0 3px; }
+
+/* 遮罩（手机抽屉） */
+.side-mask {
+  display: none; position: fixed; inset: 0;
+  background: rgba(15, 18, 26, 0.42); z-index: 149;
+}
+
+/* 收藏星标按钮 */
+.entry-fav {
+  border: none; background: none; cursor: pointer; padding: 2px;
+  display: inline-flex; align-items: center; color: var(--muted);
+  opacity: 0.55; transition: opacity 0.15s, transform 0.1s;
+}
+.entry-fav svg { width: 16px; height: 16px; }
+.entry-fav:hover { opacity: 1; transform: scale(1.12); }
+.entry-fav.active { color: #f0a52b; opacity: 1; }
+html.dark .entry-fav.active { color: #ffc45e; }
+
+/* 卡片图标位：默认首字头像，开启后叠站点图标 */
+.entry-favicon {
+  position: relative; flex: none;
+  width: 36px; height: 36px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15.5px; font-weight: 700; overflow: hidden;
+  margin-top: 1px; user-select: none;
+}
+.entry-favicon img {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: contain; padding: 5px; background: var(--card);
+}
+
+/* 汉堡按钮默认隐藏（桌面常驻侧栏时无需） */
+.side-menu-btn { display: none; }
+
+/* ≥900px：侧栏常驻，主内容左移 */
+@media (min-width: 900px) {
+  .sidebar { transform: none; }
+  body { padding-left: 208px; }
+}
+/* <900px：抽屉模式，汉堡可见 */
+@media (max-width: 899.98px) {
+  .side-menu-btn { display: inline-flex; }
+  .sidebar {
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    box-shadow: 12px 0 32px rgba(18, 21, 30, 0.10);
+  }
+  body.side-open .sidebar { transform: none; }
+  body.side-open .side-mask { display: block; }
+}
+
+/* 深色适配 */
+html.dark .sidebar { background: #1c202b; }
+html.dark .side-item:hover, html.dark .side-item.active { background: #232733; }

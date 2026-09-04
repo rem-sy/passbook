@@ -10,12 +10,14 @@
   'use strict';
 
   /* ---------- 查询解析 ---------- */
-  // 操作符（可带引号）：分类:工作 / category:work / 有验证码 / 无验证码
+  // 操作符（可带引号）：分类:工作 / category:work / 有验证码 / 无验证码 / 有收藏 / 无收藏
   var FILTER_RE = /^(?:分类|分类名|category|cat):(.+)$/i;
   var HAS_TOTP_RE = /^(?:有验证码|有动态码|有totp|totp)$/i;
   var NO_TOTP_RE = /^(?:无验证码|无动态码|无totp)$/i;
+  var HAS_FAV_RE = /^(?:有收藏|星标|收藏|fav|favorite)$/i;
+  var NO_FAV_RE = /^(?:无收藏|非收藏|unfav|nofav)$/i;
 
-  /** 解析查询串 → { terms: [词], filters: { category?, hasTotp? }, unknown: [未识别操作符] } */
+  /** 解析查询串 → { terms: [词], filters: { category?, hasTotp?, hasFav? }, unknown: [未识别操作符] } */
   function parseQuery(q) {
     var terms = [], filters = {}, unknown = [];
     var raw = String(q == null ? '' : q).trim();
@@ -29,6 +31,8 @@
       if (m) { filters.category = m[1].toLowerCase(); continue; }
       if (HAS_TOTP_RE.test(p)) { filters.hasTotp = true; continue; }
       if (NO_TOTP_RE.test(p)) { filters.hasTotp = false; continue; }
+      if (HAS_FAV_RE.test(p)) { filters.hasFav = true; continue; }
+      if (NO_FAV_RE.test(p)) { filters.hasFav = false; continue; }
       if (p.indexOf(':') > 0 && /^[a-z\u4e00-\u9fa5]+:.+$/i.test(p)) { unknown.push(p); continue; }
       terms.push(p.toLowerCase());
     }
@@ -103,6 +107,10 @@
       if (filters.hasTotp != null) {
         var has = !!entry.totp_secret;
         if (has !== filters.hasTotp) return null;
+      }
+      if (filters.hasFav != null) {
+        var favd = !!(entry.fav === 1 || entry.fav === true);
+        if (favd !== filters.hasFav) return null;
       }
     }
     if (!terms || !terms.length) return { score: 0, fields: {} };
@@ -186,6 +194,17 @@
     }).join('');
   }
 
+  /** 从条目 url 提取域名（v2.7.0 favicon 用）；非法/为空返回 '' */
+  function extractDomain(url) {
+    var s = String(url == null ? '' : url).trim();
+    if (!s) return '';
+    if (!/^https?:\/\//i.test(s)) s = 'http://' + s;
+    try {
+      var host = new URL(s).hostname;
+      return host && /\.[a-z\u4e00-\u9fa5]/i.test(host) ? host : '';
+    } catch (e) { return ''; }
+  }
+
   return {
     parseQuery: parseQuery,
     fuzzyMatch: fuzzyMatch,
@@ -194,5 +213,6 @@
     highlightSegments: highlightSegments,
     highlightHtml: highlightHtml,
     normalizeRanges: normalizeRanges,
+    extractDomain: extractDomain,
   };
 });

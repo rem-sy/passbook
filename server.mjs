@@ -46,6 +46,7 @@ db.exec(`
     note TEXT NOT NULL DEFAULT '',
     totp_secret TEXT NOT NULL DEFAULT '',
     history TEXT NOT NULL DEFAULT '',
+    fav INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -63,11 +64,12 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_attachments_entry ON attachments(entry_id);
 `);
-// v1.3.0/v1.5.0 迁移：为旧库补 totp_secret / history 列（幂等）
+// v1.3.0/v1.5.0/v2.7.0 迁移：为旧库补 totp_secret / history / fav 列（幂等）
 {
   const cols = db.prepare('PRAGMA table_info(entries)').all().map((c) => c.name);
   if (!cols.includes('totp_secret')) db.exec("ALTER TABLE entries ADD COLUMN totp_secret TEXT NOT NULL DEFAULT ''");
   if (!cols.includes('history')) db.exec("ALTER TABLE entries ADD COLUMN history TEXT NOT NULL DEFAULT ''");
+  if (!cols.includes('fav')) db.exec('ALTER TABLE entries ADD COLUMN fav INTEGER NOT NULL DEFAULT 0');
 }
 
 /** 附件单文件上限（2MB） */
@@ -133,7 +135,7 @@ function normalizeEntry(body = {}) {
   return e;
 }
 
-function listEntries({ q = '', category = '', sort = 'updated' }) {
+function listEntries({ q = '', category = '', sort = 'updated', favOnly = false }) {
   const where = [];
   const params = [];
   if (q) {
@@ -142,9 +144,11 @@ function listEntries({ q = '', category = '', sort = 'updated' }) {
     params.push(like, like, like, like, like);
   }
   if (category) { where.push('category = ?'); params.push(category); }
+  if (favOnly) where.push('fav = 1'); // 收藏筛选（v2.7.0）
   let order = 'updated_at DESC, id DESC';
   if (sort === 'created') order = 'created_at DESC, id DESC';
   if (sort === 'owner') order = 'owner COLLATE NOCASE ASC, account COLLATE NOCASE ASC';
+  order = `fav DESC, ${order}`; // 收藏置顶（v2.7.0）
   const sql = `SELECT * FROM entries ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY ${order}`;
   const rows = db.prepare(sql).all(...params);
   return { items: rows, total: rows.length };
@@ -223,7 +227,8 @@ async function handleApi(req, res, pathname, search) {
     const q = search.get('q') || '';
     const category = search.get('category') || '';
     const sort = search.get('sort') || 'updated';
-    return sendJson(res, 200, listEntries({ q, category, sort }));
+    const favOnly = search.get('fav') === '1';
+    return sendJson(res, 200, listEntries({ q, category, sort, favOnly }));
   }
 
   if (pathname === '/api/entries' && req.method === 'POST') {
@@ -240,6 +245,17 @@ async function handleApi(req, res, pathname, search) {
     const r = stmt.run(e.owner, e.account, e.password, e.url, e.category, e.note, e.totp_secret, e.history ?? '', now, now);
     const row = db.prepare('SELECT * FROM entries WHERE id = ?').get(Number(r.lastInsertRowid));
     return sendJson(res, 201, row);
+  }
+
+  // 收藏星标切换（v2.7.0）：PUT /api/entries/:id/fav  body {fav: 0|1}
+  const favMatch = pathname.match(/^\/api\/entries\/(\d+)\/fav$/);
+  if (favMatch && req.method === 'PUT') {
+    const id = Number(favMatch[1]);
+    const body = JSON.parse((await readBody(req)).toString('utf-8') || '{}');
+    const fav = body.fav === 1 || body.fav === true ? 1 : 0;
+    const r = db.prepare('UPDATE entries SET fav = ? WHERE id = ?').run(fav, id);
+    if (r.changes === 0) return sendJson(res, 404, { error: '记录不存在' });
+    return sendJson(res, 200, db.prepare('SELECT * FROM entries WHERE id = ?').get(id));
   }
 
   const entryMatch = pathname.match(/^\/api\/entries\/(\d+)$/);
@@ -344,8 +360,8 @@ async function handleApi(req, res, pathname, search) {
     }
 
     const insert = db.prepare(
-      `INSERT INTO entries (owner, account, password, url, category, note, totp_secret, history, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO entries (owner, account, password, url, category, note, totp_secret, history, fav, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
     const now = nowIso();
     let imported = 0, skipped = 0;
@@ -357,7 +373,7 @@ async function handleApi(req, res, pathname, search) {
         const e = normalizeEntry(raw);
         const key = `${e.owner}\u0000${e.account}\u0000${e.password}`;
         if (mode === 'merge' && existingKeys.has(key)) { skipped++; continue; }
-        insert.run(e.owner, e.account, e.password, e.url, e.category, e.note, e.totp_secret, e.history ?? '', now, now);
+        insert.run(e.owner, e.account, e.password, e.url, e.category, e.note, e.totp_secret, e.history ?? '', raw && (raw.fav === 1 || raw.fav === true) ? 1 : 0, now, now);
         existingKeys.add(key);
         imported++;
       }
