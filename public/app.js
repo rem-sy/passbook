@@ -818,8 +818,9 @@ function faviconSlot(it) {
     if (IS_TAURI) {
       // v3.0.9：Android WebView 外部请求（fetch/img）全被 tauri 拦截层挡死，
       // Tauri 环境不写远程 src——由 hydrateFavicons() 经 Rust reqwest 下载转
-      // data:URL 注入；失败移除，仅剩首字头像
-      return `<span class="entry-favicon" style="${style}">${letter}<img data-fd="${escapeHtml(domain)}" style="opacity:0;transition:opacity .15s" onload="if(this.naturalWidth){this.style.opacity='1'}" onerror="this.remove()" /></span>`;
+      // data:URL 注入。v3.0.12：不带任何内联 onload/onerror（无 src 的 img
+      // 插入时可能触发内联 onerror 自删，水合来不及处理），显示完全由 JS 控制
+      return `<span class="entry-favicon" style="${style}">${letter}<img data-fd="${escapeHtml(domain)}" style="opacity:0;transition:opacity .15s" alt="" /></span>`;
     }
     // 浏览器模式：直连 img（opacity 淡入 + 站点直连→DDG 回退）
     return `<span class="entry-favicon" style="${style}">${letter}<img data-fd="${escapeHtml(domain)}" src="https://${escapeHtml(domain)}/favicon.ico${bust}" style="opacity:0;transition:opacity .15s" onload="if(this.naturalWidth){this.style.opacity='1'}else{this.onerror()}" onerror="if(this.dataset.f2){this.remove()}else{this.dataset.f2='1';this.src='https://icons.duckduckgo.com/ip3/'+encodeURIComponent(this.dataset.fd)+'.ico${bust}'}" /></span>`;
@@ -879,8 +880,10 @@ async function hydrateFavicons() {
     img.dataset.hydrated = '1'; // 本轮标记，防重复处理
     const apply = (dataUrl) => {
       if (!document.body.contains(img)) return; // 弹窗/列表已重建
-      if (dataUrl) img.src = dataUrl; // 成功 → data:URL，onload 淡入
-      else img.remove(); // 双源失败 → 移除，仅剩首字头像
+      if (!dataUrl) { img.remove(); return; } // 双源失败 → 移除，仅剩首字头像
+      // v3.0.12：直接 JS 设 src + 显示——不依赖 load 事件（data:URL 已校验魔数，非破损图）
+      img.src = dataUrl;
+      img.style.opacity = '1';
     };
     if (faviconDataCache.has(domain)) { apply(faviconDataCache.get(domain)); continue; }
     (async () => {
