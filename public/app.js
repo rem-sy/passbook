@@ -1956,8 +1956,14 @@ const WT_LEVEL_META = {
   low: { text: '低危', cls: 'low' },
   info: { text: '提示', cls: 'info' },
 };
+// 体检结果图标：与应用一致的线性 SVG（24 viewBox / stroke 1.8 / round），随级别着色（v3.0.1）
+const WT_SVG = (paths) => `<svg class="wt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 const WT_TYPE_ICON = {
-  reused: '🔁', weak: '🔓', incomplete: '📋', stale: '⏳', pwned: '💥',
+  reused: WT_SVG('<path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>'),
+  weak: WT_SVG('<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>'),
+  incomplete: WT_SVG('<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M9 12h6"/><path d="M9 16h4"/>'),
+  stale: WT_SVG('<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>'),
+  pwned: WT_SVG('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M12 8v4"/><path d="M12 16h.01"/>'),
 };
 
 function loadWtSettings() {
@@ -2015,7 +2021,7 @@ function renderWatchtower(findings, summary) {
   const total = findings.length;
   $('#wt-last').textContent = `上次体检：${fmtTime(new Date().toISOString())}`;
   $('#wt-summary').innerHTML = total === 0
-    ? '<span class="wt-allclear">✅ 未发现问题，继续保持</span>'
+    ? '<span class="wt-allclear"><svg class="wt-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.1V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg> 未发现问题，继续保持</span>'
     : Object.entries(WT_LEVEL_META).map(([k, m]) =>
         summary[k] ? `<span class="wt-chip ${m.cls}">${m.text} ${summary[k]}</span>` : ''
       ).join('');
