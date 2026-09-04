@@ -1,5 +1,5 @@
 /* 密码本 · Service Worker：离线可用（PWA） */
-const CACHE_NAME = 'passbook-v22';
+const CACHE_NAME = 'passbook-v23';
 const ASSETS = [
   './',
   './index.html',
@@ -24,12 +24,14 @@ const ASSETS = [
   './guide/main.png',
   './guide/manual.png',
   './guide/gen.png',
+  './guide/phrase.png',
   './guide/agent.png',
   './guide/sync.png',
   './guide/import.png',
   './guide-mobile/main.png',
   './guide-mobile/manual.png',
   './guide-mobile/gen.png',
+  './guide-mobile/phrase.png',
   './guide-mobile/agent.png',
   './guide-mobile/sync.png',
   './guide-mobile/import.png',

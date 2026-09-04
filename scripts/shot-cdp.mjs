@@ -20,17 +20,25 @@ const EDGE = [
 ].find((p) => { try { existsSync(p); return true; } catch { return false; } });
 
 const DEMO = [
-  { owner: 'GitHub', account: 'tom@example.com', password: 'Xk9$mQ2zLp7', category: '工作', url: 'https://github.com', note: '工作主力号' },
+  { owner: 'GitHub', account: 'tom@example.com', password: 'Xk9$mQ2zLp7', category: '工作', url: 'https://github.com', note: '工作主力号', totp_secret: 'JBSWY3DPEHPK3PXP' },
   { owner: '微信', account: '13800138000', password: 'Wx#2024happy', category: '个人', note: '手机号注册' },
   { owner: '网银', account: '张三', password: 'Bank@2024#Safe', category: '财务', note: '工资卡' },
   { owner: '知乎', account: 'zhihu@x.com', password: 'Zhi#2024hu', category: '个人', note: '写作号' },
   { owner: '公司邮箱', account: 'zhang@corp.com', password: 'Corp!Mail88', category: '工作', url: 'https://mail.corp.com' },
   { owner: 'Steam', account: 'gamer_zs', password: 'G4me#Fun2024', category: '娱乐', note: '' },
 ];
+// 1x1 蓝色 PNG：给「公司邮箱」挂一个附件演示（列表只显示名称/大小，1x1 足够）
+const DEMO_ATTACH = {
+  owner: '公司邮箱',
+  name: '工牌照片.png',
+  mime: 'image/png',
+  dataB64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkqPhfz4AFmgIY/eOmIgAAAABJRU5ErkJggg==',
+};
 const SHOTS = [
   { hash: '#shot-bare',     name: 'main.png' },
   { hash: '#shot-manual',   name: 'manual.png' },
   { hash: '#shot-gen',      name: 'gen.png' },
+  { hash: '#shot-phrase',   name: 'phrase.png' },
   { hash: '#shot-agent',    name: 'agent.png' },
   { hash: '#shot-settings', name: 'sync.png' },
   { hash: '#shot-import',   name: 'import.png' },
@@ -68,12 +76,21 @@ async function waitServer(port) {
 }
 
 async function writeDemo(port) {
+  let attachEntryId = null;
   for (const e of DEMO) {
-    await fetch(`http://127.0.0.1:${port}/api/entries`, {
+    const r = await fetch(`http://127.0.0.1:${port}/api/entries`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(e),
     });
+    if (e.owner === DEMO_ATTACH.owner) attachEntryId = (await r.json()).id;
   }
-  console.log(`已写入 ${DEMO.length} 条演示数据`);
+  // 附件演示（v2.4.0）：给指定条目挂一个小文件，卡片显示 📎 徽标
+  if (attachEntryId) {
+    await fetch(`http://127.0.0.1:${port}/api/attachments`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ entryId: attachEntryId, name: DEMO_ATTACH.name, mime: DEMO_ATTACH.mime, dataB64: DEMO_ATTACH.dataB64 }),
+    });
+  }
+  console.log(`已写入 ${DEMO.length} 条演示数据（1 条含 TOTP，1 条含附件）`);
 }
 
 /* ---------- CDP 单张截图 ---------- */
@@ -118,7 +135,7 @@ async function cdpScreenshot(baseUrl, cdPort, shot, mobile) {
     await send('Page.navigate', { url });
     await sleep(1500);
     await send('Runtime.evaluate', {
-      expression: "localStorage.setItem('storageMode','server'); location.reload();",
+      expression: "(function(){var s={};try{s=JSON.parse(localStorage.getItem('passbook-settings')||'{}')}catch(e){}s.storageMode='server';localStorage.setItem('passbook-settings',JSON.stringify(s));location.reload();})()",
     });
   } else {
     await send('Page.navigate', { url });
@@ -139,10 +156,40 @@ async function cdpScreenshot(baseUrl, cdPort, shot, mobile) {
     await send('Runtime.evaluate', { expression: 'openManualAddModal()' });
   } else if (shot.hash === '#shot-gen') {
     await send('Runtime.evaluate', { expression: "$('#btn-gen-open').click()" });
+    await sleep(400);
+    await send('Runtime.evaluate', { expression: "$('#btn-generate').click()" });
+  } else if (shot.hash === '#shot-phrase') {
+    // 密码短语模式（v2.3.0）：切到短语标签并生成
+    await send('Runtime.evaluate', { expression: "$('#btn-gen-open').click()" });
+    await sleep(400);
+    await send('Runtime.evaluate', { expression: "document.querySelector('.gen-tab[data-genmode=phrase]').click()" });
+    await sleep(300);
+    await send('Runtime.evaluate', { expression: "$('#btn-generate').click()" });
   } else if (shot.hash === '#shot-agent') {
     await send('Runtime.evaluate', { expression: "$('#btn-agent').click()" });
   } else if (shot.hash === '#shot-settings') {
+    // 备份快照区仅「本机存储」模式渲染：改写 passbook-settings 切 local 模式重载，
+    // 打开设置后先点一次「立即备份」让列表有内容，再滚到备份区截取
+    await send('Runtime.evaluate', {
+      expression: "(function(){var s={};try{s=JSON.parse(localStorage.getItem('passbook-settings')||'{}')}catch(e){}s.storageMode='local';localStorage.setItem('passbook-settings',JSON.stringify(s));location.reload();})()",
+    });
+    await sleep(4500);
     await send('Runtime.evaluate', { expression: 'openSettingsModal()' });
+    await sleep(700);
+    await send('Runtime.evaluate', { expression: "$('#btn-backup-now')?.click()" });
+    await sleep(1500);
+    await send('Runtime.evaluate', { expression: "document.querySelector('#backup-list')?.scrollIntoView({block:'center'})" });
+    await sleep(500);
+    // 分支自检：确认备份区已渲染且列表非空
+    const check = await send('Runtime.evaluate', {
+      expression: "(function(){var l=document.querySelectorAll('#backup-list .backup-item').length;return l+'/'+(document.querySelector('#backup-list')?1:0)})()",
+      returnByValue: true,
+    });
+    console.log(`    备份区自检(条数/存在): ${check.result?.result?.value}`);
+    // 恢复 server 模式，避免影响后续截图
+    await send('Runtime.evaluate', {
+      expression: "(function(){var s={};try{s=JSON.parse(localStorage.getItem('passbook-settings')||'{}')}catch(e){}s.storageMode='server';localStorage.setItem('passbook-settings',JSON.stringify(s));})()",
+    });
   } else if (shot.hash === '#shot-import') {
     await send('Runtime.evaluate', { expression: 'openImportModal()' });
   }
@@ -170,7 +217,7 @@ async function waitListReady(ws, send) {
     await sleep(500);
     try {
       const r = await send('Runtime.evaluate', {
-        expression: "document.querySelectorAll('.entry-row').length",
+        expression: "document.querySelectorAll('.entry').length",
         returnByValue: true,
       });
       const n = r.result?.result?.value;
