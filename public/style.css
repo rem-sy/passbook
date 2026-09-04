@@ -515,6 +515,7 @@ html.dark .pw-input-row .btn.danger { background: #b03a2e; border-color: #b03a2e
 .import-tabs .btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
 #import-paste { min-height: 130px; font-family: "Cascadia Mono", Consolas, monospace; font-size: 13px; }
 .file-drop {
+  box-sizing: border-box; width: 100%; max-width: 100%;
   border: 1.5px dashed var(--line-strong);
   border-radius: 10px;
   padding: 26px;
@@ -891,3 +892,4 @@ html.dark .side-item:hover, html.dark .side-item.active { background: #232733; }
 
 /* 导入弹窗（v3.0.5）：主文案单行，手机端文案更短 */
 .file-drop-main { white-space: nowrap; }
+@media (max-width: 640px) { .file-drop { padding: 16px; } .file-drop .hint { white-space: normal; } }

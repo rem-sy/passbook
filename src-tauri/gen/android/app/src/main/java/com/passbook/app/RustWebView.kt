@@ -23,13 +23,16 @@ class RustWebView(context: Context, val initScripts: Array<String>, val id: Stri
         @JvmStatic var current: RustWebView? = null
     }
 
-    /** 密码本 v2.6.0：生物识别 JS 桥（window.__passbook_bio） */
+    /** 密码本 v2.6.0：生物识别 JS 桥（window.__passbook_bio）；v3.0.5 增加同步轮询 result() */
     inner class JsBio {
         @android.webkit.JavascriptInterface
         fun available(): String {
             val km = context.getSystemService(android.content.Context.KEYGUARD_SERVICE) as android.app.KeyguardManager
             return if (km.isKeyguardSecure) "yes" else "no"
         }
+
+        @android.webkit.JavascriptInterface
+        fun result(): String { return BioBridgeActivity.lastResult }
 
         @android.webkit.JavascriptInterface
         fun prompt(reason: String) {
@@ -40,10 +43,26 @@ class RustWebView(context: Context, val initScripts: Array<String>, val id: Stri
         }
     }
 
+    /** 密码本 v3.0.5：SAF 另存为 JS 桥（window.__passbook_saf，配合 SafSaveActivity） */
+    inner class JsSaf {
+        @android.webkit.JavascriptInterface
+        fun result(): String { return SafSaveActivity.lastResult }
+
+        @android.webkit.JavascriptInterface
+        fun save(name: String, tempPath: String) {
+            SafSaveActivity.displayName = name.ifBlank { "passbook.bin" }
+            SafSaveActivity.tempPath = tempPath
+            val i = android.content.Intent(context, SafSaveActivity::class.java)
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(i)
+        }
+    }
+
     init {
-        // 密码本 v2.6.0：JS 桥（生物识别解锁）
+        // 密码本 v2.6.0/v3.0.5：JS 桥（生物识别 + SAF 另存为）
         current = this
         addJavascriptInterface(JsBio(), "__passbook_bio")
+        addJavascriptInterface(JsSaf(), "__passbook_saf")
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.setGeolocationEnabled(true)

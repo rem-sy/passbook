@@ -813,12 +813,12 @@ function faviconSlot(it) {
   const letter = escapeHtml(String(it.owner || '?').trim().charAt(0).toUpperCase() || '?');
   const style = `background:hsl(${avatarHue(it.owner)} 62% 88%);color:hsl(${avatarHue(it.owner)} 45% 32%)`;
   if (loadSettings().favicons && domain) {
-    // v3.0.5：图片默认隐藏，只有真正解码成功（naturalWidth>0）才显示——任何网络异常/劫持 200/解码失败
-    // 都不再呈现"损坏图片"图标：站点直连 → DDG → 移除（仅剩首字头像）。
-    // rev=手动刷新计数（设置里「重试加载全部图标」），跳过浏览器缓存强制重取
+    // v3.0.6：display:none + loading=lazy 在 WebView 里永不加载（隐藏元素无布局位置，
+    // 懒加载无限推迟）——去掉 lazy，隐藏改为 opacity:0（保持布局，可正常加载），
+    // 解码成功淡入；失败链路不变（站点直连 → DDG → 移除，仅剩首字头像）
     const rev = loadSettings().faviconRev || 0;
     const bust = rev ? `?v=${rev}` : '';
-    return `<span class="entry-favicon" style="${style}">${letter}<img data-fd="${escapeHtml(domain)}" src="https://${escapeHtml(domain)}/favicon.ico${bust}" alt="" loading="lazy" decoding="async" style="display:none" referrerpolicy="no-referrer" onload="if(this.naturalWidth){this.style.display=''}else{this.onerror()}" onerror="if(this.dataset.f2){this.remove()}else{this.dataset.f2='1';this.src='https://icons.duckduckgo.com/ip3/'+encodeURIComponent(this.dataset.fd)+'.ico${bust}'}" /></span>`;
+    return `<span class="entry-favicon" style="${style}">${letter}<img data-fd="${escapeHtml(domain)}" src="https://${escapeHtml(domain)}/favicon.ico${bust}" alt="" decoding="async" style="opacity:0;transition:opacity .15s" referrerpolicy="no-referrer" onload="if(this.naturalWidth){this.style.opacity='1'}else{this.onerror()}" onerror="if(this.dataset.f2){this.remove()}else{this.dataset.f2='1';this.src='https://icons.duckduckgo.com/ip3/'+encodeURIComponent(this.dataset.fd)+'.ico${bust}'}" /></span>`;
   }
   return `<span class="entry-favicon" style="${style}">${letter}</span>`;
 }
