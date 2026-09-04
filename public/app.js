@@ -3219,8 +3219,10 @@ document.addEventListener('click', (e) => {
   toast('已重新请求全部站点图标');
   // v3.0.10：探测改走 Rust 通道（favicon_fetch，与图标加载同路径）
   if (window.__TAURI__ || window.__TAURI_INTERNALS__) {
-    Promise.resolve(tauriInvoke('favicon_fetch', { url: 'https://www.baidu.com/favicon.ico' }))
-      .then((r) => toast(r ? 'Rust 通道正常（已取回图标数据 ' + Math.round(r.length / 1.4 / 1024) + 'KB）' : 'Rust 通道正常，但百度未返回有效图标'))
-      .catch((err) => toast('Rust 通道异常: ' + (err && err.message ? err.message : err)));
+    ['https://www.baidu.com/favicon.ico', 'https://github.com/favicon.ico'].forEach((u) => {
+      Promise.resolve(tauriInvoke('favicon_fetch', { url: u }))
+        .then((r) => toast(u.includes('baidu') ? '百度: ' + (r ? '取回 ' + Math.round(r.length / 1.4 / 1024) + 'KB' : '无有效图标') : 'GitHub: ' + (r ? '取回 ' + Math.round(r.length / 1.4 / 1024) + 'KB' : '无有效图标')))
+        .catch((err) => toast(u.includes('baidu') ? '百度: ' : 'GitHub: ' + (err && err.message ? err.message : err)));
+    });
   }
 });

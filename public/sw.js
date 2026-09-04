@@ -1,5 +1,5 @@
 /* 密码本 · Service Worker：离线可用（PWA） */
-const CACHE_NAME = 'passbook-v39';
+const CACHE_NAME = 'passbook-v40';
 const ASSETS = [
   './',
   './index.html',
