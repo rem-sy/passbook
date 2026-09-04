@@ -813,14 +813,51 @@ function faviconSlot(it) {
   const letter = escapeHtml(String(it.owner || '?').trim().charAt(0).toUpperCase() || '?');
   const style = `background:hsl(${avatarHue(it.owner)} 62% 88%);color:hsl(${avatarHue(it.owner)} 45% 32%)`;
   if (loadSettings().favicons && domain) {
-    // v3.0.6：display:none + loading=lazy 在 WebView 里永不加载（隐藏元素无布局位置，
-    // 懒加载无限推迟）——去掉 lazy，隐藏改为 opacity:0（保持布局，可正常加载），
-    // 解码成功淡入；失败链路不变（站点直连 → DDG → 移除，仅剩首字头像）
+    // v3.0.8：img 保持最朴素形态（仅 src + 内联 onload/onerror）——去掉
+    // referrerpolicy/decoding 等属性，排除 tauri Android 自定义协议拦截层
+    // 对附加属性请求的干扰；隐藏用 opacity:0，解码成功淡入，失败链路不变
     const rev = loadSettings().faviconRev || 0;
     const bust = rev ? `?v=${rev}` : '';
-    return `<span class="entry-favicon" style="${style}">${letter}<img data-fd="${escapeHtml(domain)}" src="https://${escapeHtml(domain)}/favicon.ico${bust}" alt="" decoding="async" style="opacity:0;transition:opacity .15s" referrerpolicy="no-referrer" onload="if(this.naturalWidth){this.style.opacity='1'}else{this.onerror()}" onerror="if(this.dataset.f2){this.remove()}else{this.dataset.f2='1';this.src='https://icons.duckduckgo.com/ip3/'+encodeURIComponent(this.dataset.fd)+'.ico${bust}'}" /></span>`;
+    return `<span class="entry-favicon" style="${style}">${letter}<img data-fd="${escapeHtml(domain)}" src="https://${escapeHtml(domain)}/favicon.ico${bust}" style="opacity:0;transition:opacity .15s" onload="if(this.naturalWidth){this.style.opacity='1'}else{this.onerror()}" onerror="if(this.dataset.f2){this.remove()}else{this.dataset.f2='1';this.src='https://icons.duckduckgo.com/ip3/'+encodeURIComponent(this.dataset.fd)+'.ico${bust}'}" /></span>`;
   }
   return `<span class="entry-favicon" style="${style}">${letter}</span>`;
+}
+
+/** 自绘输入联想（v3.0.8）：替代原生 datalist——Android WebView 的 datalist
+ *  下拉定位有缺陷会遮挡输入框，改为输入框正下方绝对定位列表（双端统一行为）。
+ *  getItems() 每次输入时实时取全部候选；过滤：不区分大小写包含，最多 8 条；
+ *  空输入/无匹配不显示；点选项回填并触发 change；blur/ESC/Enter 关闭；
+ *  选项 mousedown preventDefault 防 blur 先行关闭。 */
+function attachSuggest(inputEl, getItems) {
+  if (!inputEl) return;
+  const field = inputEl.closest('.field');
+  if (!field) return;
+  field.style.position = 'relative'; // .pb-suggest 的定位锚
+  let box = null, tm = null;
+  const close = () => { if (box) { box.remove(); box = null; } clearTimeout(tm); };
+  const open = () => {
+    const q = inputEl.value.trim();
+    if (!q) { close(); return; }
+    const low = q.toLowerCase();
+    const hit = (getItems() || []).filter((x) => x && x.toLowerCase().includes(low)).slice(0, 8);
+    close();
+    if (!hit.length) return;
+    box = document.createElement('div');
+    box.className = 'pb-suggest';
+    box.innerHTML = hit.map((x) => `<div class="pb-suggest-item" data-v="${escapeHtml(x)}">${escapeHtml(x)}</div>`).join('');
+    box.addEventListener('mousedown', (e) => {
+      e.preventDefault(); // 保住焦点，防 blur 关闭竞速
+      const it = e.target.closest('.pb-suggest-item');
+      if (!it) return;
+      inputEl.value = it.dataset.v;
+      close();
+      inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    field.appendChild(box);
+  };
+  inputEl.addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(open, 150); });
+  inputEl.addEventListener('blur', () => setTimeout(close, 120));
+  inputEl.addEventListener('keydown', (e) => { if (e.key === 'Escape' || e.key === 'Enter') close(); });
 }
 
 /* ---------------- 列表渲染 ---------------- */
@@ -1413,34 +1450,14 @@ function openEditModal(item = null, prefillPw = '') {
     </div>
   `, false);
 
-  // 自动补全：仅输入时填充并绑定 datalist（避免移动端无输入时展开）
+  // 自动补全（v3.0.8 改自绘联想，替代 datalist——安卓 WebView datalist 遮挡输入框）
   (async () => {
     const all = await store.list({});
-    const owners = new Set(), accounts = new Set(), cats = new Set();
-    for (const x of all.items) { owners.add(x.owner); accounts.add(x.account); if (x.category) cats.add(x.category); }
-    const pools = {
-      'f-owner': [...owners],
-      'f-account': [...accounts],
-      'f-category': [...cats],
-    };
-    const bind = (inputId, dlId, pool) => {
-      const input = $('#' + inputId);
-      const dl = $('#' + dlId);
-      const refresh = () => {
-        const q = input.value.trim();
-        if (!q) { dl.innerHTML = ''; input.removeAttribute('list'); return; }
-        const low = q.toLowerCase();
-        const hit = pool.filter((x) => x && x.toLowerCase().includes(low));
-        dl.innerHTML = hit.map((x) => `<option value="${escapeHtml(x)}">`).join('');
-        if (hit.length > 0) input.setAttribute('list', dlId); else input.removeAttribute('list');
-      };
-      input.addEventListener('input', refresh);
-      // 不监听 focus：仅在用户实际输入时展开，选中/聚焦不弹列表
-      input.addEventListener('change', () => { dl.innerHTML = ''; input.removeAttribute('list'); });
-    };
-    for (const [id, pool] of Object.entries(pools)) {
-      if (pool.length) bind(id, 'dl-' + id, pool);
-    }
+    const so = new Set(), sa = new Set(), sc = new Set();
+    for (const x of all.items) { if (x.owner) so.add(x.owner); if (x.account) sa.add(x.account); if (x.category) sc.add(x.category); }
+    attachSuggest($('#f-owner'), () => [...so]);
+    attachSuggest($('#f-account'), () => [...sa]);
+    attachSuggest($('#f-category'), () => [...sc]);
   })();
 
   $('#btn-cancel')?.addEventListener('click', closeModal);
@@ -1643,36 +1660,15 @@ function openManualAddModal() {
     </div>
   `, true);
 
-  // 自动补全：不在获得焦点/空输入时展开，仅当用户输入非空字符后才填充并绑定 datalist
-  //（Android WebView 对带 option 的 datalist 在聚焦时就会弹出，故用"输入才绑定"策略）
+  // 自动补全（v3.0.8 改自绘联想，替代 datalist——安卓 WebView datalist 遮挡输入框；
+  // 仅当用户输入非空时才出现列表，行为与编辑弹窗一致）
   (async () => {
     const all = await store.list({});
-    const owners = new Set(), accounts = new Set(), cats = new Set();
-    for (const x of all.items) { owners.add(x.owner); accounts.add(x.account); if (x.category) cats.add(x.category); }
-    const pools = {
-      'mf-owner': [...owners],
-      'mf-account': [...accounts],
-      'mf-category': [...cats],
-    };
-    const bind = (inputId, dlId, pool) => {
-      const input = $('#' + inputId);
-      const dl = $('#' + dlId);
-      const refresh = () => {
-        const q = input.value.trim();
-        if (!q) { dl.innerHTML = ''; input.removeAttribute('list'); return; }
-        const low = q.toLowerCase();
-        const hit = pool.filter((x) => x && x.toLowerCase().includes(low));
-        dl.innerHTML = hit.map((x) => `<option value="${escapeHtml(x)}">`).join('');
-        if (hit.length > 0) input.setAttribute('list', dlId); else input.removeAttribute('list');
-      };
-      input.addEventListener('input', refresh);
-      // 不监听 focus：仅在用户实际输入时展开，选中/聚焦不弹列表
-      // 选中候选后（值已填满）松开绑定，避免再次点击又弹列表
-      input.addEventListener('change', () => { dl.innerHTML = ''; input.removeAttribute('list'); });
-    };
-    for (const [id, pool] of Object.entries(pools)) {
-      if (pool.length) bind(id, 'dl-' + id, pool);
-    }
+    const so = new Set(), sa = new Set(), sc = new Set();
+    for (const x of all.items) { if (x.owner) so.add(x.owner); if (x.account) sa.add(x.account); if (x.category) sc.add(x.category); }
+    attachSuggest($('#mf-owner'), () => [...so]);
+    attachSuggest($('#mf-account'), () => [...sa]);
+    attachSuggest($('#mf-category'), () => [...sc]);
   })();
 
   let mfSavedCount = 0;
@@ -3170,7 +3166,10 @@ $('#btn-guide').addEventListener('click', openGuideModal);
   });
 })();
 /* 手动刷新站点图标（v3.0.5）：文档级委托——设置弹窗里的「重试加载全部图标」
- * 计数 +1 并重绘列表，图标 URL 带新版本号跳过浏览器缓存强制重取 */
+ * 计数 +1 并重绘列表，图标 URL 带新版本号跳过浏览器缓存强制重取。
+ * v3.0.8 诊断探针：同时用 fetch(no-cors) 探测外网连通性——
+ * 下次回报即可区分「fetch 通而 img 不通」（tauri 拦截层问题，走 Rust 侧下载）
+ * 还是「都不通」（纯网络问题） */
 document.addEventListener('click', (e) => {
   const b = e.target && e.target.closest ? e.target.closest('#btn-favicon-refresh') : null;
   if (!b) return;
@@ -3178,4 +3177,7 @@ document.addEventListener('click', (e) => {
   saveSettings({ ...cur, faviconRev: (cur.faviconRev || 0) + 1 });
   refreshList();
   toast('已重新请求全部站点图标');
+  fetch('https://www.baidu.com/favicon.ico', { mode: 'no-cors' })
+    .then((r) => toast('网络探测: 请求已发出(' + r.type + ')'))
+    .catch((err) => toast('网络探测失败: ' + (err && err.message ? err.message : err)));
 });

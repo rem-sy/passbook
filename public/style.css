@@ -893,3 +893,17 @@ html.dark .side-item:hover, html.dark .side-item.active { background: #232733; }
 /* 导入弹窗（v3.0.5）：主文案单行，手机端文案更短 */
 .file-drop-main { white-space: nowrap; }
 @media (max-width: 640px) { .file-drop { padding: 16px; } .file-drop .hint { white-space: normal; } }
+
+/* 自绘输入联想（v3.0.8）：替代 datalist，安卓不遮挡输入框；定位锚在 .field（JS 设 relative） */
+.pb-suggest {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px);
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(15, 18, 26, 0.14);
+  z-index: 400; max-height: 240px; overflow-y: auto; padding: 4px;
+}
+.pb-suggest-item {
+  padding: 8px 12px; border-radius: 7px; font-size: 13.5px; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pb-suggest-item:hover { background: var(--bg); }
+html.dark .pb-suggest { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
