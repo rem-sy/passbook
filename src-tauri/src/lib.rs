@@ -156,6 +156,73 @@ async fn pick_db_path(app: AppHandle) -> Result<Option<String>, String> {
     Ok(rx.await.unwrap_or(None))
 }
 
+/// v3.0.9：Android WebView 外部请求（fetch/img）全被 tauri 拦截层拦截，
+/// favicon 改由 reqwest 下载并转 data:URL 注入。限 512KB、超时 8s；
+/// content-type image/* 或图片魔数（PNG/GIF/JPEG/ICO）才返回 Some，否则 None。
+#[tauri::command]
+async fn favicon_fetch(url: String) -> Result<Option<String>, String> {
+    fn b64_std(data: &[u8]) -> String {
+        const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+        for c in data.chunks(3) {
+            let b0 = c[0] as u32;
+            let b1 = *c.get(1).unwrap_or(&0) as u32;
+            let b2 = *c.get(2).unwrap_or(&0) as u32;
+            let n = (b0 << 16) | (b1 << 8) | b2;
+            out.push(T[(n >> 18) as usize & 63] as char);
+            out.push(T[(n >> 12) as usize & 63] as char);
+            out.push(if c.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+            out.push(if c.len() > 2 { T[n as usize & 63] as char } else { '=' });
+        }
+        out
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(&url)
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        )
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {}", e))?;
+    if !resp.status().is_success() {
+        return Ok(None);
+    }
+    let mime = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(';').next().unwrap_or("").trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    let bytes = resp.bytes().await.map_err(|e| format!("read body failed: {}", e))?;
+    if bytes.is_empty() || bytes.len() > 512 * 1024 {
+        return Ok(None);
+    }
+    let m_png = bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47]);
+    let m_gif = bytes.starts_with(&[0x47, 0x49, 0x46, 0x38]);
+    let m_jpg = bytes.starts_with(&[0xFF, 0xD8, 0xFF]);
+    let m_ico = bytes.starts_with(&[0x00, 0x01, 0x00, 0x00]);
+    if !(mime.starts_with("image/") || m_png || m_gif || m_jpg || m_ico) {
+        return Ok(None); // HTML 劫持页/非图片内容
+    }
+    let mime = if mime.starts_with("image/") {
+        mime
+    } else if m_png {
+        "image/png".to_string()
+    } else if m_gif {
+        "image/gif".to_string()
+    } else if m_jpg {
+        "image/jpeg".to_string()
+    } else {
+        "image/x-icon".to_string()
+    };
+    Ok(Some(format!("data:{};base64,{}", mime, b64_std(&bytes))))
+}
+
 /// Android SAF 另存为（v3.0.5）：把字节写入应用缓存临时文件，供 SafSaveActivity 流式拷贝
 #[tauri::command]
 async fn saf_temp_write(app: tauri::AppHandle, bytes: Vec<u8>) -> Result<String, String> {
@@ -538,6 +605,7 @@ pub fn run() {
             delete_file,
             export_bytes,
             saf_temp_write,
+            favicon_fetch,
             agent_http,
             agent_http_stream,
             agent_abort,

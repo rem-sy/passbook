@@ -2402,7 +2402,7 @@ dependencies = [
 
 [[package]]
 name = "passbook-desktop"
-version = "3.0.7"
+version = "3.0.8"
 dependencies = [
  "futures-util",
  "reqwest 0.12.28",

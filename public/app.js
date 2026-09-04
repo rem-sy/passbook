@@ -813,11 +813,15 @@ function faviconSlot(it) {
   const letter = escapeHtml(String(it.owner || '?').trim().charAt(0).toUpperCase() || '?');
   const style = `background:hsl(${avatarHue(it.owner)} 62% 88%);color:hsl(${avatarHue(it.owner)} 45% 32%)`;
   if (loadSettings().favicons && domain) {
-    // v3.0.8：img 保持最朴素形态（仅 src + 内联 onload/onerror）——去掉
-    // referrerpolicy/decoding 等属性，排除 tauri Android 自定义协议拦截层
-    // 对附加属性请求的干扰；隐藏用 opacity:0，解码成功淡入，失败链路不变
     const rev = loadSettings().faviconRev || 0;
     const bust = rev ? `?v=${rev}` : '';
+    if (IS_TAURI) {
+      // v3.0.9：Android WebView 外部请求（fetch/img）全被 tauri 拦截层挡死，
+      // Tauri 环境不写远程 src——由 hydrateFavicons() 经 Rust reqwest 下载转
+      // data:URL 注入；失败移除，仅剩首字头像
+      return `<span class="entry-favicon" style="${style}">${letter}<img data-fd="${escapeHtml(domain)}" style="opacity:0;transition:opacity .15s" onload="if(this.naturalWidth){this.style.opacity='1'}" onerror="this.remove()" /></span>`;
+    }
+    // 浏览器模式：直连 img（opacity 淡入 + 站点直连→DDG 回退）
     return `<span class="entry-favicon" style="${style}">${letter}<img data-fd="${escapeHtml(domain)}" src="https://${escapeHtml(domain)}/favicon.ico${bust}" style="opacity:0;transition:opacity .15s" onload="if(this.naturalWidth){this.style.opacity='1'}else{this.onerror()}" onerror="if(this.dataset.f2){this.remove()}else{this.dataset.f2='1';this.src='https://icons.duckduckgo.com/ip3/'+encodeURIComponent(this.dataset.fd)+'.ico${bust}'}" /></span>`;
   }
   return `<span class="entry-favicon" style="${style}">${letter}</span>`;
@@ -858,6 +862,40 @@ function attachSuggest(inputEl, getItems) {
   inputEl.addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(open, 150); });
   inputEl.addEventListener('blur', () => setTimeout(close, 120));
   inputEl.addEventListener('keydown', (e) => { if (e.key === 'Escape' || e.key === 'Enter') close(); });
+}
+
+/* ---------------- favicon 注水（v3.0.9，仅 Tauri）----------------
+ * Android WebView 的外部 fetch/img 全被 tauri 拦截层拦截，唯一可用网络
+ * 路径是 Rust reqwest（AI 聊天实测可通）。列表渲染后扫描 img[data-fd]，
+ * 经 favicon_fetch 下载图标转 data:URL 注入；内存 Map 缓存（domain →
+ * dataUrl | null 已知失败）防止重渲染反复请求；「重试加载全部图标」清缓存。 */
+const faviconDataCache = new Map();
+async function hydrateFavicons() {
+  if (!IS_TAURI) return;
+  const imgs = document.querySelectorAll('img[data-fd]:not([data-hydrated])');
+  for (const img of imgs) {
+    const domain = img.dataset.fd;
+    if (!domain) continue;
+    img.dataset.hydrated = '1'; // 本轮标记，防重复处理
+    const apply = (dataUrl) => {
+      if (!document.body.contains(img)) return; // 弹窗/列表已重建
+      if (dataUrl) img.src = dataUrl; // 成功 → data:URL，onload 淡入
+      else img.remove(); // 双源失败 → 移除，仅剩首字头像
+    };
+    if (faviconDataCache.has(domain)) { apply(faviconDataCache.get(domain)); continue; }
+    (async () => {
+      let dataUrl = null;
+      try {
+        const r1 = await tauriInvoke('favicon_fetch', { url: `https://${domain}/favicon.ico` });
+        if (!r1) {
+          const r2 = await tauriInvoke('favicon_fetch', { url: `https://icons.duckduckgo.com/ip3/${domain}.ico` });
+          dataUrl = r2 || null;
+        } else dataUrl = r1;
+      } catch { dataUrl = null; }
+      faviconDataCache.set(domain, dataUrl);
+      apply(dataUrl);
+    })();
+  }
 }
 
 /* ---------------- 列表渲染 ---------------- */
@@ -957,6 +995,7 @@ function renderEntries(items, hitsMap) {
         </div>
       </div>`;
   }).join('');
+  hydrateFavicons(); // v3.0.9：Tauri 环境经 Rust 下载图标注入 data:URL（内部自守卫）
 }
 
 /** 卡片附件入口弹窗（v2.4.0）：列出该条目附件，点击查看/下载 */
@@ -3175,6 +3214,7 @@ document.addEventListener('click', (e) => {
   if (!b) return;
   const cur = loadSettings();
   saveSettings({ ...cur, faviconRev: (cur.faviconRev || 0) + 1 });
+  faviconDataCache.clear(); // v3.0.9：清 Rust 下载缓存，强制全部重取
   refreshList();
   toast('已重新请求全部站点图标');
   fetch('https://www.baidu.com/favicon.ico', { mode: 'no-cors' })
