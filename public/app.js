@@ -2532,7 +2532,7 @@ async function showLockIfNeeded() {
   if (document.querySelector('.lock-mask')) return;
   const mask = document.createElement('div');
   mask.className = 'modal-mask lock-mask';
-  mask.style.zIndex = '300';
+  mask.style.zIndex = '800'; // v3.0.12：锁页始终最顶层（侧栏60/弹窗500/联想600）
   mask.innerHTML = `
     <div class="modal" style="max-width:340px;text-align:center">
       <div class="modal-head"><h3>${ICONS.lock} 密码本已锁定</h3><span></span></div>
