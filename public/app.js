@@ -565,9 +565,16 @@ const LocalStore = {
   },
   async exportDb() {
     if (IS_TAURI) {
-      // 桌面版：弹系统保存对话框，复制数据库文件
       const srcPath = await getTauriDbPath();
+      // Android 无桌面保存对话框（tauri dialog 不可用）：走 SAF 系统另存为（v3.0.5）
+      if (IS_ANDROID && window.__passbook_saf) {
+        const bytes = await tauriInvoke('read_db_file', { path: srcPath });
+        await androidSafSave(bytes, 'passwords.db');
+        return { safSaved: true };
+      }
+      // 桌面版：弹系统保存对话框，复制数据库文件
       const dest = await tauriInvoke('export_db', { srcPath });
+      if (!dest) return null; // 对话框取消——不再返回 {tauriPath:null} 假对象（曾致 createObjectURL 报错）
       return { tauriPath: dest };
     }
     const bytes = this.db.export();
@@ -577,7 +584,14 @@ const LocalStore = {
     if (IS_TAURI) {
       const data = await this.exportJson();
       const contents = JSON.stringify(data, null, 2);
+      // Android：SAF 系统另存为（v3.0.5）
+      if (IS_ANDROID && window.__passbook_saf) {
+        const fname = `passbook-backup-${new Date().toISOString().slice(0, 10)}.json`;
+        await androidSafSave(new TextEncoder().encode(contents), fname);
+        return { safSaved: true };
+      }
       const dest = await tauriInvoke('export_json', { contents });
+      if (!dest) return null;
       return { tauriPath: dest };
     }
     return null;
@@ -799,7 +813,12 @@ function faviconSlot(it) {
   const letter = escapeHtml(String(it.owner || '?').trim().charAt(0).toUpperCase() || '?');
   const style = `background:hsl(${avatarHue(it.owner)} 62% 88%);color:hsl(${avatarHue(it.owner)} 45% 32%)`;
   if (loadSettings().favicons && domain) {
-    return `<span class="entry-favicon" style="${style}">${letter}<img data-fd="${escapeHtml(domain)}" src="https://${escapeHtml(domain)}/favicon.ico" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="if(!this.naturalWidth){this.onerror();return}" onerror="if(this.dataset.f2){this.remove()}else{this.dataset.f2='1';this.src='https://icons.duckduckgo.com/ip3/'+encodeURIComponent(this.dataset.fd)+'.ico'}" /></span>`;
+    // v3.0.5：图片默认隐藏，只有真正解码成功（naturalWidth>0）才显示——任何网络异常/劫持 200/解码失败
+    // 都不再呈现"损坏图片"图标：站点直连 → DDG → 移除（仅剩首字头像）。
+    // rev=手动刷新计数（设置里「重试加载全部图标」），跳过浏览器缓存强制重取
+    const rev = loadSettings().faviconRev || 0;
+    const bust = rev ? `?v=${rev}` : '';
+    return `<span class="entry-favicon" style="${style}">${letter}<img data-fd="${escapeHtml(domain)}" src="https://${escapeHtml(domain)}/favicon.ico${bust}" alt="" loading="lazy" decoding="async" style="display:none" referrerpolicy="no-referrer" onload="if(this.naturalWidth){this.style.display=''}else{this.onerror()}" onerror="if(this.dataset.f2){this.remove()}else{this.dataset.f2='1';this.src='https://icons.duckduckgo.com/ip3/'+encodeURIComponent(this.dataset.fd)+'.ico${bust}'}" /></span>`;
   }
   return `<span class="entry-favicon" style="${style}">${letter}</span>`;
 }
@@ -1323,7 +1342,10 @@ async function openAttachmentViewer(aid, name) {
   document.querySelector('.modal-close')?.addEventListener('click', revokeAttachUrl);
   $('#btn-attach-save').addEventListener('click', async () => {
     try {
-      if (IS_TAURI) {
+      if (IS_TAURI && IS_ANDROID && window.__passbook_saf) {
+        await androidSafSave(bytes, name); // SAF 系统另存为（v3.0.5）
+        toast('已保存');
+      } else if (IS_TAURI) {
         const dest = await tauriInvoke('export_bytes', { bytes: Array.from(bytes), suggestedName: name });
         if (dest) toast('已保存：' + dest);
       } else {
@@ -1717,7 +1739,7 @@ function openImportModal() {
       </div>
       <div id="tab-file" class="hidden">
         <label class="file-drop" id="file-drop">
-          <div>点击选择或拖入文件</div>
+          <div class="file-drop-main">${('ontouchstart' in window || (navigator.maxTouchPoints || 0) > 0) ? '选择文件' : '点击选择或拖入文件'}</div>
           <div class="hint">支持 .csv / .json / .txt / .db（SQLite 数据库文件）</div>
         </label>
         <input type="file" id="file-input" class="hidden" accept=".csv,.json,.txt,.db" />
@@ -1929,17 +1951,24 @@ function openExportModal() {
   $('#btn-export-db').addEventListener('click', async () => {
     try {
       const blob = await store.exportDb();
-      if (blob && blob.tauriPath) {
+      if (blob && blob.safSaved) { toast('数据库已另存'); }
+      else if (blob && blob.tauriPath) {
         toast('数据库文件已导出：' + blob.tauriPath);
       } else if (blob) {
         downloadBlob(blob, 'passwords.db');
         toast('数据库文件已下载');
+      } else {
+        toast('已取消导出');
       }
     } catch (e) { toast(e.message, true); }
   });
   $('#btn-export-json').addEventListener('click', async () => {
     try {
       const saved = await store.exportJsonToFile && await store.exportJsonToFile();
+      if (saved && saved.safSaved) {
+        toast('JSON 备份已保存');
+        return;
+      }
       if (saved && saved.tauriPath) {
         toast('JSON 备份已导出：' + saved.tauriPath);
         return;
@@ -1953,12 +1982,38 @@ function openExportModal() {
 }
 
 function downloadBlob(blob, filename) {
+  if (!(blob instanceof Blob)) blob = new Blob([blob]); // v3.0.5：防御非 Blob 入参（曾致 createObjectURL 报错）
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = filename;
   document.body.appendChild(a);
   a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+
+/** Android SAF 另存为（v3.0.5）：字节先写缓存临时文件（Rust saf_temp_write），
+ *  再拉起系统「创建文档」界面由用户选位置，SafSaveActivity 流式拷贝到位。
+ *  resolve(true) 成功；取消/失败 reject。仅 Android Tauri 环境可用。 */
+function androidSafSave(bytes, name) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      if (!window.__passbook_saf) throw new Error('此环境不支持系统另存为');
+      const arr = bytes instanceof Uint8Array ? Array.from(bytes) : bytes;
+      const tempPath = await tauriInvoke('saf_temp_write', { bytes: arr });
+      let done = false;
+      const finish = (ok, err) => { if (done) return; done = true; clearInterval(iv); ok ? resolve(true) : reject(new Error(err || '已取消')); };
+      const t0 = Date.now();
+      const iv = setInterval(() => {
+        let r = 'pending';
+        try { r = window.__passbook_saf.result(); } catch { /* 忽略 */ }
+        if (r === 'true') finish(true);
+        else if (r.startsWith('false:')) finish(false, r.slice(6));
+        else if (Date.now() - t0 > 300000) finish(false, '保存超时');
+      }, 400);
+      window.__passbookSafResult = (ok) => finish(ok); // evaluateJavascript 快路径
+      window.__passbook_saf.save(name, tempPath);
+    } catch (e) { reject(e); }
+  });
 }
 
 $('#btn-export').addEventListener('click', openExportModal);
@@ -2132,6 +2187,7 @@ function openSettingsModal() {
       <div class="field"><span>站点图标（列表卡片左侧）</span>
         <div class="chk-group" style="padding-top:2px">
           <label><input type="checkbox" id="set-favicons" ${s.favicons ? 'checked' : ''} /> 显示网站 favicon（联网：优先向站点本身请求 /favicon.ico，免代理可达；失败时尝试 DuckDuckGo 图标服务（需代理）；都失败用首字头像）</label>
+          <div style="margin-top:6px"><button class="btn" id="btn-favicon-refresh" type="button" style="padding:6px 12px;font-size:12.5px">↻ 重试加载全部图标</button><span class="hint" style="margin-left:8px">跳过缓存重新请求（图标未显示/异常时用）</span></div>
         </div>
       </div>`;
   const backupField = currentMode === 'local' ? `
@@ -2452,23 +2508,35 @@ async function showLockIfNeeded() {
       </div>
     </div>`;
   document.body.appendChild(mask);
+  // v3.0.5：元素引用收敛到 mask 作用域（生物识别往返后全局 id 查询可能失效），并加空值防护
+  const pinEl = () => mask.querySelector('#lock-pin');
+  const errEl = () => mask.querySelector('#lock-err');
   const tryUnlock = async () => {
-    const hash = await sha256($('#lock-pin').value);
+    if (unlocked || !document.body.contains(mask)) return;
+    const el = pinEl();
+    if (!el) return;
+    const hash = await sha256(el.value);
     if (hash === s.pinHash) {
       unlocked = true;
       mask.remove();
-    } else {
-      $('#lock-err').textContent = 'PIN 错误';
+    } else if (errEl()) {
+      errEl().textContent = 'PIN 错误';
     }
   };
-  $('#lock-bio')?.addEventListener('click', async () => {
-    const ok = await Bio.prompt('解锁密码本');
+  $('#lock-bio')?.addEventListener('click', async (ev) => {
+    const btn = ev.currentTarget;
+    btn.disabled = true; // 防重复拉起
+    let ok = false;
+    try { ok = await Bio.prompt('解锁密码本'); } catch { ok = false; }
+    btn.disabled = false;
+    if (unlocked || !document.body.contains(mask)) return;
     if (ok) { unlocked = true; mask.remove(); }
-    else $('#lock-err').textContent = '生物识别未通过，请输入 PIN';
+    else if (errEl()) errEl().textContent = '生物识别未通过，请输入 PIN';
+    pinEl()?.focus();
   });
-  $('#lock-go').addEventListener('click', tryUnlock);
-  $('#lock-pin').addEventListener('keydown', (e) => { if (e.key === 'Enter') tryUnlock(); });
-  $('#lock-pin').focus();
+  mask.querySelector('#lock-go')?.addEventListener('click', tryUnlock);
+  pinEl()?.addEventListener('keydown', (e) => { if (e.key === 'Enter') tryUnlock(); });
+  pinEl()?.focus();
 }
 
 /* ---------------- 搜索 / 排序 ---------------- */
@@ -3073,3 +3141,36 @@ function openGuideModal() {
   $('#btn-guide-ok').addEventListener('click', closeModal);
 }
 $('#btn-guide').addEventListener('click', openGuideModal);
+
+/* ---------------- 全局错误提示（v3.0.5）----------------
+ * 未捕获异常 / Promise 拒绝以 toast 展示原文（30 秒去重），便于用户反馈真实报错；
+ * 资源加载失败（img/script 等，event.target 非空且无 message）不弹，避免头像请求刷屏 */
+(function () {
+  const seen = new Map();
+  const show = (msg) => {
+    const key = String(msg || '').slice(0, 160);
+    if (!key) return;
+    const now = Date.now();
+    if (now - (seen.get(key) || 0) < 30000) return;
+    seen.set(key, now);
+    try { toast('⚠ ' + key, true); } catch { /* UI 未就绪时忽略 */ }
+  };
+  window.addEventListener('error', (e) => {
+    if (e && e.target && e.target.tagName && !e.message) return; // 资源加载错误
+    show(e.message || (e.error && e.error.message) || '未知错误');
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    const r = e && e.reason;
+    show((r && (r.message || r)) || 'Promise 未处理拒绝');
+  });
+})();
+/* 手动刷新站点图标（v3.0.5）：文档级委托——设置弹窗里的「重试加载全部图标」
+ * 计数 +1 并重绘列表，图标 URL 带新版本号跳过浏览器缓存强制重取 */
+document.addEventListener('click', (e) => {
+  const b = e.target && e.target.closest ? e.target.closest('#btn-favicon-refresh') : null;
+  if (!b) return;
+  const cur = loadSettings();
+  saveSettings({ ...cur, faviconRev: (cur.faviconRev || 0) + 1 });
+  refreshList();
+  toast('已重新请求全部站点图标');
+});

@@ -156,6 +156,20 @@ async fn pick_db_path(app: AppHandle) -> Result<Option<String>, String> {
     Ok(rx.await.unwrap_or(None))
 }
 
+/// Android SAF 另存为（v3.0.5）：把字节写入应用缓存临时文件，供 SafSaveActivity 流式拷贝
+#[tauri::command]
+async fn saf_temp_write(app: tauri::AppHandle, bytes: Vec<u8>) -> Result<String, String> {
+    use std::io::Write;
+    let dir = app
+        .path()
+        .cache_dir()
+        .ok_or_else(|| "无缓存目录".to_string())?;
+    let _ = std::fs::create_dir_all(&dir);
+    let p = dir.join("passbook-saf.tmp");
+    let mut f = std::fs::File::create(&p).map_err(|e| e.to_string())?;
+    f.write_all(&bytes).map_err(|e| e.to_string())?;
+    Ok(p.to_string_lossy().into_owned())
+}
 /// 导出：保存对话框选择目标位置，复制当前数据库文件过去
 #[tauri::command]
 async fn export_db(app: AppHandle, src_path: String) -> Result<Option<String>, String> {
@@ -523,6 +537,7 @@ pub fn run() {
             list_dir_files,
             delete_file,
             export_bytes,
+            saf_temp_write,
             agent_http,
             agent_http_stream,
             agent_abort,

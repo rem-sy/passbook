@@ -888,3 +888,6 @@ html.dark .entry-fav.active { color: #ffc45e; }
 /* 深色适配 */
 html.dark .sidebar { background: #1c202b; }
 html.dark .side-item:hover, html.dark .side-item.active { background: #232733; }
+
+/* 导入弹窗（v3.0.5）：主文案单行，手机端文案更短 */
+.file-drop-main { white-space: nowrap; }

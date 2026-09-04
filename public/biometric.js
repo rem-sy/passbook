@@ -37,9 +37,26 @@
       return new Promise(async (resolve) => {
         try {
           if (self.kind === 'android') {
-            if (w().__passbook_bio.available() !== 'yes') return resolve(false);
+            const bridge = w().__passbook_bio;
+            if (bridge.available() !== 'yes') return resolve(false);
+            // v3.0.5：evaluateJavascript 回调在凭据页遮挡/WebView 暂停时可能丢失，
+            // 增加同步轮询兜底（JavascriptInterface 直读结果，时序无关）
+            if (typeof bridge.result === 'function') {
+              let done = false;
+              const finish = (ok) => { if (done) return; done = true; clearInterval(iv); resolve(ok === true); };
+              const t0 = Date.now();
+              const iv = setInterval(() => {
+                let r = 'pending';
+                try { r = bridge.result(); } catch { /* 忽略瞬时错误 */ }
+                if (r === 'true' || r === 'false') finish(r);
+                else if (Date.now() - t0 > 90000) finish('false'); // 超时保底
+              }, 400);
+              self._pending = finish; // evaluateJavascript 快路径
+              bridge.prompt(reason || '解锁密码本');
+              return;
+            }
             self._pending = resolve;
-            w().__passbook_bio.prompt(reason || '解锁密码本');
+            bridge.prompt(reason || '解锁密码本');
             return;
           }
           if (self.kind === 'desktop') {

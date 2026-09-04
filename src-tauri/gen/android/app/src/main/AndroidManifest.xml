@@ -38,5 +38,10 @@
           android:excludeFromRecents="true"
           android:exported="false"
           android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <activity
+          android:name=".SafSaveActivity"
+          android:excludeFromRecents="true"
+          android:exported="false"
+          android:theme="@android:style/Theme.Translucent.NoTitleBar" />
     </application>
 </manifest>

@@ -113,15 +113,15 @@ try {
     }
     if (-not $rwvSrc.Contains('JsBio')) {
       $a2 = "    val isDocumentStartScriptEnabled: Boolean`n"
-      $bio = $a2 + "`n    companion object {`n        @JvmStatic var current: RustWebView? = null`n    }`n`n    /** 密码本 v2.6.0：生物识别 JS 桥（window.__passbook_bio） */`n    inner class JsBio {`n        @android.webkit.JavascriptInterface`n        fun available(): String {`n            val km = context.getSystemService(android.content.Context.KEYGUARD_SERVICE) as android.app.KeyguardManager`n            return if (km.isKeyguardSecure) `"yes`" else `"no`"`n        }`n`n        @android.webkit.JavascriptInterface`n        fun prompt(reason: String) {`n            BioBridgeActivity.reason = reason.ifBlank { `"解锁密码本`" }`n            val i = android.content.Intent(context, BioBridgeActivity::class.java)`n            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)`n            context.startActivity(i)`n        }`n    }`n"
+      $bio = $a2 + "`n    companion object {`n        @JvmStatic var current: RustWebView? = null`n    }`n`n    /** 密码本 v2.6.0：生物识别 JS 桥（window.__passbook_bio）；v3.0.5 增加同步轮询 result() */`n    inner class JsBio {`n        @android.webkit.JavascriptInterface`n        fun available(): String {`n            val km = context.getSystemService(android.content.Context.KEYGUARD_SERVICE) as android.app.KeyguardManager`n            return if (km.isKeyguardSecure) `"yes`" else `"no`"`n        }`n`n        @android.webkit.JavascriptInterface`n        fun result(): String { return BioBridgeActivity.lastResult }`n`n        @android.webkit.JavascriptInterface`n        fun prompt(reason: String) {`n            BioBridgeActivity.reason = reason.ifBlank { `"解锁密码本`" }`n            val i = android.content.Intent(context, BioBridgeActivity::class.java)`n            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)`n            context.startActivity(i)`n        }`n    }`n`n    /** 密码本 v3.0.5：SAF 另存为 JS 桥（window.__passbook_saf，配合 SafSaveActivity） */`n    inner class JsSaf {`n        @android.webkit.JavascriptInterface`n        fun result(): String { return SafSaveActivity.lastResult }`n`n        @android.webkit.JavascriptInterface`n        fun save(name: String, tempPath: String) {`n            SafSaveActivity.displayName = name.ifBlank { `"passbook.bin`" }`n            SafSaveActivity.tempPath = tempPath`n            val i = android.content.Intent(context, SafSaveActivity::class.java)`n            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)`n            context.startActivity(i)`n        }`n    }`n"
       $rwvSrc = $rwvSrc.Replace($a2, $bio)
       $a3 = '        settings.javaScriptEnabled = true'
-      $rwvSrc = $rwvSrc.Replace($a3, "        // 密码本 v2.6.0：JS 桥（生物识别解锁）`n        current = this`n        addJavascriptInterface(JsBio(), `"__passbook_bio`")`n" + $a3)
+      $rwvSrc = $rwvSrc.Replace($a3, "        // 密码本 v2.6.0/v3.0.5：JS 桥（生物识别 + SAF 另存为）`n        current = this`n        addJavascriptInterface(JsBio(), `"__passbook_bio`")`n        addJavascriptInterface(JsSaf(), `"__passbook_saf`")`n" + $a3)
       $dirty = $true
     }
     if ($dirty) {
       [System.IO.File]::WriteAllText($rwv, $rwvSrc, [System.Text.UTF8Encoding]::new($false))
-      Write-Host '    RustWebView.kt 已补丁（viewport + 生物识别桥）'
+      Write-Host '    RustWebView.kt 已补丁（viewport + 生物识别桥 + SAF 保存桥）'
     }
   }
   # APK assets 目录同步一份前端（兜底源；运行时以 .so 内嵌资源为准）
