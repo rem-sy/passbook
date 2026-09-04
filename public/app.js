@@ -799,7 +799,7 @@ function faviconSlot(it) {
   const letter = escapeHtml(String(it.owner || '?').trim().charAt(0).toUpperCase() || '?');
   const style = `background:hsl(${avatarHue(it.owner)} 62% 88%);color:hsl(${avatarHue(it.owner)} 45% 32%)`;
   if (loadSettings().favicons && domain) {
-    return `<span class="entry-favicon" style="${style}">${letter}<img data-fd="${escapeHtml(domain)}" src="https://${escapeHtml(domain)}/favicon.ico" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="if(this.dataset.f2){this.remove()}else{this.dataset.f2='1';this.src='https://icons.duckduckgo.com/ip3/'+encodeURIComponent(this.dataset.fd)+'.ico'}" /></span>`;
+    return `<span class="entry-favicon" style="${style}">${letter}<img data-fd="${escapeHtml(domain)}" src="https://${escapeHtml(domain)}/favicon.ico" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="if(!this.naturalWidth){this.onerror();return}" onerror="if(this.dataset.f2){this.remove()}else{this.dataset.f2='1';this.src='https://icons.duckduckgo.com/ip3/'+encodeURIComponent(this.dataset.fd)+'.ico'}" /></span>`;
   }
   return `<span class="entry-favicon" style="${style}">${letter}</span>`;
 }
@@ -2756,6 +2756,7 @@ function agentDisplay(payload) {
       <div class="ad-main">
         <div class="ad-owner">${escapeHtml(x.owner || '')}${x.account ? ' <span class="ad-acc">' + escapeHtml(x.account) + '</span>' : ''}</div>
         ${x.note ? `<div class="ad-note">${escapeHtml(x.note)}</div>` : ''}
+        ${x.totp_secret ? `<div class="entry-totp"><code class="totp-code" data-totp="${escapeHtml(x.totp_secret)}">······</code><span class="totp-remain"></span><button class="btn-icon" data-act="copy-totp" title="复制验证码">${ICONS.copy}</button></div>` : ''}
       </div>
       <div class="ad-pass">
         <code class="pw-masked ad-pw" data-pw="${escapeHtml(String(x.password || ''))}">••••••••</code>
@@ -2782,6 +2783,10 @@ function agentDisplay(payload) {
       }
     } else if (btn.dataset.act === 'copy') {
       await copyText(pwEl.dataset.pw);
+    } else if (btn.dataset.act === 'copy-totp') {
+      const el = row.querySelector('.totp-code');
+      if (!el) return;
+      try { const { code } = await PassTotp.generateTotp(el.dataset.totp); await copyText(code); } catch (err) { toast(err.message, true); }
     }
   });
   box.appendChild(wrap);

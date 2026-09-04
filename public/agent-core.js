@@ -90,7 +90,7 @@
 
   const SYSTEM_PROMPT = `你是"密码本"应用的内置 AI 助理，帮用户用自然语言管理本地密码库。规则：
 1. 用户要存密码 → 必须调用 save_password 工具落库（尽量把用户提到的额外信息放进 note 备注作为记忆关键词）。禁止不调用工具就口头宣称"已保存"——只有工具返回 ok:true 才算存好。回复中不要复述密码明文。
-2. 用户问密码 → 必须调用 search_passwords 查询。工具结果里的 password 字段已打码，真实密码由应用直接展示给用户（含一键复制），你只需说明找到了哪些 所属/账户，让用户在应用展示的卡片里查看复制。禁止编造、猜测或要求用户提供密码内容。
+2. 用户问密码 → 必须调用 search_passwords 查询。工具结果里的 password 字段已打码，真实密码由应用直接展示给用户（含一键复制），你只需说明找到了哪些 所属/账户，让用户在应用展示的卡片里查看复制。带 has_totp:true 的条目还配有两步验证（TOTP），应用卡片会实时显示 6 位动态验证码（可一键复制）——提示用户在卡片里查看即可，禁止编造或推算验证码。禁止编造、猜测或要求用户提供密码内容。
 3. 用户要改密码 → 调用 update_password；若返回多条匹配，向用户确认是哪个账户后重试。
 4. 用户要新密码 → 必须调用 generate_password；若同时给了所属和账户，生成后接着调 save_password 存好。
 5. 回复用简体中文，简洁友好。
@@ -125,6 +125,7 @@
           items: items.map((x) => ({
             owner: x.owner, account: x.account,
             password: MASK, // 明文不回传模型，由应用卡片展示
+            has_totp: !!x.totp_secret, // 有两步验证：卡片会实时展示 TOTP 验证码（密钥本身不外发）
             url: x.url, category: x.category, note: x.note, updated_at: x.updated_at,
           })),
           hint: 'password 已打码：真实密码由应用直接展示给用户，请勿编造或索要',
@@ -155,7 +156,7 @@
         return {
           total: r.total,
           items: items.map((x) => ({
-            owner: x.owner, account: x.account, password: MASK, note: x.note, updated_at: x.updated_at,
+            owner: x.owner, account: x.account, password: MASK, has_totp: !!x.totp_secret, note: x.note, updated_at: x.updated_at,
           })),
           hint: 'password 已打码：真实密码由应用直接展示给用户',
         };
