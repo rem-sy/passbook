@@ -90,7 +90,15 @@ async function writeDemo(port) {
       body: JSON.stringify({ entryId: attachEntryId, name: DEMO_ATTACH.name, mime: DEMO_ATTACH.mime, dataB64: DEMO_ATTACH.dataB64 }),
     });
   }
-  console.log(`已写入 ${DEMO.length} 条演示数据（1 条含 TOTP，1 条含附件）`);
+  // 收藏演示（v2.7.0）：GitHub 与网银打星标（置顶 + 星标样式）
+  const all = await (await fetch(`http://127.0.0.1:${port}/api/entries`)).json();
+  const list = Array.isArray(all) ? all : (all.entries || all.data || []);
+  for (const e of list.filter((e) => ['GitHub', '网银'].includes(e.owner))) {
+    await fetch(`http://127.0.0.1:${port}/api/entries/${e.id}/fav`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fav: 1 }),
+    });
+  }
+  console.log(`已写入 ${DEMO.length} 条演示数据（1 条含 TOTP，1 条含附件，2 条收藏）`);
 }
 
 /* ---------- CDP 单张截图 ---------- */
