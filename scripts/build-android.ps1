@@ -84,6 +84,18 @@ try {
   } else {
     Write-Warning "未找到 tauri codegen 模板（$regTpl），TauriActivity.kt 保持现状"
   }
+  # proguard-tauri.pro：keep TauriActivity.getPluginManager()（Rust 端 JNI 调用）。
+  # 缺失时 R8 裁掉该方法 → 启动即闪退（v2.0.0~v2.5.0 APK 的根因）。
+  # 正常流程由 tauri-cli 在 android init 时写入；旁路模式从 registry 模板生成（$PACKAGE 占位符）。
+  $proTpl = "$env:USERPROFILE\.cargo\registry\src\rsproxy.cn-e3de039b2554c837\tauri-2.11.1\mobile\proguard-tauri.pro"
+  $proOut = "$srcTauri\gen\android\app\proguard-tauri.pro"
+  if (Test-Path $proTpl) {
+    $pro = (Get-Content $proTpl -Raw -Encoding UTF8) -replace '\$PACKAGE', 'com.passbook.app'
+    [System.IO.File]::WriteAllText($proOut, $pro, [System.Text.UTF8Encoding]::new($false))
+    Write-Host "    proguard-tauri.pro 已生成（R8 keep getPluginManager）"
+  } elseif (-not (Test-Path $proOut)) {
+    Write-Warning '未找到 proguard-tauri.pro 且无模板，R8 可能裁掉 JNI 方法导致闪退'
+  }
   # APK assets 目录同步一份前端（兜底源；运行时以 .so 内嵌资源为准）
   $apkAssets = "$srcTauri\gen\android\app\src\main\assets"
   New-Item -ItemType Directory -Force $apkAssets | Out-Null
