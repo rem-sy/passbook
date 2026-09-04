@@ -1,10 +1,10 @@
 ﻿# 密码本 Android APK 构建脚本（无符号链接权限环境的旁路方案）
 # 用法：powershell -ExecutionPolicy Bypass -File scripts\build-android.ps1 [-DebugBuild] [-Clean]
-#   -Clean 构建纯净版（不预置 AI 渠道，产物名带 -纯净版 后缀）
+#   -Preset 构建预置渠道版（产物名带 -preset 后缀，仅本机留存，不上传 GitHub）
 # 预置渠道来自 public\agent-config.local.js（不入库，本机文件）；
-# 纯净版构建时该文件被临时移出（cargo 内嵌与 assets 复制均不会带上）。
+# 正式版构建时该文件被临时移出（cargo 内嵌与 assets 复制均不会带上）。
 # 前置：D:\hobby\.android-dev\ 下有 jdk、sdk（含 ndk 27.0.12077973）
-param([switch]$DebugBuild, [switch]$Clean)
+param([switch]$DebugBuild, [switch]$Preset)
 
 $ErrorActionPreference = 'Stop'
 $dev = 'D:\hobby\.android-dev'
@@ -15,7 +15,9 @@ $ndkToolchain = "$dev\sdk\ndk\$ndkVer\toolchains\llvm\prebuilt\windows-x86_64\bi
 $target = 'aarch64-linux-android'
 $api = '24'
 $profile = if ($DebugBuild) { 'debug' } else { 'release' }
-$suffix = if ($Clean) { '-clean' } else { '' }
+# 正式版（默认）：不预置 AI 渠道，产物名无后缀——对外发布/传 GitHub 的唯一版本
+# -Preset：预置渠道版，产物名带 -preset 后缀——仅本机留存，绝不上传 GitHub
+$suffix = if ($Preset) { '-preset' } else { '' }
 $localCfg = "$proj\public\agent-config.local.js"
 # 版本号从 tauri.conf.json 读取（与三处版本文件保持一致）
 $ver = (Select-String -Path "$srcTauri\tauri.conf.json" -Pattern '"version"\s*:\s*"([^"]+)"').Matches[0].Groups[1].Value
@@ -40,15 +42,15 @@ $env:WRY_ANDROID_PACKAGE = 'com.passbook.app'
 $env:WRY_ANDROID_LIBRARY = 'passbook_desktop_lib'
 $env:TAURI_ANDROID_PROJECT_PATH = "$srcTauri\gen\android"
 
-# 纯净版：临时移出本机渠道文件（打包后恢复）
+# 正式版：临时移出本机渠道文件（打包后恢复）；预置版保留
 $bak = $null
-if ($Clean -and (Test-Path $localCfg)) {
+if (-not $Preset -and (Test-Path $localCfg)) {
   $bak = Join-Path $env:TEMP ("agent-config.local." + [guid]::NewGuid().ToString('N').Substring(0,8) + ".bak")
   Move-Item $localCfg $bak -Force
-  Write-Host '==> 已临时移出 agent-config.local.js（纯净版）'
+  Write-Host '==> 已临时移出 agent-config.local.js（正式版）'
 }
-if (-not $Clean -and -not (Test-Path $localCfg)) {
-  Write-Warning '未找到 agent-config.local.js，产物将不带预置渠道（等同于纯净版）'
+if ($Preset -and -not (Test-Path $localCfg)) {
+  Write-Warning '未找到 agent-config.local.js，预置版将不带预置渠道（等同正式版）'
 }
 
 try {

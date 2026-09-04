@@ -1,9 +1,9 @@
-﻿# 密码本桌面版双版本构建：预置渠道版 + 纯净版（无预置渠道）
+﻿# 密码本桌面版双版本构建：正式版（无渠道，无后缀，对外发布）+ 预置渠道版（-preset，仅本机）
 # 用法：powershell -ExecutionPolicy Bypass -File scripts\build-desktop.ps1 [-SkipPreset] [-SkipClean]
 # 预置渠道来自 public\agent-config.local.js（不入库，本机文件）；
-# 纯净版构建时该文件被临时移出，产物不带任何渠道。
+# 正式版构建时该文件被临时移出，产物不带任何渠道；预置版绝不上传 GitHub。
 # 产物统一复制到 D:\hobby\产物\密码本\
-param([switch]$SkipPreset, [switch]$SkipClean)
+param([switch]$SkipPreset, [switch]$SkipOfficial)
 
 $ErrorActionPreference = 'Stop'
 $proj = 'D:\hobby\源码\密码本'
@@ -17,16 +17,16 @@ Write-Host "版本：$ver"
 $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
 $env:CARGO_NET_OFFLINE = 'true'
 
-function Build-One([string]$name, [string]$suffix, [switch]$clean) {
+function Build-One([string]$name, [string]$suffix, [switch]$official) {
   Write-Host "==> 构建 $name"
   $bak = $null
-  if ($clean -and (Test-Path $localCfg)) {
+  if ($official -and (Test-Path $localCfg)) {
     $bak = Join-Path $env:TEMP ("agent-config.local." + [guid]::NewGuid().ToString('N').Substring(0,8) + ".bak")
     Move-Item $localCfg $bak -Force
     Write-Host "    已临时移出 agent-config.local.js"
   }
-  if (-not $clean -and -not (Test-Path $localCfg)) {
-    Write-Warning '未找到 agent-config.local.js，预置版将不带预置渠道（等同于纯净版）'
+  if (-not $official -and -not (Test-Path $localCfg)) {
+    Write-Warning '未找到 agent-config.local.js，预置版将不带预置渠道（等同正式版）'
   }
   try {
     # 强制 tauri 重新嵌入前端（touch 入口文件触发 build.rs 重跑）
@@ -49,6 +49,6 @@ function Build-One([string]$name, [string]$suffix, [switch]$clean) {
   }
 }
 
-if (!$SkipPreset) { Build-One '预置渠道版' '' }
-if (!$SkipClean) { Build-One '纯净版（无预置渠道）' '-clean' -clean }
+if (!$SkipOfficial) { Build-One '正式版（无预置渠道，对外发布）' '' -official }
+if (!$SkipPreset) { Build-One '预置渠道版（-preset，仅本机）' '-preset' }
 Write-Host '全部完成'
