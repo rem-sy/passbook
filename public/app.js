@@ -2688,16 +2688,21 @@ async function agentChat(userText, onDelta, signal) {
   if (!cfg.baseUrl || !cfg.model) throw new Error('AI 渠道未配置：请到 设置 → AI 助理 填写接口地址和模型');
   agentState.messages.push({ role: 'user', content: userText });
 
-  const url = cfg.baseUrl.replace(/\/+$/, '') + '/chat/completions';
-  const headers = { 'Content-Type': 'application/json' };
-  if (cfg.apiKey) headers.Authorization = 'Bearer ' + cfg.apiKey;
-
-  return await AgentCore.chatStream({
+  // v2.6.1: 兜底渠道 —— 主渠道失败时自动切 AGENT_DEFAULTS.fallback 重试一次
+  const fbCfg = (typeof window !== 'undefined' && window.AGENT_DEFAULTS?.fallback) || null;
+  const mk = (c) => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (c.apiKey) headers.Authorization = 'Bearer ' + c.apiKey;
+    return { url: c.baseUrl.replace(/\/+$/, '') + '/chat/completions', headers, model: c.model };
+  };
+  const run = async (c) => {
+    const { url, headers, model } = mk(c);
+    return await AgentCore.chatStream({
     messages: agentState.messages,
     channelFetch: (u, o, onChunk) => agentFetchStream(u, o, onChunk),
     url,
     headers,
-    model: cfg.model,
+    model,
     signal,
     exec: getAgentExec(),
     onEvent: (type, payload) => {
@@ -2716,7 +2721,15 @@ async function agentChat(userText, onDelta, signal) {
         agentStatus(payload.tool_calls?.length ? '处理工具结果…' : '');
       }
     },
-  });
+    });
+  };
+  try {
+    return await run(cfg);
+  } catch (e) {
+    if (!fbCfg || fbCfg.baseUrl === cfg.baseUrl || signal?.aborted) throw e;
+    toast('主渠道不可用，已切换兜底渠道重试', true);
+    return await run(fbCfg);
+  }
 }
 
 function agentStatus(text) {
