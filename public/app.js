@@ -373,8 +373,13 @@ const LocalStore = {
   async init() {
     const SQL = await getSqlModule();
     const bytes = await LocalStore._readBytes();
+    let backfilled = false;
     if (bytes && bytes.byteLength > 0) {
       this.db = new SQL.Database(new Uint8Array(bytes));
+      // v2.7.1：存量老库补建缺失表/索引（SCHEMA_SQL 全部 IF NOT EXISTS，幂等）——
+      // v2.4.0 前创建的库没有 attachments 表，详情页附件查询曾报 no such table
+      this.db.run(SCHEMA_SQL);
+      backfilled = true;
     } else {
       this.db = new SQL.Database();
       this.db.run(SCHEMA_SQL);
@@ -386,7 +391,7 @@ const LocalStore = {
     if (!cols.includes('totp_secret')) { this.db.run("ALTER TABLE entries ADD COLUMN totp_secret TEXT NOT NULL DEFAULT ''"); migrated = true; }
     if (!cols.includes('history')) { this.db.run("ALTER TABLE entries ADD COLUMN history TEXT NOT NULL DEFAULT ''"); migrated = true; }
     if (!cols.includes('fav')) { this.db.run('ALTER TABLE entries ADD COLUMN fav INTEGER NOT NULL DEFAULT 0'); migrated = true; }
-    if (migrated) await this.persist();
+    if (migrated || backfilled) await this.persist();
   },
   /** 读取底层原始字节：Tauri 下从数据库文件读，否则从 IndexedDB 读 */
   async _readRaw() {
