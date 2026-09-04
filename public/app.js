@@ -2492,8 +2492,11 @@ let unlocked = false;
 async function showLockIfNeeded() {
   const s = loadSettings();
   if (!s.pinHash || unlocked) return;
+  // v3.0.7：幂等单例——生物识别往返会触发自动锁定再弹一层锁，多层叠加导致
+  // "解锁了却还在锁页、PIN 也要输多次"的假象；已有锁页则直接复用，不再叠加
+  if (document.querySelector('.lock-mask')) return;
   const mask = document.createElement('div');
-  mask.className = 'modal-mask';
+  mask.className = 'modal-mask lock-mask';
   mask.style.zIndex = '300';
   mask.innerHTML = `
     <div class="modal" style="max-width:340px;text-align:center">
@@ -2518,7 +2521,7 @@ async function showLockIfNeeded() {
     const hash = await sha256(el.value);
     if (hash === s.pinHash) {
       unlocked = true;
-      mask.remove();
+      document.querySelectorAll('.lock-mask').forEach((m) => m.remove()); // v3.0.7：清掉所有锁层
     } else if (errEl()) {
       errEl().textContent = 'PIN 错误';
     }
@@ -2530,8 +2533,10 @@ async function showLockIfNeeded() {
     try { ok = await Bio.prompt('解锁密码本'); } catch { ok = false; }
     btn.disabled = false;
     if (unlocked || !document.body.contains(mask)) return;
-    if (ok) { unlocked = true; mask.remove(); }
-    else if (errEl()) errEl().textContent = '生物识别未通过，请输入 PIN';
+    if (ok) {
+      unlocked = true;
+      document.querySelectorAll('.lock-mask').forEach((m) => m.remove()); // v3.0.7：清掉所有锁层
+    } else if (errEl()) errEl().textContent = '生物识别未通过，请输入 PIN';
     pinEl()?.focus();
   });
   mask.querySelector('#lock-go')?.addEventListener('click', tryUnlock);
