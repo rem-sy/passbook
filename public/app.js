@@ -790,13 +790,16 @@ function avatarHue(text) {
   return h % 360;
 }
 
-/** 卡片图标位 HTML（v2.7.0）：默认首字头像；开启站点图标且有域名时用 DuckDuckGo 图标服务 */
+/** 卡片图标位 HTML（v2.7.0）：默认首字头像；开启站点图标时三级回退（v3.0.2）：
+ *  ① 站点直连 https://{域名}/favicon.ico（国内免代理可达，不经过第三方）
+ *  ② DuckDuckGo 图标服务（代理环境可用）
+ *  ③ 首字头像（纯本地） */
 function faviconSlot(it) {
   const domain = window.PassSearch ? PassSearch.extractDomain(it.url) : '';
   const letter = escapeHtml(String(it.owner || '?').trim().charAt(0).toUpperCase() || '?');
   const style = `background:hsl(${avatarHue(it.owner)} 62% 88%);color:hsl(${avatarHue(it.owner)} 45% 32%)`;
   if (loadSettings().favicons && domain) {
-    return `<span class="entry-favicon" style="${style}">${letter}<img src="https://icons.duckduckgo.com/ip3/${encodeURIComponent(domain)}.ico" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()" /></span>`;
+    return `<span class="entry-favicon" style="${style}">${letter}<img data-fd="${escapeHtml(domain)}" src="https://${escapeHtml(domain)}/favicon.ico" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="if(this.dataset.f2){this.remove()}else{this.dataset.f2='1';this.src='https://icons.duckduckgo.com/ip3/'+encodeURIComponent(this.dataset.fd)+'.ico'}" /></span>`;
   }
   return `<span class="entry-favicon" style="${style}">${letter}</span>`;
 }
@@ -2116,7 +2119,7 @@ function openSettingsModal() {
   const faviconField = `
       <div class="field"><span>站点图标（列表卡片左侧）</span>
         <div class="chk-group" style="padding-top:2px">
-          <label><input type="checkbox" id="set-favicons" ${s.favicons ? 'checked' : ''} /> 显示网站 favicon（联网，向 DuckDuckGo 图标服务请求对应域名；关闭时用首字头像，纯本地）</label>
+          <label><input type="checkbox" id="set-favicons" ${s.favicons ? 'checked' : ''} /> 显示网站 favicon（联网：优先向站点本身请求 /favicon.ico，免代理可达；失败时尝试 DuckDuckGo 图标服务（需代理）；都失败用首字头像）</label>
         </div>
       </div>`;
   const backupField = currentMode === 'local' ? `
