@@ -1987,7 +1987,15 @@ function openSettingsModal() {
         <p class="hint">提示：把数据库文件放到网盘同步文件夹，再在另一台设备「导入 → .db 文件」即可合并。</p>
       </label>` : '';
   const agent = loadAgentConfig();
-  const agentField = `
+  // 预置渠道（v2.6.1）：agent-config.local.js 可给 AGENT_DEFAULTS.presets 数组（不入库、纯净版无）
+  const presets = (typeof window !== 'undefined' && window.AGENT_DEFAULTS && Array.isArray(window.AGENT_DEFAULTS.presets)) ? window.AGENT_DEFAULTS.presets : [];
+  const presetField = presets.length ? `
+      <div class="field"><span>预置渠道（一键填入）</span>
+        <select id="set-agent-preset">
+          ${presets.map((p, i) => `<option value="${i}">${escapeHtml(p.name || `渠道${i + 1}`)}${p.model ? ' · ' + escapeHtml(p.model) : ''}</option>`).join('')}
+        </select>
+      </div>` : '';
+  const agentField = `${presetField}
       <div class="field"><span>AI 助理 · 接口地址（OpenAI 兼容）</span>
         <input id="set-agent-url" type="url" placeholder="如：https://api.deepseek.com/v1" value="${escapeHtml(agent.baseUrl)}" />
       </div>
@@ -2156,6 +2164,14 @@ function openSettingsModal() {
   $('#btn-settings-cancel').addEventListener('click', closeModal);
   // 启动锁开关：点击启用/停用，只影响本弹窗状态，保存时才落库
   let lockEnabled = !!s.pinHash;
+  $('#set-agent-preset')?.addEventListener('change', (e) => {
+    const p = presets[Number(e.target.value)];
+    if (!p) return;
+    $('#set-agent-url').value = p.baseUrl || '';
+    $('#set-agent-model').value = p.model || '';
+    $('#set-agent-key').value = p.apiKey || '';
+    toast(`已填入预置渠道「${p.name || ''}」，保存后生效`);
+  });
   $('#btn-lock-toggle').addEventListener('click', () => {
     lockEnabled = !lockEnabled;
     const btn = $('#btn-lock-toggle');
