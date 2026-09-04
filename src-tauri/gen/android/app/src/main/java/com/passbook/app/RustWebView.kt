@@ -26,6 +26,10 @@ class RustWebView(context: Context, val initScripts: Array<String>, val id: Stri
         settings.databaseEnabled = true
         settings.mediaPlaybackRequiresUserGesture = false
         settings.javaScriptCanOpenWindowsAutomatically = true
+        // 密码本 v2.5.1 自定义补丁：wry 未设置 useWideViewPort，Android WebView 默认 false
+        // 会无视 <meta viewport>，页面按 980px 布局整体缩小（手机端弹窗输入框过窄的根因）
+        settings.useWideViewPort = true
+        settings.loadWithOverviewMode = true
 
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
             isDocumentStartScriptEnabled = true

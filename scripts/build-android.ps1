@@ -96,6 +96,18 @@ try {
   } elseif (-not (Test-Path $proOut)) {
     Write-Warning '未找到 proguard-tauri.pro 且无模板，R8 可能裁掉 JNI 方法导致闪退'
   }
+  # RustWebView.kt 补丁（v2.5.1）：wry 不设置 useWideViewPort，Android WebView 默认 false
+  # 会无视 <meta viewport>，页面按 980px 布局整体缩小（手机端弹窗输入框过窄）。
+  # 幂等：文件里已有则跳过（防止未来 tauri codegen 重生成丢失补丁）。
+  $rwv = "$ktDir\RustWebView.kt"
+  if ((Test-Path $rwv) -and -not (Select-String -Path $rwv -Pattern 'useWideViewPort' -Quiet)) {
+    $rwvSrc = [System.IO.File]::ReadAllText($rwv)
+    $anchor = 'settings.javaScriptCanOpenWindowsAutomatically = true'
+    $patch = $anchor + "`n        // 密码本自定义补丁：尊重 <meta viewport>（wry 未设置，默认按 980px 布局）`n        settings.useWideViewPort = true`n        settings.loadWithOverviewMode = true"
+    $rwvSrc = $rwvSrc.Replace($anchor, $patch)
+    [System.IO.File]::WriteAllText($rwv, $rwvSrc, [System.Text.UTF8Encoding]::new($false))
+    Write-Host '    RustWebView.kt 已补丁（useWideViewPort）'
+  }
   # APK assets 目录同步一份前端（兜底源；运行时以 .so 内嵌资源为准）
   $apkAssets = "$srcTauri\gen\android\app\src\main\assets"
   New-Item -ItemType Directory -Force $apkAssets | Out-Null
