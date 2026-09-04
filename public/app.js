@@ -1472,14 +1472,26 @@ function openEditModal(item = null, prefillPw = '') {
     renderAttachList();
   }
 
-  $('#btn-gen-again')?.addEventListener('click', () => {
-    try {
-      const o = genOptsFromUi();
-      const pw = PassGen.generate(o);
-      $('#f-password').value = pw;
-      state.currentGenPw = pw;
-      toast('已生成新密码');
-    } catch (e) { toast(e.message, true); }
+  // 重新生成：二级确认（v3.0.3）——密码框非空时，第一次点击进入"确认?"状态，2.6 秒内再点才覆盖；空框直接生成
+  $('#btn-gen-again')?.addEventListener('click', (ev) => {
+    const btn = ev.currentTarget;
+    const RESET = () => { delete btn.dataset.confirm; btn.innerHTML = ICONS.refresh; btn.classList.remove('danger'); btn.title = '用当前生成器设置重新生成'; };
+    const doGen = () => {
+      try {
+        const o = genOptsFromUi();
+        const pw = PassGen.generate(o);
+        $('#f-password').value = pw;
+        state.currentGenPw = pw;
+        toast('已生成新密码');
+      } catch (e) { toast(e.message, true); }
+    };
+    if (!$('#f-password').value) { doGen(); return; } // 空框：首次生成无需确认
+    if (btn.dataset.confirm === '1') { clearTimeout(Number(btn.dataset.tm || 0)); doGen(); RESET(); return; }
+    btn.dataset.confirm = '1';
+    btn.innerHTML = '确认?';
+    btn.classList.add('danger');
+    btn.title = '再点一次覆盖当前密码';
+    btn.dataset.tm = String(setTimeout(RESET, 2600));
   });
   $('#btn-del-from-modal')?.addEventListener('click', async () => {
     if (!item) return;
