@@ -50,7 +50,6 @@ class RustWebView(context: Context, val initScripts: Array<String>, val id: Stri
         settings.databaseEnabled = true
         settings.mediaPlaybackRequiresUserGesture = false
         settings.javaScriptCanOpenWindowsAutomatically = true
-        // 密码本自定义补丁：尊重 <meta viewport>（wry 未设置，默认按 980px 布局）
         settings.useWideViewPort = true
         settings.loadWithOverviewMode = true
 

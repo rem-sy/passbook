@@ -96,17 +96,31 @@ try {
   } elseif (-not (Test-Path $proOut)) {
     Write-Warning '未找到 proguard-tauri.pro 且无模板，R8 可能裁掉 JNI 方法导致闪退'
   }
-  # RustWebView.kt 补丁（v2.5.1）：wry 不设置 useWideViewPort，Android WebView 默认 false
-  # 会无视 <meta viewport>，页面按 980px 布局整体缩小（手机端弹窗输入框过窄）。
-  # 幂等：文件里已有则跳过（防止未来 tauri codegen 重生成丢失补丁）。
+  # RustWebView.kt 补丁（v2.5.1/v2.6.0）：tauri build.rs 每次 Android 构建都会重新生成此文件，
+  # 所有自定义必须在构建后幂等补回：
+  #   1) useWideViewPort/loadWithOverviewMode —— 尊重 <meta viewport>（否则按 980px 布局，手机端弹窗输入框过窄）
+  #   2) 生物识别 JS 桥 __passbook_bio —— companion.current + JsBio（配合 BioBridgeActivity）
   $rwv = "$ktDir\RustWebView.kt"
-  if ((Test-Path $rwv) -and -not (Select-String -Path $rwv -Pattern 'useWideViewPort' -Quiet)) {
+  if (Test-Path $rwv) {
     $rwvSrc = [System.IO.File]::ReadAllText($rwv)
-    $anchor = 'settings.javaScriptCanOpenWindowsAutomatically = true'
-    $patch = $anchor + "`n        // 密码本自定义补丁：尊重 <meta viewport>（wry 未设置，默认按 980px 布局）`n        settings.useWideViewPort = true`n        settings.loadWithOverviewMode = true"
-    $rwvSrc = $rwvSrc.Replace($anchor, $patch)
-    [System.IO.File]::WriteAllText($rwv, $rwvSrc, [System.Text.UTF8Encoding]::new($false))
-    Write-Host '    RustWebView.kt 已补丁（useWideViewPort）'
+    $dirty = $false
+    if (-not $rwvSrc.Contains('useWideViewPort')) {
+      $a1 = 'settings.javaScriptCanOpenWindowsAutomatically = true'
+      $rwvSrc = $rwvSrc.Replace($a1, $a1 + "`n        settings.useWideViewPort = true`n        settings.loadWithOverviewMode = true")
+      $dirty = $true
+    }
+    if (-not $rwvSrc.Contains('JsBio')) {
+      $a2 = "    val isDocumentStartScriptEnabled: Boolean`n"
+      $bio = $a2 + "`n    companion object {`n        @JvmStatic var current: RustWebView? = null`n    }`n`n    /** 密码本 v2.6.0：生物识别 JS 桥（window.__passbook_bio） */`n    inner class JsBio {`n        @android.webkit.JavascriptInterface`n        fun available(): String {`n            val km = context.getSystemService(android.content.Context.KEYGUARD_SERVICE) as android.app.KeyguardManager`n            return if (km.isKeyguardSecure) `"yes`" else `"no`"`n        }`n`n        @android.webkit.JavascriptInterface`n        fun prompt(reason: String) {`n            BioBridgeActivity.reason = reason.ifBlank { `"解锁密码本`" }`n            val i = android.content.Intent(context, BioBridgeActivity::class.java)`n            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)`n            context.startActivity(i)`n        }`n    }`n"
+      $rwvSrc = $rwvSrc.Replace($a2, $bio)
+      $a3 = '        settings.javaScriptEnabled = true'
+      $rwvSrc = $rwvSrc.Replace($a3, "        // 密码本 v2.6.0：JS 桥（生物识别解锁）`n        current = this`n        addJavascriptInterface(JsBio(), `"__passbook_bio`")`n" + $a3)
+      $dirty = $true
+    }
+    if ($dirty) {
+      [System.IO.File]::WriteAllText($rwv, $rwvSrc, [System.Text.UTF8Encoding]::new($false))
+      Write-Host '    RustWebView.kt 已补丁（viewport + 生物识别桥）'
+    }
   }
   # APK assets 目录同步一份前端（兜底源；运行时以 .so 内嵌资源为准）
   $apkAssets = "$srcTauri\gen\android\app\src\main\assets"
