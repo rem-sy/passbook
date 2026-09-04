@@ -163,7 +163,7 @@ async fn saf_temp_write(app: tauri::AppHandle, bytes: Vec<u8>) -> Result<String,
     let dir = app
         .path()
         .cache_dir()
-        .ok_or_else(|| "no cache dir".to_string())?;
+        .map_err(|e: tauri::Error| e.to_string())?;
     let _ = std::fs::create_dir_all(&dir);
     let p = dir.join("passbook-saf.tmp");
     let mut f = std::fs::File::create(&p).map_err(|e| e.to_string())?;
