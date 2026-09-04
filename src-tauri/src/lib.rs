@@ -399,6 +399,57 @@ async fn agent_http_stream(
 
 // mobile 入口宏：生成 Android 端 Rust.create() 等所需的 JNI 符号，缺失会导致启动即闪退
 //（windows_subsystem 已在 main.rs 以 crate 级别设置，不需要在此重复）
+/* ---------------- 生物识别解锁（v2.6.0） ----------------
+ * 桌面：Windows Hello（UserConsentVerifier，指纹/面容/系统 PIN）
+ * Android：不经 Rust——前端直接调 RustWebView 注入的 __passbook_bio JS 桥
+ */
+#[tauri::command]
+async fn bio_available() -> bool {
+    #[cfg(windows)]
+    {
+        return windows_hello::available();
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+#[tauri::command]
+async fn bio_prompt(reason: String) -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        let _ = reason;
+        return windows_hello::prompt();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = reason;
+        Err("当前平台不支持生物识别".into())
+    }
+}
+
+#[cfg(windows)]
+mod windows_hello {
+    // Windows Hello：UserConsentVerifier 只验证「设备持有者身份」，不产生任何密钥材料
+    use windows::Security::Credentials::UI::{UserConsentVerificationResult, UserConsentVerifier};
+
+    /// windows 0.61 未暴露可用性查询；假定可用，未配置 Hello 时由 prompt 的结果枚举兜底
+    pub fn available() -> bool {
+        true
+    }
+
+    pub fn prompt() -> Result<bool, String> {
+        // .get() 阻塞等待用户完成验证（命令在 tauri 线程池执行，不卡 UI）
+        let op = UserConsentVerifier::RequestVerificationAsync(
+            &windows::core::HSTRING::from("解锁密码本"),
+        )
+        .map_err(|e| format!("Windows Hello 调用失败: {e}"))?;
+        let r = op.get().map_err(|e| format!("Windows Hello 失败: {e}"))?;
+        Ok(matches!(r, UserConsentVerificationResult::Verified))
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -475,7 +526,9 @@ pub fn run() {
             agent_http,
             agent_http_stream,
             agent_abort,
-            log_front
+            log_front,
+            bio_available,
+            bio_prompt
         ]);
 
     // 单实例（重复启动聚焦已有窗口）仅桌面端可用

@@ -19,7 +19,31 @@ import kotlin.collections.Map
 class RustWebView(context: Context, val initScripts: Array<String>, val id: String): WebView(context) {
     val isDocumentStartScriptEnabled: Boolean
 
+    companion object {
+        @JvmStatic var current: RustWebView? = null
+    }
+
+    /** 密码本 v2.6.0：生物识别 JS 桥（window.__passbook_bio） */
+    inner class JsBio {
+        @android.webkit.JavascriptInterface
+        fun available(): String {
+            val km = context.getSystemService(android.content.Context.KEYGUARD_SERVICE) as android.app.KeyguardManager
+            return if (km.isKeyguardSecure) "yes" else "no"
+        }
+
+        @android.webkit.JavascriptInterface
+        fun prompt(reason: String) {
+            BioBridgeActivity.reason = reason.ifBlank { "解锁密码本" }
+            val i = android.content.Intent(context, BioBridgeActivity::class.java)
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(i)
+        }
+    }
+
     init {
+        // 密码本 v2.6.0：JS 桥（生物识别解锁）
+        current = this
+        addJavascriptInterface(JsBio(), "__passbook_bio")
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.setGeolocationEnabled(true)

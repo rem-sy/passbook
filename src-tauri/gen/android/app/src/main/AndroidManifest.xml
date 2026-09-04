@@ -33,5 +33,10 @@
             android:name="android.support.FILE_PROVIDER_PATHS"
             android:resource="@xml/file_paths" />
         </provider>
+        <activity
+          android:name=".BioBridgeActivity"
+          android:excludeFromRecents="true"
+          android:exported="false"
+          android:theme="@android:style/Theme.Translucent.NoTitleBar" />
     </application>
 </manifest>

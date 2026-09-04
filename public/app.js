@@ -2058,6 +2058,12 @@ function openSettingsModal() {
         </div>
         <input id="set-pin" type="password" placeholder="${s.pinHash ? '留空保持不变，输入新 PIN 可更换' : '设置 4-12 位 PIN'}" autocomplete="new-password" ${s.pinHash ? '' : 'disabled'} />
       </div>
+      <div class="field" id="bio-field"><span>生物识别解锁（指纹 / 面容，需已启用启动锁且设备支持）</span>
+        <div class="lock-toggle">
+          <button class="btn ${(s.bioUnlock !== false && s.pinHash) ? '' : 'primary'}" id="btn-bio-toggle" type="button">${(s.bioUnlock !== false && s.pinHash) ? '停用' : '启用'}</button>
+          <span class="lock-state" id="bio-state">${(s.bioUnlock !== false && s.pinHash) ? '已启用' : '未启用'}</span>
+        </div>
+      </div>
       <label class="field"><span>自动锁定（需已启用启动锁）</span>
         <select id="set-autolock">
           <option value="never" ${(s.lock?.autoLock || 'never') === 'never' ? 'selected' : ''}>永不</option>
@@ -2160,6 +2166,23 @@ function openSettingsModal() {
     if (!lockEnabled) $('#set-pin').value = '';
     else $('#set-pin').focus();
   });
+  // 生物识别开关（v2.6.0）：仅支持时可用；与启动锁联动
+  let bioEnabled = s.bioUnlock !== false && !!s.pinHash;
+  const syncBioUi = () => {
+    const supported = Bio.supported();
+    const base = $('#bio-field');
+    if (!supported) { base.style.opacity = '0.5'; base.title = '当前设备/平台不支持'; }
+    const btn = $('#btn-bio-toggle');
+    btn.textContent = bioEnabled ? '停用' : '启用';
+    btn.classList.toggle('primary', !bioEnabled);
+    $('#bio-state').textContent = bioEnabled ? '已启用' : '未启用';
+  };
+  $('#btn-bio-toggle').addEventListener('click', async () => {
+    if (!(await Bio.available())) return toast('此设备未启用系统锁屏（指纹/面容/PIN），无法使用生物识别', true);
+    bioEnabled = !bioEnabled;
+    syncBioUi();
+  });
+  syncBioUi();
   $('#btn-settings-save').addEventListener('click', async () => {
     const ns = { ...loadSettings() };
     if (!IS_TAURI) ns.storageMode = $('#set-mode').value;
@@ -2175,6 +2198,7 @@ function openSettingsModal() {
       if (ns.pinHash && !confirm('确定停用启动锁吗？停用后下次启动不再需要 PIN。')) return;
       ns.pinHash = '';
     }
+    ns.bioUnlock = !!bioEnabled && !!ns.pinHash; // 生物识别依赖启动锁（v2.6.0）
     saveSettings(ns);
     saveAgentConfig({
       baseUrl: $('#set-agent-url').value.trim(),
@@ -2289,6 +2313,7 @@ async function showLockIfNeeded() {
         <p class="hint" id="lock-err" style="color:var(--danger)"></p>
       </div>
       <div class="modal-foot" style="justify-content:center">
+        ${s.bioUnlock !== false && (await Bio.available()) ? `<button class="btn" id="lock-bio" style="width:100%;margin-bottom:8px">${ICONS.lock} 指纹 / 面容解锁</button>` : ''}
         <button class="btn primary" id="lock-go" style="width:100%">解锁</button>
       </div>
     </div>`;
@@ -2302,6 +2327,11 @@ async function showLockIfNeeded() {
       $('#lock-err').textContent = 'PIN 错误';
     }
   };
+  $('#lock-bio')?.addEventListener('click', async () => {
+    const ok = await Bio.prompt('解锁密码本');
+    if (ok) { unlocked = true; mask.remove(); }
+    else $('#lock-err').textContent = '生物识别未通过，请输入 PIN';
+  });
   $('#lock-go').addEventListener('click', tryUnlock);
   $('#lock-pin').addEventListener('keydown', (e) => { if (e.key === 'Enter') tryUnlock(); });
   $('#lock-pin').focus();
@@ -2874,7 +2904,7 @@ function openGuideModal() {
         <p>· <b>数据库加密</b>：AES-256 全库加密（含导出的 .db），密钥自动生成仅存本机，启动自动解密。<b>请务必备份密钥</b>（设置页 → 数据库加密 → 备份密钥），换设备导入加密 .db 时需要它。</p>
         <p>· <b>存储模式 / 数据库位置</b>：桌面版默认本地文件，可指向网盘文件夹多机共用。</p>
         <p>· <b>AI 助理</b>：填接口地址 / 模型名 / API Key（OpenAI 兼容渠道均可）。</p>
-        <p>· <b>启动锁 PIN</b> 与 <b>自动锁定</b>：闲置可锁定（默认 5 分钟，可选），复制密码后剪贴板自动清除；深色主题跟随系统或手动固定。</p>`)}
+        <p>· <b>启动锁 PIN</b> 与 <b>自动锁定</b>：闲置可锁定（默认 5 分钟，可选），复制密码后剪贴板自动清除；深色主题跟随系统或手动固定。电脑（Windows Hello）与手机（指纹/面容）可开启<b>生物识别解锁</b>，启动时免输 PIN，未通过自动回退 PIN。</p>`)}
       ${guideSec('', '⑦ 多端同步（手机 ↔ 电脑）', `
         <p>每台设备各存一份完整数据库（桌面是本地 <b>.db</b> 文件，手机是应用内存储），通过<b>导出 .db → 网盘/Syncthing → 另一端导入</b>合并；导入时选<b>「合并（跳过重复）」</b>即可汇总。</p>
         <p>Android 版默认开启<b>防截屏</b>：截图、最近任务卡片都看不到密码内容。</p>`)}
