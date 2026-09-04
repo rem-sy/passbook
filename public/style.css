@@ -189,7 +189,7 @@ body {
 .gen-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px 22px; }
 .field { display: flex; flex-direction: column; gap: 7px; }
 .field > span { font-size: 12.5px; color: var(--muted); font-weight: 550; }
-.field input[type="text"], .field input[type="url"], .field input[type="password"], .field input[type="number"], .field select, .field textarea {
+.field input:not([type="checkbox"]):not([type="radio"]), .field select, .field textarea {
   border: 1px solid var(--line);
   border-radius: 9px;
   padding: 10px 13px;
