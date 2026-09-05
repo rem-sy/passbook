@@ -250,6 +250,42 @@
     return out.join(',');
   }
 
+  /* ---------- 主页自定义排序（v3.4.2）----------
+   * sortEntries(items, key, order)：收藏始终置顶（优先于排序键，与服务端 fav DESC 一致），
+   * 组内按 key 排：updated|created（时间，desc=最新在前）|category（catJoin 后 localeCompare zh，
+   * 空分类排最后）|totp（desc=有码在前）|owner（localeCompare zh）。
+   * order='asc'|'desc'，翻转各键比较结果；现代引擎 sort 稳定，同键保持原相对顺序。 */
+  function timeVal(v) {
+    if (v == null) return 0;
+    if (typeof v === 'number') return v;
+    var t = Date.parse(v);
+    return isNaN(t) ? (Number(v) || 0) : t;
+  }
+  function sortEntries(items, key, order) {
+    var k = key || 'updated', desc = order !== 'asc'; // 默认倒序（最新在前）
+    var arr = (items || []).slice();
+    var cmpKey = function (a, b) {
+      var r = 0;
+      if (k === 'updated') r = timeVal(a.updated_at) - timeVal(b.updated_at);
+      else if (k === 'created') r = timeVal(a.created_at) - timeVal(b.created_at);
+      else if (k === 'category') {
+        var ca = catJoin(a.category), cb = catJoin(b.category);
+        if (!ca && cb) return 1; // 空分类排最后（不受 order 翻转）
+        if (ca && !cb) return -1;
+        r = ca.localeCompare(cb, 'zh');
+      } else if (k === 'totp') r = (a.totp_secret ? 1 : 0) - (b.totp_secret ? 1 : 0);
+      else r = String(a.owner || '').localeCompare(String(b.owner || ''), 'zh');
+      return desc ? -r : r;
+    };
+    arr.sort(function (a, b) {
+      var fa = a.fav === 1 || a.fav === true ? 1 : 0;
+      var fb = b.fav === 1 || b.fav === true ? 1 : 0;
+      if (fa !== fb) return fb - fa; // 收藏置顶，优先于排序键
+      return cmpKey(a, b);
+    });
+    return arr;
+  }
+
   return {
     parseQuery: parseQuery,
     fuzzyMatch: fuzzyMatch,
@@ -263,5 +299,6 @@
     catJoin: catJoin,
     catFilter: catFilter,
     catApply: catApply,
+    sortEntries: sortEntries,
   };
 });

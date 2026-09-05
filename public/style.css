@@ -958,7 +958,8 @@ html.dark .totp-guide .guide-note { background: #232733; color: #aab2c5; }
   font-size: 15px; line-height: 1; cursor: pointer; padding: 0 2px;
 }
 .filter-chip button:hover { color: var(--danger); }
-#btn-filter.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+#btn-filter.active, #btn-sort.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+.filter-chip + .filter-chip { margin-top: 6px; }
 /* v3.4.1：多选时列表底部让出操作台高度（操作台约 64px + 安全区） */
 body.ms-on .entry-list { padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px)); }
 .ms-bar {

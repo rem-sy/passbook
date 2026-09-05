@@ -971,8 +971,13 @@ async function refreshList() {
     if (state.filterCats && state.filterCats.length) {
       shown = PassSearch.catFilter(shown, state.filterCats, state.filterMode || 'any');
     }
-    // 收藏置顶（v2.7.0）：稳定排序保持既有相对顺序（服务端已排过的这里保持一致）
-    shown = [...shown].sort((a, b) => (b.fav ? 1 : 0) - (a.fav ? 1 : 0));
+    // 收藏置顶（v2.7.0）+ 主页自定义排序（v3.4.2）：收藏始终优先于排序键；
+    // 服务端拉取参数不变（仍按 updated），客户端统一用 sortEntries 重排覆盖
+    const sSet = loadSettings();
+    const sKey = sSet.sortKey || 'updated';
+    const sOrd = sSet.sortOrder || (sKey === 'updated' || sKey === 'created' || sKey === 'totp' ? 'desc' : 'asc');
+    shown = PassSearch.sortEntries(shown, sKey, sOrd);
+    sortChipRender();
     renderEntries(shown, hitsMap);
     const filtered = (state.q || (state.filterCats && state.filterCats.length) || state.category) && shown.length !== total ? `${shown.length}/` : '';
     $('#count').textContent = `共 ${filtered}${total} 条`;
@@ -1379,6 +1384,74 @@ async function openCatManageModal() {
   });
 }
 
+/* ---------------- 主页自定义排序（v3.4.2）---------------- */
+const SORT_KEYS = [
+  { k: 'updated', label: '修改时间', def: 'desc' },
+  { k: 'category', label: '分类', def: 'asc' },
+  { k: 'totp', label: '是否有 TOTP', def: 'desc' },
+  { k: 'owner', label: '所属名称', def: 'asc' },
+  { k: 'created', label: '创建时间', def: 'desc' },
+];
+function sortChipRender() {
+  const chip = $('#sort-chip');
+  if (!chip) return;
+  const s = loadSettings();
+  const key = s.sortKey || 'updated';
+  const order = s.sortOrder || (SORT_KEYS.find((x) => x.k === key) || SORT_KEYS[0]).def;
+  const custom = key !== 'updated' || order !== 'desc';
+  $('#btn-sort')?.classList.toggle('active', custom);
+  chip.classList.toggle('hidden', !custom);
+  if (!custom) return;
+  const kl = (SORT_KEYS.find((x) => x.k === key) || {}).label || key;
+  const arrow = order === 'asc' ? '↑' : '↓';
+  chip.innerHTML = `排序: ${escapeHtml(kl)} ${arrow}<button id="sort-clear" title="恢复默认排序">×</button>`;
+  $('#sort-clear').addEventListener('click', () => {
+    saveSettings({ ...loadSettings(), sortKey: 'updated', sortOrder: 'desc' });
+    refreshList();
+  });
+}
+function openSortPanel() {
+  const s = loadSettings();
+  let key = s.sortKey || 'updated';
+  let order = s.sortOrder || (SORT_KEYS.find((x) => x.k === key) || SORT_KEYS[0]).def;
+  openOverlayModal(`
+    <div class="modal-head"><h3>列表排序</h3></div>
+    <div class="modal-body">
+      <div class="field"><span>排序键</span>
+        <div class="chk-group" id="sort-key-group">
+          ${SORT_KEYS.map((x) => `<label><input type="radio" name="sortkey" value="${x.k}" ${key === x.k ? 'checked' : ''} /> ${x.label}</label>`).join('')}
+        </div>
+      </div>
+      <div class="field"><span>顺序</span>
+        <div class="chk-group">
+          <label><input type="radio" name="sortord" value="asc" ${order === 'asc' ? 'checked' : ''} /> 正序</label>
+          <label><input type="radio" name="sortord" value="desc" ${order === 'desc' ? 'checked' : ''} /> 倒序</label>
+        </div>
+        <p class="hint" id="sort-def-hint" style="margin-top:6px"></p>
+      </div>
+      <p class="hint">收藏条目始终置顶，本设置只影响其后的排序。</p>
+    </div>
+    <div class="modal-foot"><button class="btn primary" data-close>我知道了</button></div>
+  `);
+  const hint = $('#sort-def-hint');
+  const updHint = () => { const x = SORT_KEYS.find((y) => y.k === key) || SORT_KEYS[0]; hint.textContent = `${x.label}默认${x.def === 'asc' ? '正序' : '倒序'}。`; };
+  updHint();
+  document.querySelectorAll('#sort-key-group input').forEach((r) => r.addEventListener('change', () => {
+    key = r.value;
+    order = (SORT_KEYS.find((x) => x.k === key) || SORT_KEYS[0]).def; // 切键取合理默认顺序
+    document.querySelector('input[name="sortord"][value="asc"]').checked = order === 'asc';
+    document.querySelector('input[name="sortord"][value="desc"]').checked = order === 'desc';
+    updHint();
+    saveSettings({ ...loadSettings(), sortKey: key, sortOrder: order });
+    refreshList();
+  }));
+  document.querySelectorAll('input[name="sortord"]').forEach((r) => r.addEventListener('change', () => {
+    order = r.value;
+    saveSettings({ ...loadSettings(), sortKey: key, sortOrder: order });
+    refreshList();
+  }));
+}
+
 /* ---------------- 漏斗筛选（v3.4.0）---------------- */
 function filterChipRender() {
   const chip = $('#filter-chip');
@@ -1710,6 +1783,7 @@ $('#ms-del')?.addEventListener('click', batchDelete);
 $('#ms-exit')?.addEventListener('click', msExit);
 $('#btn-filter')?.addEventListener('click', openFilterPanel);
 $('#btn-cat-manage')?.addEventListener('click', openCatManageModal);
+$('#btn-sort')?.addEventListener('click', openSortPanel);
 $('#btn-manual-add').addEventListener('click', () => {
   openManualAddModal();
   window.scrollTo({ top: 0, behavior: 'smooth' });
