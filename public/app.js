@@ -810,7 +810,7 @@ function avatarHue(text) {
  *  ② DuckDuckGo 图标服务（代理环境可用）
  *  ③ 首字头像（纯本地） */
 function faviconSlot(it) {
-  const domain = window.PassSearch ? PassSearch.extractDomain(it.url) : '';
+  const domain = pbDomainOf(it.url); // v3.3.8：host 含端口（frp-way.com:44806 等），与 hydrate 同源
   const letter = escapeHtml(String(it.owner || '?').trim().charAt(0).toUpperCase() || '?');
   const style = `background:hsl(${avatarHue(it.owner)} 62% 88%);color:hsl(${avatarHue(it.owner)} 45% 32%)`;
   if (loadSettings().favicons && domain) {
@@ -895,7 +895,9 @@ let lastHydration = null; // 最近一次列表水合的 Promise（重试统计�
  * 才发起请求，每次至多 3 连试（直连→DDG→直连）。首字母只兜底从未成功过的条目。 */
 const faviconDemand = new Set();
 function pbDomainOf(url) {
-  try { const u = new URL((url || '').includes('://') ? url : 'https://' + url); return u.hostname.replace(/^www\./, ''); } catch { return ''; }
+  // v3.3.8：u.host（含端口）而非 hostname——frp-way.com:44806 这类非标准端口
+  // 站点此前被截掉端口导致图标恒失败；www 前缀只作用于主机部分，端口不受影响
+  try { const u = new URL((url || '').includes('://') ? url : 'https://' + url); return u.host.replace(/^www\./, ''); } catch { return ''; }
 }
 async function hydrateFavicons(mode = 'cache-only') {
   if (!IS_TAURI) return { ok: 0, fail: 0 };
@@ -916,7 +918,9 @@ async function hydrateFavicons(mode = 'cache-only') {
     if (!wantFetch) continue; // cache-only 渲染：零网络
     jobs.push((async () => {
       let dataUrl = null;
-      const tryUrls = [`https://${domain}/favicon.ico`, `http://${domain}/favicon.ico`, `https://icons.duckduckgo.com/ip3/${domain}.ico`]; // 3 连试：https→http（自有/HTTP站点）→DDG
+      // v3.3.8：3 连试——https(带端口)→http(带端口)→DDG（对带端口域名无意义，仅用主机名）
+      const host = domain.split(':')[0];
+      const tryUrls = [`https://${domain}/favicon.ico`, `http://${domain}/favicon.ico`, `https://icons.duckduckgo.com/ip3/${host}.ico`];
       for (const u of tryUrls) {
         try { const r = await tauriInvoke('favicon_fetch', { url: u }); if (r) { dataUrl = r; break; } } catch { /* 换下一个 */ }
       }
@@ -1613,7 +1617,7 @@ function openEditModal(item = null, prefillPw = '') {
   // 重新生成：二级确认（v3.0.3）——密码框非空时，第一次点击进入"确认?"状态，2.6 秒内再点才覆盖；空框直接生成
   $('#btn-gen-again')?.addEventListener('click', (ev) => {
     const btn = ev.currentTarget;
-    const RESET = () => { delete btn.dataset.confirm; btn.innerHTML = ICONS.refresh; btn.classList.remove('danger'); btn.title = '用当前生成器设置重新生成'; };
+    const RESET = () => { delete btn.dataset.confirm; btn.innerHTML = ICONS.wand; btn.classList.remove('danger'); btn.title = '用当前生成器设置重新生成'; }; // v3.3.8：还原魔法棒（v3.3.4 换图标时漏改此处）
     const doGen = () => {
       try {
         const o = genOptsFromUi();
@@ -1643,7 +1647,7 @@ function openEditModal(item = null, prefillPw = '') {
       } catch (e) { toast(e.message, true); }
     }
   });
-  $('#btn-save').addEventListener('click', async () => {
+  $('#btn-save').addEventListener('click', async (ev) => {
     const entry = {
       owner: $('#f-owner').value.trim(),
       account: $('#f-account').value.trim(),
@@ -1657,6 +1661,25 @@ function openEditModal(item = null, prefillPw = '') {
     if (totpRaw && !PassTotp.isValidSecret(entry.totp_secret)) return toast('TOTP 密钥无效：需 base32 字符（A-Z、2-7）或 otpauth:// 链接', true);
     if (!entry.owner || !entry.account) return toast('所属和账户不能为空', true);
     if (!entry.password) return toast('密码不能为空', true);
+    // v3.3.8：覆盖已有 TOTP 需二次确认（两步模式，参照重新生成按钮）——旧密钥非空
+    // 且新密钥不同时，第一次点击进入确认态，2.6 秒内再点才真正覆盖保存
+    const btn = ev.currentTarget;
+    if (!isNew && item.totp_secret && entry.totp_secret && entry.totp_secret !== item.totp_secret) {
+      if (btn.dataset.tconfirm !== '1') {
+        btn.dataset.tconfirm = '1';
+        const old = btn.textContent;
+        btn.dataset.oldTxt = old;
+        btn.textContent = '再点一次覆盖 TOTP';
+        btn.classList.add('danger');
+        btn.dataset.tm = String(setTimeout(() => { delete btn.dataset.tconfirm; btn.textContent = old; btn.classList.remove('danger'); }, 2600));
+        toast('TOTP 密钥已变化：再次点击保存以覆盖', true);
+        return;
+      }
+      clearTimeout(Number(btn.dataset.tm || 0));
+      delete btn.dataset.tconfirm;
+      btn.textContent = btn.dataset.oldTxt || '保存';
+      btn.classList.remove('danger');
+    }
     try {
       if (isNew) await store.create(entry);
       else await store.update(item.id, entry);
