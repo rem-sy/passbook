@@ -1008,12 +1008,8 @@ body.ms-on .entry-list { padding-bottom: calc(88px + env(safe-area-inset-bottom,
 .cman-row .cman-name { font-weight: 600; flex: 1; }
 .cman-row .cman-ops { display: flex; gap: 6px; }
 .danger-text { color: var(--danger) !important; }
-html.dark /* v3.4.1：多选时列表底部让出操作台高度（操作台约 64px + 安全区） */
-body.ms-on .entry-list { padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px)); }
-.ms-bar { background: #1c202b; box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.45); }
+html.dark .ms-bar { background: #1c202b; box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.45); }
 @media (max-width: 640px) {
-  /* v3.4.1：多选时列表底部让出操作台高度（操作台约 64px + 安全区） */
-body.ms-on .entry-list { padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px)); }
-.ms-bar { justify-content: center; }
+  .ms-bar { justify-content: center; }
   .ms-bar #ms-count { width: 100%; text-align: center; }
 }
