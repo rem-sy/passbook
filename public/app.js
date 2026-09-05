@@ -2323,6 +2323,7 @@ function openImportModal() {
     const tab = b.dataset.tab;
     $('#tab-paste').classList.toggle('hidden', tab !== 'paste');
     $('#tab-file').classList.toggle('hidden', tab !== 'file');
+    $('#tab-scan').classList.toggle('hidden', tab !== 'scan'); // v4.0.3：漏了这行——扫码 tab 内容从未显示过
   }));
 
   // 文件选择 / 拖放
