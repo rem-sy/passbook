@@ -950,7 +950,7 @@ async function refreshList() {
     const serverQ = advanced ? '' : (pq.terms[0] || '');
     // v3.4.0：分类筛选改在客户端做（catSplit 集合包含）——本地库多分类条目
     // 不再依赖 SQL 侧过滤，远程模式的旧服务端精确匹配也不再漏多分类条目
-    const { items, total } = await store.list({ q: serverQ, category: '', sort: state.sort, favOnly: state.favOnly });
+    const { items, total } = await store.list({ q: serverQ, category: '', sort: serverSortKey(), favOnly: state.favOnly });
     state.total = total;
 
     let shown = items, hitsMap = null;
@@ -1215,7 +1215,7 @@ function msExit() {
 }
 /** 取当前列表全量 id（用于全选）：直接拉当前筛选下的条目 */
 async function msCurrentIds() {
-  const { items } = await store.list({ q: '', category: '', sort: state.sort, favOnly: state.favOnly });
+  const { items } = await store.list({ q: '', category: '', sort: serverSortKey(), favOnly: state.favOnly });
   let arr = items;
   if (state.category) {
     const k = state.category.toLowerCase();
@@ -3095,10 +3095,21 @@ $('#search').addEventListener('input', debounce((e) => {
   state.q = e.target.value.trim();
   refreshList();
 }, 200));
-$('#sort').addEventListener('change', (e) => {
-  state.sort = e.target.value;
-  refreshList();
-});
+// v3.4.2 规格修正：旧排序下拉（#sort）已删除，排序唯一入口=新排序面板。
+// 服务端拉取键由 sortKey 派生（category/totp 无对应服务端键，回落 updated）
+(function deriveSort() {
+  const s = loadSettings();
+  if (!s.sortKey && s.sort) {
+    // 旧持久化值迁移：updated/created/owner → 对应新键 + 合理默认顺序
+    const map = { updated: ['updated', 'desc'], created: ['created', 'desc'], owner: ['owner', 'asc'] };
+    const m = map[s.sort] || map.updated;
+    saveSettings({ ...s, sortKey: m[0], sortOrder: m[1] });
+  }
+})();
+function serverSortKey() {
+  const k = loadSettings().sortKey || 'updated';
+  return k === 'created' || k === 'owner' ? k : 'updated';
+}
 
 /* ---------------- 自动备份快照（v2.2.0） ---------------- */
 const BackupAdapter = {
