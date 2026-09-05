@@ -899,7 +899,10 @@ function pbDomainOf(url) {
 async function hydrateFavicons(mode = 'cache-only') {
   if (!IS_TAURI) return { ok: 0, fail: 0 };
   let ok = 0, fail = 0; const jobs = [];
-  const imgs = document.querySelectorAll('img[data-fd]:not([data-hydrated])');
+  // v3.3.2：fetch 模式要重扫全部 img——refreshList 内部的 cache-only 已把它们
+  // 标记 data-hydrated，若仍排除已标记节点，手动重试/导入触发会恒扫到 0 个
+  const sel = (mode === 'cache-only' && faviconDemand.size === 0) ? 'img[data-fd]:not([data-hydrated])' : 'img[data-fd]';
+  const imgs = document.querySelectorAll(sel);
   for (const img of imgs) {
     const domain = img.dataset.fd;
     if (!domain) continue;
@@ -1523,6 +1526,30 @@ function openEditModal(item = null, prefillPw = '') {
     attachSuggest($('#f-owner'), () => [...so]);
     attachSuggest($('#f-account'), () => [...sa]);
     attachSuggest($('#f-category'), () => [...sc]);
+    // v3.3.2：编辑弹窗同样支持预置所属联想（徽章 + 网址为空时自动填）
+    (() => {
+      const presetNames = (window.PB_PRESETS || []).flatMap((p) => [p.name, ...(p.aliases || [])]);
+      const presetBadge = new Set(presetNames);
+      attachSuggest($('#f-owner'), () => {
+        const seen = new Set();
+        return [...presetNames, ...so].filter((x) => {
+          const k = String(x).toLowerCase();
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        });
+      }, {
+        badge: presetBadge,
+        onPick: (v) => {
+          const p = window.pbPresetMatch ? window.pbPresetMatch(v) : null;
+          const urlEl = $('#f-url');
+          if (p && urlEl && !urlEl.value.trim()) {
+            urlEl.value = 'https://' + p.domain;
+            toast('已填入 ' + p.name + ' 网址');
+          }
+        },
+      });
+    })();
   })();
 
   $('#btn-cancel')?.addEventListener('click', closeModal);
