@@ -1485,7 +1485,7 @@ function openEditModal(item = null, prefillPw = '') {
       <label class="field"><span>密码 *<button class="hint-btn" type="button" data-hint="gen" title="生成器说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></span>
         <div class="pw-input-row">
           <input id="f-password" type="text" value="${escapeHtml(v('password') || prefillPw)}" autocomplete="off" />
-          <button class="btn" id="btn-gen-again" title="用当前生成器设置重新生成">${ICONS.refresh}</button>
+          <button class="btn" id="btn-gen-again" title="用当前生成器设置重新生成">${ICONS.wand}</button>
         </div>
       </label>
       <label class="field"><span>动态验证码 TOTP（可选）<button class="hint-btn" type="button" data-hint="totp" title="TOTP 使用说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></span>
@@ -2289,10 +2289,8 @@ function openSettingsModal() {
       </div>
       <p class="hint">任何 OpenAI 兼容渠道均可（DeepSeek / OpenAI / 通义 / 本地 Ollama…）。配置后即可在右上角 AI 助理面板聊天存/查密码。</p>`;
   const encField = currentMode === 'local' ? `
-      <div class="field"><span>数据库加密（防止 .db 文件被拷走后明文泄露）<button class="hint-btn" type="button" data-hint="enc" title="数据库加密说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></span>
-        <div class="lock-toggle">
-          <span class="lock-state" id="enc-state">检测中…</span>
-        </div>
+      <div class="field"><span>数据库加密（防止 .db 文件被拷走后明文泄露）</span>
+        <div class="lock-toggle"><span class="lock-state" id="enc-state">检测中…</span><button class="hint-btn" type="button" data-hint="enc" title="数据库加密说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></div>
         <div id="enc-actions" style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"></div>
         <p class="hint">密钥由应用自动生成并仅保存在本机，启动时自动解密、使用无感。<b style="color:var(--danger)">请务必点击「备份密钥」保存密钥文本</b>，丢失或更换设备导入加密 .db 时都需要它。</p>
       </div>` : `
@@ -3341,7 +3339,7 @@ function openTotpGuideModal(ownerVal) {
         <div class="guide-note">该渠道未收录：开启两步验证时选择「身份验证器应用」即可获得密钥，把它存入本条目 TOTP 字段。</div>
       </div>`;
   }
-  openModal(`
+  openOverlayModal(`
     <div class="modal-head"><h3>动态验证码（TOTP）说明</h3></div>
     <div class="modal-body totp-guide">
       <div class="guide-base">
@@ -3355,11 +3353,26 @@ function openTotpGuideModal(ownerVal) {
     <div class="modal-foot"><button class="btn primary" data-close>我知道了</button></div>
   `);
 }
-/* ---------------- 通用说明弹窗（v3.3.3）----------------
+/* ---------------- 通用说明弹窗（v3.3.3，v3.3.4 改独立层）----------------
  * 复用 TOTP 指南的样式（guide-base/guide-note/guide-steps）与「我知道了」
- * data-close 按钮；各处 ⃝? 按钮统一 class hint-btn + data-hint=key。 */
+ * data-close 按钮；各处 ⃝? 按钮统一 class hint-btn + data-hint=key。
+ * v3.3.4：不再走 openModal（那会替换 #modal-root，从设置弹窗点说明会把
+ * 设置弹窗销毁）——自建 overlay 层 append 到 body，z-index 650 高于弹窗；
+ * 关闭只移除自身（点遮罩空白/我知道了都关），不压 history 返回栈。
+ * TOTP 指南同样走此层。 */
+function openOverlayModal(html, wide = false) {
+  const mask = document.createElement('div');
+  mask.className = 'modal-mask hint-mask';
+  mask.innerHTML = `<div class="modal${wide ? ' wide' : ''}">${html}</div>`;
+  const close = () => mask.remove();
+  mask.addEventListener('click', (e) => { if (e.target === e.currentTarget) close(); });
+  mask.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', close));
+  mask.querySelector('.modal-close')?.addEventListener('click', close);
+  document.body.appendChild(mask);
+  return close;
+}
 function openHintModal(title, bodyHtml) {
-  openModal(`
+  openOverlayModal(`
     <div class="modal-head"><h3>${escapeHtml(title)}</h3></div>
     <div class="modal-body totp-guide">
       ${bodyHtml}

@@ -214,8 +214,9 @@ body {
   box-shadow: 0 0 0 3.5px rgba(76, 95, 215, 0.13);
 }
 .field select { cursor: pointer; }
-.lock-toggle { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.lock-toggle { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; white-space: nowrap; }
 .lock-state { font-size: 12.5px; color: var(--muted); }
+.hint-mask { z-index: 650; } /* v3.3.4：说明弹窗独立层，高于普通弹窗与联想 */
 .chk-group { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 5px 2px 2px; }
 .chk-group label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
 .chk-group input { accent-color: var(--primary); width: 15px; height: 15px; }
