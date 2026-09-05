@@ -1205,17 +1205,18 @@ scheduleAutoBackup();
 /* ---------------- 分类侧栏（v2.7.0，替代旧分类 chips） ---------------- */
 async function refreshChips() { return refreshSidebar(); } // 旧调用点兼容
 
-let _favCount = 0;
+let _favCount = 0, _allCount = null; // v3.3.5：全部计数独立统计——不再用 state.total（那是上次列表查询的结果，收藏/分类筛选时会跟着变）
 async function refreshSidebar() {
   let cats = [];
   try { cats = (await store.categories()).items || []; } catch { cats = []; }
   state.categories = cats;
   try { _favCount = (await store.list({ favOnly: true })).items.length; } catch { _favCount = 0; }
+  try { const ra = await store.list({}); _allCount = (ra.total != null) ? ra.total : ra.items.length; } catch { /* 保留旧值 */ }
   const box = $('#sidebar-nav');
   if (!box) return;
   const allActive = state.category === '' && !state.favOnly;
   box.innerHTML = `
-    <button class="side-item ${allActive ? 'active' : ''}" data-side="all"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg><span>全部</span><em>${state.total ?? ''}</em></button>
+    <button class="side-item ${allActive ? 'active' : ''}" data-side="all"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg><span>全部</span><em>${_allCount ?? ''}</em></button>
     <button class="side-item ${state.favOnly ? 'active' : ''}" data-side="fav">${ICONS.starFill}<span>收藏</span><em>${_favCount || ''}</em></button>
     <div class="side-sep"></div>
     ${cats.map((c) => `<button class="side-item ${!state.favOnly && state.category === c.category ? 'active' : ''}" data-side="cat" data-cat="${escapeHtml(c.category)}"><span class="side-dot" style="background:hsl(${avatarHue(c.category)} 60% 55%)"></span><span class="side-name" title="${escapeHtml(c.category)}">${escapeHtml(c.category)}</span><em>${c.count}</em></button>`).join('')}
