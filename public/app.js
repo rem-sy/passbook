@@ -2147,6 +2147,9 @@ function openManualAddModal() {
       <button class="modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
     <div class="modal-body manual-form">
+        <div style="display:flex;justify-content:flex-end;margin-bottom:4px">
+          <button class="btn totp-scan-btn" id="mf-scan-fill" type="button" title="扫码自动填写（迁移码/分享卡片/TOTP/网址/文本）"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 12h10"/></svg> 扫码填写</button>
+        </div>
       <label class="field"><span>所属（应用 / 网站）*</span>
         <input id="mf-owner" placeholder="如：GitHub、微信、网银…" autocomplete="off" />
         <datalist id="dl-mf-owner"></datalist>
@@ -2178,7 +2181,6 @@ function openManualAddModal() {
       </label>
       <div class="hint" id="mf-saved-info"></div>
       <div class="form-actions" id="form-actions">
-        <button class="btn" id="mf-scan-fill">📷 扫码填写</button>
           <button class="btn" id="mf-save-continue">保存并继续录入</button>
         <button class="btn primary" id="mf-save">保存</button>
       </div>
@@ -4023,11 +4025,8 @@ async function openEntryQrModal(item) {
 }
 
 // ③ 扫码填写（手动录入弹窗，五级识别）
-function bindScanFill() {
-  const btn = $('#mf-scan-fill');
-  if (!btn) return;
-  btn.addEventListener('click', () => {
-    openScanOverlay(async (text) => {
+function scanFillStart() {
+  openScanOverlay(async (text) => {
       const r = PassQR.parseQrPayload(text);
       const F = { owner: $('#mf-owner'), account: $('#mf-account'), password: $('#mf-password'), url: $('#mf-url'), note: $('#mf-note'), totp: $('#mf-totp'), cat: $('#mf-category') };
       const put = (k, v) => { if (F[k] && v != null && String(v).length) F[k].value = v; };
@@ -4049,14 +4048,11 @@ function bindScanFill() {
         toast('纯文本已追加到备注');
       }
     }, { title: '扫码填写（迁移码/分享卡片/TOTP/网址/文本）' });
-  });
 }
 
 // ③' 扫码导入（连续，仅迁移码/分享卡片入库）
-function bindScanImport() {
-  const btn = $('#scan-import-start');
-  if (!btn) return;
-  btn.addEventListener('click', async () => {
+async function scanImportStart() {
+  {
     let n = 0;
     const counter = $('#scan-import-count');
     counter.textContent = '已导入 0 条';
@@ -4078,15 +4074,16 @@ function bindScanImport() {
       }
       return false; // continuous 由浮层自行重启
     }, { title: '扫码导入（连续）', continuous: true });
-  });
+  }
 }
-if (typeof openModal === 'function') {
-  // 手动录入/导入弹窗由 openModal 动态渲染：钩在打开后绑定
-  const _openModalOrig = openModal;
-  openModal = function (html, wide) {
-    const r = _openModalOrig(html, wide);
-    bindScanFill();
-    bindScanImport();
-    return r;
-  };
-}
+
+// v4.0.2：document 级事件委托（与 TOTP 扫码同款模式，不依赖 openModal 重包装时机）
+document.addEventListener('click', (e) => {
+  try {
+    if (e.target.closest('#mf-scan-fill')) scanFillStart();
+    else if (e.target.closest('#scan-import-start')) scanImportStart();
+  } catch (err) {
+    console.error(err);
+    toast('扫码启动失败：' + (err && err.message ? err.message : '未知错误'), true);
+  }
+});
