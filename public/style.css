@@ -912,3 +912,36 @@ html.dark .pb-suggest { box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
 
 /* 手机抽屉投影（v3.0.12） */
 @media (max-width: 899px) { .sidebar { box-shadow: 8px 0 28px rgba(15, 18, 26, 0.18); } }
+
+/* 预置徽章 + TOTP 指南按钮 + 指南弹窗（v3.3.0） */
+.pb-badge {
+  display: inline-block; margin-left: 6px; padding: 1px 6px;
+  font-size: 12px; line-height: 1.5; border-radius: 6px;
+  background: var(--primary); color: #fff; vertical-align: 1px;
+}
+.totp-guide-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; margin-left: 5px; vertical-align: -3px;
+  border: none; background: transparent; color: var(--muted);
+  cursor: pointer; padding: 0; transition: transform .1s;
+}
+.totp-guide-btn:hover { color: var(--primary); }
+.totp-guide-btn:active { transform: scale(0.85); }
+.totp-guide .guide-base p { margin: 0 0 10px; font-size: 13.5px; line-height: 1.75; }
+.totp-guide .guide-channel-title { font-weight: 700; font-size: 14px; margin: 4px 0 10px; }
+.totp-guide .guide-steps { display: flex; flex-direction: column; gap: 8px; }
+.totp-guide .guide-step {
+  display: flex; align-items: flex-start; gap: 8px;
+  font-size: 13.5px; line-height: 1.6;
+}
+.totp-guide .guide-step-ico { flex: none; margin-top: 2px; color: var(--primary); }
+.totp-guide .guide-step-num {
+  flex: none; width: 18px; height: 18px; margin-top: 2px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; background: var(--bg); font-size: 11.5px; font-weight: 700; color: var(--primary);
+}
+.totp-guide .guide-note {
+  margin-top: 10px; padding: 8px 12px; border-radius: 8px;
+  background: var(--bg); font-size: 13px; line-height: 1.7; color: var(--muted);
+}
+html.dark .totp-guide .guide-note { background: #232733; color: #aab2c5; }

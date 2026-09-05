@@ -832,11 +832,14 @@ function faviconSlot(it) {
  *  下拉定位有缺陷会遮挡输入框，改为输入框正下方绝对定位列表（双端统一行为）。
  *  getItems() 每次输入时实时取全部候选；过滤：不区分大小写包含，最多 8 条；
  *  空输入/无匹配不显示；点选项回填并触发 change；blur/ESC/Enter 关闭；
- *  选项 mousedown preventDefault 防 blur 先行关闭。 */
-function attachSuggest(inputEl, getItems) {
+ *  选项 mousedown preventDefault 防 blur 先行关闭。
+ *  v3.0.9 opts（手动录入弹窗用）：badge=Set（命中值渲染「预置」徽章）；
+ *  onPick=fn(value)（选中后回调，如自动填 URL）。 */
+function attachSuggest(inputEl, getItems, opts) {
   if (!inputEl) return;
   const field = inputEl.closest('.field');
   if (!field) return;
+  opts = opts || {};
   field.style.position = 'relative'; // .pb-suggest 的定位锚
   let box = null, tm = null;
   const close = () => { if (box) { box.remove(); box = null; } clearTimeout(tm); };
@@ -849,7 +852,9 @@ function attachSuggest(inputEl, getItems) {
     if (!hit.length) return;
     box = document.createElement('div');
     box.className = 'pb-suggest';
-    box.innerHTML = hit.map((x) => `<div class="pb-suggest-item" data-v="${escapeHtml(x)}">${escapeHtml(x)}</div>`).join('');
+    box.innerHTML = hit
+      .map((x) => `<div class="pb-suggest-item" data-v="${escapeHtml(x)}">${escapeHtml(x)}${opts.badge && opts.badge.has(x) ? '<span class="pb-badge">预置</span>' : ''}</div>`)
+      .join('');
     box.addEventListener('mousedown', (e) => {
       e.preventDefault(); // 保住焦点，防 blur 关闭竞速
       const it = e.target.closest('.pb-suggest-item');
@@ -857,6 +862,7 @@ function attachSuggest(inputEl, getItems) {
       inputEl.value = it.dataset.v;
       close();
       inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+      if (opts.onPick) opts.onPick(it.dataset.v);
     });
     field.appendChild(box);
   };
@@ -1466,7 +1472,7 @@ function openEditModal(item = null, prefillPw = '') {
           <button class="btn" id="btn-gen-again" title="用当前生成器设置重新生成">${ICONS.refresh}</button>
         </div>
       </label>
-      <label class="field"><span>动态验证码 TOTP（可选）</span>
+      <label class="field"><span>动态验证码 TOTP（可选）<button class="totp-guide-btn" type="button" title="TOTP 使用说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></span>
         <input id="f-totp" placeholder="base32 密钥或 otpauth:// 链接，粘贴自动提取" value="${escapeHtml(v('totp_secret'))}" autocomplete="off" spellcheck="false" />
       </label>
       <div class="form-row">
@@ -1684,7 +1690,7 @@ function openManualAddModal() {
           <button class="btn" id="mf-gen" title="用当前生成器设置生成">${ICONS.wand}</button>
         </div>
       </label>
-      <label class="field"><span>动态验证码 TOTP（可选）</span>
+      <label class="field"><span>动态验证码 TOTP（可选）<button class="totp-guide-btn" type="button" title="TOTP 使用说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></span>
         <input id="mf-totp" placeholder="base32 密钥或 otpauth:// 链接，粘贴自动提取" autocomplete="off" spellcheck="false" />
       </label>
       <div class="form-row">
@@ -1716,6 +1722,29 @@ function openManualAddModal() {
     attachSuggest($('#mf-owner'), () => [...so]);
     attachSuggest($('#mf-account'), () => [...sa]);
     attachSuggest($('#mf-category'), () => [...sc]);
+    // v3.3.0：预置所属库——PB_PRESETS 名称/别名排最前并带「预置」徽章；
+    // 选中命中预置且 mf-url 为空时自动填 https://{domain}（不覆盖已有内容）
+    const presetNames = (window.PB_PRESETS || []).flatMap((p) => [p.name, ...(p.aliases || [])]);
+    const presetBadge = new Set(presetNames);
+    attachSuggest($('#mf-owner'), () => {
+      const seen = new Set();
+      return [...presetNames, ...so].filter((x) => {
+        const k = String(x).toLowerCase();
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+    }, {
+      badge: presetBadge,
+      onPick: (v) => {
+        const p = window.pbPresetMatch ? window.pbPresetMatch(v) : null;
+        const urlEl = $('#mf-url');
+        if (p && urlEl && !urlEl.value.trim()) {
+          urlEl.value = 'https://' + p.domain;
+          toast('已填入 ' + p.name + ' 网址');
+        }
+      },
+    });
   })();
 
   let mfSavedCount = 0;
@@ -3228,4 +3257,62 @@ document.addEventListener('click', async (e) => {
   // v3.2.0：开始/完成两级提示（完成带成功/失败统计）；探针已退役
   const st = await (lastHydration || hydrateFavicons()).catch(() => ({ ok: 0, fail: 0 }));
   toast('图标加载完成：成功 ' + st.ok + ' 个' + (st.fail ? '，失败 ' + st.fail + ' 个' : ''));
+});
+
+/* ---------------- TOTP 分渠道指南（v3.3.0）----------------
+ * 手动录入/编辑弹窗 TOTP 标题旁的问号按钮：读取同弹窗「所属」当前值（打开
+ * 瞬间快照），命中 PB_PRESETS 显示该渠道逐步获取指南；Steam 等不支持项显示
+ * 不支持说明；未收录显示通用提示。 */
+const TOTP_GUIDE_ICONS = [
+  '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>',
+  '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>',
+  '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>',
+  '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="3" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect><path d="M14 14h3v3h-3zM21 14h.01M14 21h.01M17.5 17.5h.01M21 21h.01"></path></svg>',
+  '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path></svg>',
+];
+function openTotpGuideModal(ownerVal) {
+  const p = ownerVal && window.pbPresetMatch ? window.pbPresetMatch(ownerVal) : null;
+  let channel;
+  if (p && p.totp && p.totp.supported) {
+    channel = `
+      <div class="guide-channel">
+        <div class="guide-channel-title">${escapeHtml(p.name)} 开启步骤</div>
+        <div class="guide-steps">
+          ${p.totp.steps.map((s, i) => `
+            <div class="guide-step"><span class="guide-step-ico">${TOTP_GUIDE_ICONS[i % TOTP_GUIDE_ICONS.length]}</span><span class="guide-step-num">${i + 1}</span><span>${escapeHtml(s)}</span></div>`).join('')}
+        </div>
+        ${p.totp.note ? `<div class="guide-note">${escapeHtml(p.totp.note)}</div>` : ''}
+      </div>`;
+  } else if (p) {
+    channel = `
+      <div class="guide-channel">
+        <div class="guide-channel-title">${escapeHtml(p.name)}（不支持标准 TOTP）</div>
+        <div class="guide-note">${escapeHtml(p.totp && p.totp.note ? p.totp.note : '该渠道不支持标准 TOTP。')}</div>
+      </div>`;
+  } else {
+    channel = `
+      <div class="guide-channel">
+        <div class="guide-note">该渠道未收录：开启两步验证时选择「身份验证器应用」即可获得密钥，把它存入本条目 TOTP 字段。</div>
+      </div>`;
+  }
+  openModal(`
+    <div class="modal-head"><h3>动态验证码（TOTP）说明</h3></div>
+    <div class="modal-body totp-guide">
+      <div class="guide-base">
+        <p><b>TOTP</b>（基于时间的一次性密码）：每 <b>30 秒</b>轮换的 6 位动态码，本条目保存密钥后列表卡片会实时显示并一键复制。</p>
+        <p><b>密钥只显示一次</b>：开启两步验证时务必当场把密钥（Base32 串或 otpauth:// 链接）存入本条目 TOTP 字段，错过只能重新绑定。</p>
+        <p><b>换手机要迁移</b>：新设备无法自动继承——在新手机上重新绑定（先加新绑定、验证可用后再删旧的）。</p>
+        <p><b>与短信验证的区别</b>：不依赖手机号与信号、离线可算、不怕 SIM 卡补办劫持；两者都开时优先用 TOTP。</p>
+      </div>
+      ${channel}
+    </div>
+    <div class="modal-foot"><button class="btn primary" data-close>我知道了</button></div>
+  `);
+}
+document.addEventListener('click', (e) => {
+  const b = e.target && e.target.closest ? e.target.closest('.totp-guide-btn') : null;
+  if (!b) return;
+  const modal = b.closest('.modal-mask');
+  const ownerEl = modal ? (modal.querySelector('#f-owner') || modal.querySelector('#mf-owner')) : null;
+  openTotpGuideModal(ownerEl ? ownerEl.value : ''); // 打开瞬间快照，不实时刷新
 });
