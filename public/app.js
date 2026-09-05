@@ -877,6 +877,18 @@ function attachSuggest(inputEl, getItems, opts) {
  * 经 favicon_fetch 下载图标转 data:URL 注入；内存 Map 缓存（domain →
  * dataUrl | null 已知失败）防止重渲染反复请求；「重试加载全部图标」清缓存。 */
 const faviconDataCache = new Map();
+/* 图标持久缓存（v3.3.1）：成功的 data:URL 存 localStorage，重启/断网后
+ * 仍显示上次成功图标——首字母只兜底从未成功过的条目；上限 200 条先进先出 */
+function faviconPersistGet(domain) {
+  try { return localStorage.getItem('pb-fav:' + domain); } catch { return null; }
+}
+function faviconPersistSet(domain, dataUrl) {
+  try {
+    localStorage.setItem('pb-fav:' + domain, dataUrl);
+    const keys = Object.keys(localStorage).filter((k) => k.indexOf('pb-fav:') === 0);
+    if (keys.length > 200) localStorage.removeItem(keys[0]); // 粗略 FIFO 上限
+  } catch { /* 超配额静默放弃 */ }
+}
 let lastHydration = null; // 最近一次列表水合的 Promise（重试统计要接它）
 async function hydrateFavicons() {
   if (!IS_TAURI) return { ok: 0, fail: 0 };
@@ -893,7 +905,22 @@ async function hydrateFavicons() {
       img.src = dataUrl;
       img.style.opacity = '1';
     };
+    // v3.3.1：持久层——内存未命中先查 localStorage（重启后无需网络即可复显）；
+    // 失败时若持久层有旧图标则用旧的（首字母永远不覆盖已成功过的图标）
     if (faviconDataCache.has(domain)) { apply(faviconDataCache.get(domain)); continue; }
+    const persisted = faviconPersistGet(domain);
+    if (persisted) {
+      faviconDataCache.set(domain, persisted); // 回填内存层
+      apply(persisted);
+      jobs.push((async () => { // 后台静默刷新，成功才覆盖（含持久层）
+        try {
+          const r = await tauriInvoke('favicon_fetch', { url: `https://${domain}/favicon.ico` });
+          const fresh = r || await tauriInvoke('favicon_fetch', { url: `https://icons.duckduckgo.com/ip3/${domain}.ico` });
+          if (fresh) { faviconDataCache.set(domain, fresh); faviconPersistSet(domain, fresh); apply(fresh); ok++; } // 新图标才能覆盖旧的
+        } catch { /* 刷新失败保留旧图标 */ }
+      })());
+      continue;
+    }
     jobs.push((async () => {
       let dataUrl = null;
       try {
@@ -904,6 +931,7 @@ async function hydrateFavicons() {
         } else dataUrl = r1;
       } catch { dataUrl = null; }
       faviconDataCache.set(domain, dataUrl);
+      if (dataUrl) faviconPersistSet(domain, dataUrl); // v3.3.1：成功即持久化
       apply(dataUrl);
       dataUrl ? ok++ : fail++;
     })());
