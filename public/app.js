@@ -1205,12 +1205,17 @@ scheduleAutoBackup();
 /* ---------------- 分类侧栏（v2.7.0，替代旧分类 chips） ---------------- */
 async function refreshChips() { return refreshSidebar(); } // 旧调用点兼容
 
-let _favCount = 0, _allCount = null; // v3.3.5：全部计数独立统计——不再用 state.total（那是上次列表查询的结果，收藏/分类筛选时会跟着变）
+let _favCount = 0, _allCount = null, _favCatCounts = {}; // v3.3.5：全部计数独立统计；v3.3.6：收藏上下文的分类计数（二级筛选）
 async function refreshSidebar() {
   let cats = [];
   try { cats = (await store.categories()).items || []; } catch { cats = []; }
   state.categories = cats;
-  try { _favCount = (await store.list({ favOnly: true })).items.length; } catch { _favCount = 0; }
+  _favCatCounts = {};
+  try {
+    const rf = await store.list({ favOnly: true });
+    _favCount = rf.items.length;
+    rf.items.forEach((it) => { const k = it.category || '未分类'; _favCatCounts[k] = (_favCatCounts[k] || 0) + 1; });
+  } catch { _favCount = 0; }
   try { const ra = await store.list({}); _allCount = (ra.total != null) ? ra.total : ra.items.length; } catch { /* 保留旧值 */ }
   const box = $('#sidebar-nav');
   if (!box) return;
@@ -1219,7 +1224,7 @@ async function refreshSidebar() {
     <button class="side-item ${allActive ? 'active' : ''}" data-side="all"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg><span>全部</span><em>${_allCount ?? ''}</em></button>
     <button class="side-item ${state.favOnly ? 'active' : ''}" data-side="fav">${ICONS.starFill}<span>收藏</span><em>${_favCount || ''}</em></button>
     <div class="side-sep"></div>
-    ${cats.map((c) => `<button class="side-item ${!state.favOnly && state.category === c.category ? 'active' : ''}" data-side="cat" data-cat="${escapeHtml(c.category)}"><span class="side-dot" style="background:hsl(${avatarHue(c.category)} 60% 55%)"></span><span class="side-name" title="${escapeHtml(c.category)}">${escapeHtml(c.category)}</span><em>${c.count}</em></button>`).join('')}
+    ${cats.map((c) => `<button class="side-item ${state.category === c.category ? 'active' : ''}" data-side="cat" data-cat="${escapeHtml(c.category)}"><span class="side-dot" style="background:hsl(${avatarHue(c.category)} 60% 55%)"></span><span class="side-name" title="${escapeHtml(c.category)}">${escapeHtml(c.category)}</span><em>${state.favOnly ? (_favCatCounts[c.category] || 0) : c.count}</em></button>`).join('')}
   `;
 }
 $('#sidebar-nav')?.addEventListener('click', (e) => {
@@ -1228,7 +1233,7 @@ $('#sidebar-nav')?.addEventListener('click', (e) => {
   const side = item.dataset.side;
   if (side === 'all') { state.category = ''; state.favOnly = false; }
   else if (side === 'fav') { state.category = ''; state.favOnly = true; }
-  else { state.category = item.dataset.cat || ''; state.favOnly = false; }
+  else { state.category = item.dataset.cat || ''; /* v3.3.6：保持 favOnly——收藏模式下点分类=收藏∩分类（二级筛选） */ }
   refreshSidebar();
   refreshList();
   closeSidebarDrawer(); // 手机端选择后收起抽屉
