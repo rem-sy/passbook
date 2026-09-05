@@ -916,7 +916,7 @@ async function hydrateFavicons(mode = 'cache-only') {
     if (!wantFetch) continue; // cache-only 渲染：零网络
     jobs.push((async () => {
       let dataUrl = null;
-      const tryUrls = [`https://${domain}/favicon.ico`, `https://icons.duckduckgo.com/ip3/${domain}.ico`, `https://${domain}/favicon.ico`]; // 3 连试
+      const tryUrls = [`https://${domain}/favicon.ico`, `http://${domain}/favicon.ico`, `https://icons.duckduckgo.com/ip3/${domain}.ico`]; // 3 连试：https→http（自有/HTTP站点）→DDG
       for (const u of tryUrls) {
         try { const r = await tauriInvoke('favicon_fetch', { url: u }); if (r) { dataUrl = r; break; } } catch { /* 换下一个 */ }
       }

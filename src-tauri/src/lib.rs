@@ -178,6 +178,7 @@ async fn favicon_fetch(url: String) -> Result<Option<String>, String> {
     }
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
+        .danger_accept_invalid_certs(true) // v3.3.7: favicon 是公开资源，放行自签证书站点
         .build()
         .map_err(|e| e.to_string())?;
     let resp = client
