@@ -1784,15 +1784,7 @@ $('#ms-exit')?.addEventListener('click', msExit);
 $('#btn-filter')?.addEventListener('click', openFilterPanel);
 $('#btn-cat-manage')?.addEventListener('click', openCatManageModal);
 $('#btn-sort')?.addEventListener('click', openSortPanel);
-// v3.4.2 工具栏溢出菜单：⋯ 开关 + 点击外部关闭（菜单内按钮沿用原 id 绑定不重写）
-$('#btn-toolbar-more')?.addEventListener('click', (e) => {
-  e.stopPropagation();
-  $('#toolbar-more-menu')?.classList.toggle('hidden');
-});
-document.addEventListener('click', (e) => {
-  const m = $('#toolbar-more-menu');
-  if (m && !m.classList.contains('hidden') && !e.target.closest('.tb-more-wrap')) m.classList.add('hidden');
-});
+// v3.4.3：⋯ 溢出菜单已随三排布局移除（按钮平铺，无需开关逻辑）
 $('#btn-manual-add').addEventListener('click', () => {
   openManualAddModal();
   window.scrollTo({ top: 0, behavior: 'smooth' });
