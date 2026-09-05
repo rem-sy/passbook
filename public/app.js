@@ -476,7 +476,9 @@ const LocalStore = {
       where.push(`(owner LIKE ? ESCAPE '\\' OR account LIKE ? ESCAPE '\\' OR url LIKE ? ESCAPE '\\' OR category LIKE ? ESCAPE '\\' OR note LIKE ? ESCAPE '\\')`);
       params.push(like, like, like, like, like);
     }
-    if (category) { where.push('category = ?'); params.push(category); }
+    // v3.4.0：多分类——逗号边界精确匹配（'个人' 不会误命中 '个人理财'）；
+    // 旧单值数据天然兼容（'工作' ↔ ',工作,'）
+    if (category) { where.push("(',' || category || ',') LIKE ? ESCAPE '\\'"); params.push('%,' + escLike(String(category)) + ',%'); }
     if (favOnly) where.push('fav = 1'); // 收藏筛选（v2.7.0）
     let order = 'updated_at DESC, id DESC';
     if (sort === 'created') order = 'created_at DESC, id DESC';
@@ -795,6 +797,11 @@ const state = {
   categories: [],
   total: 0,
   currentGenPw: '',
+  // v3.4.0：多分类体系
+  filterCats: [],      // 漏斗多分类筛选（额外维度，与侧栏单分类叠加）
+  filterMode: 'any',   // 'any' | 'all' | 'exclude'
+  multiSelect: false,  // 列表多选模式
+  selectedIds: new Set(),
 };
 
 /** 字母头像颜色：按文本 hash 取 HSL（v2.7.0 favicon 回退） */
@@ -941,7 +948,9 @@ async function refreshList() {
     const pq = (window.PassSearch || { parseQuery: (q) => ({ terms: q ? [q.toLowerCase()] : [], filters: {}, unknown: [] }) }).parseQuery(state.q);
     const advanced = pq.terms.length > 1 || Object.keys(pq.filters).length > 0 || (pq.unknown && pq.unknown.length);
     const serverQ = advanced ? '' : (pq.terms[0] || '');
-    const { items, total } = await store.list({ q: serverQ, category: state.category, sort: state.sort, favOnly: state.favOnly });
+    // v3.4.0：分类筛选改在客户端做（catSplit 集合包含）——本地库多分类条目
+    // 不再依赖 SQL 侧过滤，远程模式的旧服务端精确匹配也不再漏多分类条目
+    const { items, total } = await store.list({ q: serverQ, category: '', sort: state.sort, favOnly: state.favOnly });
     state.total = total;
 
     let shown = items, hitsMap = null;
@@ -953,10 +962,19 @@ async function refreshList() {
         for (const r of res) hitsMap[r.entry.id] = r.fields;
       }
     }
+    // v3.4.0：侧栏单分类（二级筛选）= 集合包含（大小写不敏感）
+    if (state.category) {
+      const k = state.category.toLowerCase();
+      shown = shown.filter((it) => PassSearch.catSplit(it.category).some((c) => c.toLowerCase() === k));
+    }
+    // v3.4.0：漏斗多分类筛选（any/all/exclude），与侧栏分类、收藏叠加
+    if (state.filterCats && state.filterCats.length) {
+      shown = PassSearch.catFilter(shown, state.filterCats, state.filterMode || 'any');
+    }
     // 收藏置顶（v2.7.0）：稳定排序保持既有相对顺序（服务端已排过的这里保持一致）
     shown = [...shown].sort((a, b) => (b.fav ? 1 : 0) - (a.fav ? 1 : 0));
     renderEntries(shown, hitsMap);
-    const filtered = state.q && shown.length !== total ? `${shown.length}/` : '';
+    const filtered = (state.q || (state.filterCats && state.filterCats.length) || state.category) && shown.length !== total ? `${shown.length}/` : '';
     $('#count').textContent = `共 ${filtered}${total} 条`;
     $('#empty-state').classList.toggle('hidden', shown.length > 0);
     // 附件计数徽标（v2.4.0，失败静默——旧服务端无该接口）
@@ -990,7 +1008,8 @@ function renderEntries(items, hitsMap) {
     const url = it.url ? `<a class="entry-url" href="${escapeHtml(it.url)}" target="_blank" rel="noopener noreferrer">${hl('url', it.id, it.url)}</a>` : '';
     const note = it.note ? `<div class="entry-note">${hl('note', it.id, it.note)}</div>` : '';
     return `
-      <div class="entry" data-id="${it.id}">
+      <div class="entry ${state.multiSelect ? 'ms-mode' : ''} ${state.selectedIds.has(it.id) ? 'ms-checked' : ''}" data-id="${it.id}">
+        ${state.multiSelect ? `<span class="ms-check" title="勾选/取消">${state.selectedIds.has(it.id) ? '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ''}</span>` : ''}
         <div class="entry-top">
           ${faviconSlot(it)}
           <div class="entry-main">
@@ -1083,6 +1102,29 @@ setInterval(async () => {
 }, 1000);
 
 $('#entry-list').addEventListener('click', async (e) => {
+  // v3.4.0 多选：多选模式下点卡片任意处（除操作按钮/链接）=切换勾选；
+  // 桌面 ctrl/cmd+点击卡片可直接把单张加入多选（自动进入多选模式）
+  const card0 = e.target.closest('.entry');
+  if (card0 && !e.target.closest('button[data-act]') && !e.target.closest('a')) {
+    if (state.multiSelect) {
+      const id = Number(card0.dataset.id);
+      if (state.selectedIds.has(id)) state.selectedIds.delete(id); else state.selectedIds.add(id);
+      card0.classList.toggle('ms-checked', state.selectedIds.has(id));
+      card0.querySelector('.ms-check').innerHTML = state.selectedIds.has(id)
+        ? '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>'
+        : '';
+      msUpdateBar();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && !e.target.closest('input,textarea')) {
+      state.multiSelect = true;
+      state.selectedIds = new Set([Number(card0.dataset.id)]);
+      $('#btn-multiselect')?.classList.add('active');
+      refreshList();
+      msUpdateBar();
+      return;
+    }
+  }
   const btn = e.target.closest('button[data-act]');
   if (!btn) return;
   const card = btn.closest('.entry');
@@ -1140,6 +1182,253 @@ $('#entry-list').addEventListener('click', async (e) => {
     }
   }
 });
+
+/* ---------------- 多选模式 + 批量操作（v3.4.0）---------------- */
+function msUpdateBar() {
+  const bar = $('#ms-bar');
+  if (!bar) return;
+  bar.classList.toggle('hidden', !state.multiSelect);
+  const n = state.selectedIds.size;
+  $('#ms-count').textContent = `已选 ${n} 项`;
+  $('#ms-select-all').textContent = n && n === state.total ? '取消全选' : '全选';
+}
+function msEnter() {
+  state.multiSelect = true;
+  state.selectedIds = new Set();
+  $('#btn-multiselect')?.classList.add('active');
+  refreshList();
+  msUpdateBar();
+}
+function msExit() {
+  state.multiSelect = false;
+  state.selectedIds = new Set();
+  $('#btn-multiselect')?.classList.remove('active');
+  refreshList();
+  msUpdateBar();
+}
+/** 取当前列表全量 id（用于全选）：直接拉当前筛选下的条目 */
+async function msCurrentIds() {
+  const { items } = await store.list({ q: '', category: '', sort: state.sort, favOnly: state.favOnly });
+  let arr = items;
+  if (state.category) {
+    const k = state.category.toLowerCase();
+    arr = arr.filter((it) => PassSearch.catSplit(it.category).some((c) => c.toLowerCase() === k));
+  }
+  if (state.filterCats && state.filterCats.length) arr = PassSearch.catFilter(arr, state.filterCats, state.filterMode || 'any');
+  return arr.map((it) => it.id);
+}
+/** 全部分类 → 计数（catSplit 统计，v3.4.0） */
+async function allCatCounts() {
+  const { items } = await store.list({ q: '', category: '' });
+  const m = new Map();
+  for (const it of items) for (const c of PassSearch.catSplit(it.category)) m.set(c, (m.get(c) || 0) + 1);
+  return m;
+}
+/** 批量加/移除分类弹窗（op='add'|'remove'） */
+async function openBatchCatModal(op) {
+  if (!state.selectedIds.size) return toast('请先勾选条目', true);
+  const counts = await allCatCounts();
+  const isAdd = op === 'add';
+  const rows = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([c, n]) => `
+    <label class="bcat-row"><input type="checkbox" value="${escapeHtml(c)}" /> ${escapeHtml(c)} <span class="hint">（${n} 条）</span></label>`).join('');
+  const close = openOverlayModal(`
+    <div class="modal-head"><h3>批量${isAdd ? '加' : '移除'}分类（已选 ${state.selectedIds.size} 项）</h3></div>
+    <div class="modal-body">
+      ${rows ? `<div class="bcat-list">${rows}</div>` : '<p class="hint">暂无既有分类。</p>'}
+      ${isAdd ? `<div class="field" style="margin-top:10px"><span>新建分类（可选，逗号分隔可多个）</span><input id="bcat-new" placeholder="如：工作, 个人" /></div>` : ''}
+      <p class="hint">${isAdd ? '勾选/输入的分类会追加到所选条目（去重）。' : '勾选的分类会从所选条目移除（仅摘标签，不删密码）。'}</p>
+    </div>
+    <div class="modal-foot"><button class="btn" data-close>取消</button><button class="btn primary" id="bcat-ok">确定</button></div>
+  `);
+  $('#bcat-ok').addEventListener('click', async (ev) => {
+    const btn = ev.currentTarget;
+    const picked = [...document.querySelectorAll('.bcat-row input:checked')].map((i) => i.value);
+    const news = PassSearch.catSplit(($('#bcat-new')?.value || ''));
+    const cats = [...new Set([...picked, ...news])];
+    if (!cats.length) return toast('请先勾选或输入分类', true);
+    if (btn.dataset.c1 === '1') { /* 二次点击执行 */ }
+    else {
+      btn.dataset.c1 = '1'; btn.textContent = `再点一次${isAdd ? '追加' : '移除'}（${cats.join('、')}）`; btn.classList.add('danger');
+      btn.dataset.tm = String(setTimeout(() => { delete btn.dataset.c1; btn.textContent = '确定'; btn.classList.remove('danger'); }, 3000));
+      return;
+    }
+    clearTimeout(Number(btn.dataset.tm || 0));
+    btn.disabled = true; btn.textContent = '处理中…';
+    try {
+      const all = (await store.list({})).items;
+      let n = 0;
+      for (const it of all) {
+        if (!state.selectedIds.has(it.id)) continue;
+        const next = PassSearch.catApply(it.category, cats, op);
+        if (next === it.category) continue;
+        await store.update(it.id, { ...it, category: next });
+        n++;
+      }
+      close();
+      toast(`已${isAdd ? '追加' : '移除'}分类：${cats.join('、')}（${n} 条变更）`);
+      refreshSidebar();
+      await refreshList();
+    } catch (e) { toast(e.message, true); btn.disabled = false; btn.textContent = '确定'; }
+  });
+}
+/** 批量删除（两步确认） */
+async function batchDelete() {
+  if (!state.selectedIds.size) return toast('请先勾选条目', true);
+  const ids = [...state.selectedIds];
+  const btn = $('#ms-del');
+  if (btn.dataset.c1 === '1') {
+    clearTimeout(Number(btn.dataset.tm || 0));
+    delete btn.dataset.c1; btn.textContent = '批量删除'; btn.classList.remove('danger');
+    let n = 0;
+    for (const id of ids) { try { await store.remove(id); n++; } catch { /* 单条失败继续 */ } }
+    toast(`已删除 ${n} 项`);
+    refreshSidebar();
+    await refreshList();
+  } else {
+    btn.dataset.c1 = '1'; btn.textContent = `再点一次删除（${ids.length} 项）`; btn.classList.add('danger');
+    btn.dataset.tm = String(setTimeout(() => { delete btn.dataset.c1; btn.textContent = '批量删除'; btn.classList.remove('danger'); }, 3000));
+  }
+}
+
+/* ---------------- 分类管理（v3.4.0）---------------- */
+async function openCatManageModal() {
+  const counts = await allCatCounts();
+  if (!counts.size) return toast('暂无分类', true);
+  const close = openOverlayModal(`
+    <div class="modal-head"><h3>管理分类</h3></div>
+    <div class="modal-body">
+      <div class="cman-list">
+        ${[...counts.entries()].sort((a, b) => b[1] - a[1]).map(([c, n]) => `
+          <div class="cman-row" data-cat="${escapeHtml(c)}">
+            <span class="cman-name">${escapeHtml(c)}</span><span class="hint">${n} 条</span>
+            <span class="cman-ops">
+              <button class="btn ghost small" data-cman="rename">重命名</button>
+              <button class="btn ghost small" data-cman="merge">合并到…</button>
+              <button class="btn ghost small danger-text" data-cman="del">删除</button>
+            </span>
+          </div>`).join('')}
+      </div>
+      <p class="hint" style="margin-top:10px">重命名/合并/删除只改条目上的分类标签，不动密码本身。</p>
+    </div>
+    <div class="modal-foot"><button class="btn primary" data-close>关闭</button></div>
+  `);
+  const applyTo = async (fn) => {
+    const all = (await store.list({})).items;
+    let n = 0;
+    for (const it of all) {
+      const next = fn(it);
+      if (next === null) continue; // 未命中
+      await store.update(it.id, { ...it, category: next });
+      n++;
+    }
+    return n;
+  };
+  document.querySelector('.cman-list').addEventListener('click', async (ev) => {
+    const b = ev.target.closest('button[data-cman]');
+    if (!b) return;
+    const row = b.closest('.cman-row');
+    const cat = row.dataset.cat;
+    const others = [...counts.keys()].filter((c) => c !== cat);
+    if (b.dataset.c1 === '1') { /* 第二步执行 */ }
+    else if (b.dataset.cman === 'del') {
+      b.dataset.c1 = '1'; b.textContent = '再点一次删除'; b.classList.add('danger');
+      b.dataset.tm = String(setTimeout(() => { delete b.dataset.c1; b.textContent = '删除'; b.classList.remove('danger'); }, 3000));
+      return;
+    }
+    try {
+      if (b.dataset.cman === 'rename') {
+        const nn = prompt(`把分类「${cat}」重命名为：`, cat);
+        if (!nn || nn.trim() === cat) return;
+        const t = nn.trim();
+        const conflict = (await allCatCounts()).has(t);
+        if (conflict && !confirm(`已存在分类「${t}」，重命名将把两者合并为「${t}」，继续？`)) return;
+        const n = await applyTo((it) => {
+          const arr = PassSearch.catSplit(it.category);
+          if (!arr.includes(cat)) return null;
+          const merged = arr.map((c) => (c === cat ? t : c));
+          return PassSearch.catJoin(merged);
+        });
+        toast(`已重命名「${cat}」→「${t}」（${n} 条）`);
+      } else if (b.dataset.cman === 'merge') {
+        if (!others.length) return toast('没有其他分类可合并', true);
+        const target = prompt(`把分类「${cat}」合并到哪个分类？\n可选：${others.join('、')}`, others[0]);
+        if (!target || !others.includes(target.trim())) return;
+        const t = target.trim();
+        const n = await applyTo((it) => {
+          const arr = PassSearch.catSplit(it.category);
+          if (!arr.includes(cat)) return null;
+          return PassSearch.catJoin([...arr.filter((c) => c !== cat), t]);
+        });
+        toast(`已合并「${cat}」→「${t}」（${n} 条）`);
+      } else if (b.dataset.cman === 'del') {
+        clearTimeout(Number(b.dataset.tm || 0));
+        delete b.dataset.c1;
+        const n = await applyTo((it) => {
+          const arr = PassSearch.catSplit(it.category);
+          if (!arr.includes(cat)) return null;
+          return PassSearch.catJoin(arr.filter((c) => c !== cat));
+        });
+        toast(`已删除分类「${cat}」（${n} 条摘除标签）`);
+      }
+      close();
+      refreshSidebar();
+      await refreshList();
+    } catch (e) { toast(e.message, true); }
+  });
+}
+
+/* ---------------- 漏斗筛选（v3.4.0）---------------- */
+function filterChipRender() {
+  const chip = $('#filter-chip');
+  if (!chip) return;
+  const on = state.filterCats && state.filterCats.length;
+  $('#btn-filter')?.classList.toggle('active', !!on);
+  chip.classList.toggle('hidden', !on);
+  if (!on) return;
+  const modeTxt = state.filterMode === 'all' ? '全部' : state.filterMode === 'exclude' ? '排除' : '任一';
+  chip.innerHTML = `分类: ${escapeHtml(state.filterCats.join(', '))}（${modeTxt}）<button id="filter-clear" title="清除筛选">×</button>`;
+  $('#filter-clear').addEventListener('click', () => {
+    state.filterCats = [];
+    state.filterMode = 'any';
+    filterChipRender();
+    refreshList();
+  });
+}
+function openFilterPanel() {
+  const counts = allCatCounts();
+  counts.then((m) => {
+    const cats = [...m.keys()];
+    const close = openOverlayModal(`
+      <div class="modal-head"><h3>分类筛选</h3></div>
+      <div class="modal-body">
+        ${cats.length ? `<div class="bcat-list">${cats.sort((a, b) => m.get(b) - m.get(a)).map((c) => `
+          <label class="bcat-row"><input type="checkbox" value="${escapeHtml(c)}" ${state.filterCats.includes(c) ? 'checked' : ''} /> ${escapeHtml(c)} <span class="hint">（${m.get(c)} 条）</span></label>`).join('')}</div>` : '<p class="hint">暂无分类。</p>'}
+        <div class="field" style="margin-top:12px"><span>匹配模式</span>
+          <div class="chk-group">
+            <label><input type="radio" name="fmode" value="any" ${state.filterMode === 'any' ? 'checked' : ''} /> 包含任一</label>
+            <label><input type="radio" name="fmode" value="all" ${state.filterMode === 'all' ? 'checked' : ''} /> 包含全部</label>
+            <label><input type="radio" name="fmode" value="exclude" ${state.filterMode === 'exclude' ? 'checked' : ''} /> 排除所选</label>
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="filter-reset">清空</button>
+        <button class="btn primary" data-close>取消</button>
+        <button class="btn primary" id="filter-ok">应用</button>
+      </div>
+    `);
+    $('#filter-reset').addEventListener('click', () => {
+      state.filterCats = []; state.filterMode = 'any';
+      filterChipRender(); refreshList(); close();
+    });
+    $('#filter-ok').addEventListener('click', () => {
+      state.filterCats = [...document.querySelectorAll('.bcat-row input:checked')].map((i) => i.value);
+      const r = document.querySelector('input[name="fmode"]:checked');
+      state.filterMode = r ? r.value : 'any';
+      filterChipRender(); refreshList(); close();
+    });
+  });
+}
 
 async function copyText(text) {
   try {
@@ -1211,16 +1500,22 @@ async function refreshChips() { return refreshSidebar(); } // 旧调用点兼容
 
 let _favCount = 0, _allCount = null, _favCatCounts = {}; // v3.3.5：全部计数独立统计；v3.3.6：收藏上下文的分类计数（二级筛选）
 async function refreshSidebar() {
-  let cats = [];
-  try { cats = (await store.categories()).items || []; } catch { cats = []; }
-  state.categories = cats;
+  // v3.4.0：分类列表与计数改由 catSplit 统计（多分类条目在每个分类下都计数）
+  state.categories = [];
   _favCatCounts = {};
+  const allCatMap = new Map();
   try {
     const rf = await store.list({ favOnly: true });
     _favCount = rf.items.length;
-    rf.items.forEach((it) => { const k = it.category || '未分类'; _favCatCounts[k] = (_favCatCounts[k] || 0) + 1; });
+    rf.items.forEach((it) => { for (const k of PassSearch.catSplit(it.category)) _favCatCounts[k] = (_favCatCounts[k] || 0) + 1; });
   } catch { _favCount = 0; }
-  try { const ra = await store.list({}); _allCount = (ra.total != null) ? ra.total : ra.items.length; } catch { /* 保留旧值 */ }
+  try {
+    const ra = await store.list({});
+    _allCount = (ra.total != null) ? ra.total : ra.items.length;
+    for (const it of ra.items) for (const c of PassSearch.catSplit(it.category)) allCatMap.set(c, (allCatMap.get(c) || 0) + 1);
+  } catch { /* 保留旧值 */ }
+  state.categories = [...allCatMap.keys()];
+  const cats = [...allCatMap.entries()].sort((a, b) => b[1] - a[1]);
   const box = $('#sidebar-nav');
   if (!box) return;
   const allActive = state.category === '' && !state.favOnly;
@@ -1228,13 +1523,17 @@ async function refreshSidebar() {
     <button class="side-item ${allActive ? 'active' : ''}" data-side="all"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg><span>全部</span><em>${_allCount ?? ''}</em></button>
     <button class="side-item ${state.favOnly ? 'active' : ''}" data-side="fav">${ICONS.starFill}<span>收藏</span><em>${_favCount || ''}</em></button>
     <div class="side-sep"></div>
-    ${cats.map((c) => `<button class="side-item ${state.category === c.category ? 'active' : ''}" data-side="cat" data-cat="${escapeHtml(c.category)}"><span class="side-dot" style="background:hsl(${avatarHue(c.category)} 60% 55%)"></span><span class="side-name" title="${escapeHtml(c.category)}">${escapeHtml(c.category)}</span><em>${state.favOnly ? (_favCatCounts[c.category] || 0) : c.count}</em></button>`).join('')}
+    ${cats.map(([c, n]) => `<button class="side-item ${state.category === c ? 'active' : ''}" data-side="cat" data-cat="${escapeHtml(c)}"><span class="side-dot" style="background:hsl(${avatarHue(c)} 60% 55%)"></span><span class="side-name" title="${escapeHtml(c)}">${escapeHtml(c)}</span><em>${state.favOnly ? (_favCatCounts[c] || 0) : n}</em></button>`).join('')}
+    ${cats.length ? `<div class="side-sep"></div>
+    <button class="side-item" data-side="manage" id="btn-cat-manage"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg><span>管理分类</span></button>` : ''}
   `;
+  $('#btn-cat-manage')?.addEventListener('click', openCatManageModal);
 }
 $('#sidebar-nav')?.addEventListener('click', (e) => {
   const item = e.target.closest('[data-side]');
   if (!item) return;
   const side = item.dataset.side;
+  if (side === 'manage') return; // v3.4.0：管理分类按钮有自己的监听
   if (side === 'all') { state.category = ''; state.favOnly = false; }
   else if (side === 'fav') { state.category = ''; state.favOnly = true; }
   else { state.category = item.dataset.cat || ''; /* v3.3.6：保持 favOnly——收藏模式下点分类=收藏∩分类（二级筛选） */ }
@@ -1394,6 +1693,21 @@ $('#btn-gen-open').addEventListener('click', () => {
   showGenPanel();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 });
+// v3.4.0：多选 + 漏斗 + 分类管理
+$('#btn-multiselect')?.addEventListener('click', () => (state.multiSelect ? msExit() : msEnter()));
+$('#ms-select-all')?.addEventListener('click', async () => {
+  const ids = await msCurrentIds();
+  const allOn = ids.length && ids.every((i) => state.selectedIds.has(i));
+  state.selectedIds = allOn ? new Set() : new Set(ids);
+  await refreshList();
+  msUpdateBar();
+});
+$('#ms-add-cat')?.addEventListener('click', () => openBatchCatModal('add'));
+$('#ms-remove-cat')?.addEventListener('click', () => openBatchCatModal('remove'));
+$('#ms-del')?.addEventListener('click', batchDelete);
+$('#ms-exit')?.addEventListener('click', msExit);
+$('#btn-filter')?.addEventListener('click', openFilterPanel);
+$('#btn-cat-manage')?.addEventListener('click', openCatManageModal);
 $('#btn-manual-add').addEventListener('click', () => {
   openManualAddModal();
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1503,7 +1817,7 @@ function openEditModal(item = null, prefillPw = '') {
       </label>
       <div class="form-row">
         <label class="field"><span>分类（可选）</span>
-          <input id="f-category" placeholder="如：工作 / 个人 / 邮箱" value="${escapeHtml(v('category'))}" />
+          <input id="f-category" placeholder="如：工作, 个人（可多分类，逗号分隔）" value="${escapeHtml(v('category'))}" />
           <datalist id="dl-category"></datalist>
         </label>
         <label class="field"><span>网址（可选）</span>
@@ -1533,7 +1847,8 @@ function openEditModal(item = null, prefillPw = '') {
   (async () => {
     const all = await store.list({});
     const so = new Set(), sa = new Set(), sc = new Set();
-    for (const x of all.items) { if (x.owner) so.add(x.owner); if (x.account) sa.add(x.account); if (x.category) sc.add(x.category); }
+    // v3.4.0：分类建议源按 catSplit 拆分去重（多分类条目贡献多个候选）
+    for (const x of all.items) { if (x.owner) so.add(x.owner); if (x.account) sa.add(x.account); for (const c of PassSearch.catSplit(x.category)) sc.add(c); }
     attachSuggest($('#f-owner'), () => [...so]);
     attachSuggest($('#f-account'), () => [...sa]);
     attachSuggest($('#f-category'), () => [...sc]);
@@ -1768,7 +2083,7 @@ function openManualAddModal() {
       </label>
       <div class="form-row">
         <label class="field"><span>分类（可选）</span>
-          <input id="mf-category" placeholder="如：工作 / 个人 / 邮箱" />
+          <input id="mf-category" placeholder="如：工作, 个人（可多分类，逗号分隔）" />
           <datalist id="dl-mf-category"></datalist>
         </label>
         <label class="field"><span>网址（可选）</span>
@@ -1791,7 +2106,7 @@ function openManualAddModal() {
   (async () => {
     const all = await store.list({});
     const so = new Set(), sa = new Set(), sc = new Set();
-    for (const x of all.items) { if (x.owner) so.add(x.owner); if (x.account) sa.add(x.account); if (x.category) sc.add(x.category); }
+    for (const x of all.items) { if (x.owner) so.add(x.owner); if (x.account) sa.add(x.account); for (const c of PassSearch.catSplit(x.category)) sc.add(c); }
     attachSuggest($('#mf-owner'), () => [...so]);
     attachSuggest($('#mf-account'), () => [...sa]);
     attachSuggest($('#mf-category'), () => [...sc]);

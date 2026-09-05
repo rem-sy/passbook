@@ -149,11 +149,19 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
           <input id="search" type="search" placeholder="搜索：多词模糊匹配，支持 分类:工作、有验证码、无验证码" autocomplete="off" />
         </div>
+        <button id="btn-filter" class="btn" title="分类筛选（多选 + 任一/全部/排除）">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+          筛选
+        </button>
         <select id="sort" class="sort-select" title="排序">
           <option value="updated">最近更新</option>
           <option value="created">最近创建</option>
           <option value="owner">按所属</option>
         </select>
+        <button id="btn-multiselect" class="btn" title="多选批量操作（桌面可 Ctrl+点击卡片）">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          多选
+        </button>
         <button id="btn-gen-open" class="btn primary">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
           生成密码
@@ -169,7 +177,20 @@
           体检
         </button>
       </div>
+      <div id="filter-chip" class="filter-chip hidden"></div>
     </section>
+
+    <!-- 多选操作条（v3.4.0） -->
+    <div id="ms-bar" class="ms-bar hidden">
+      <span id="ms-count">已选 0 项</span>
+      <div class="ms-actions">
+        <button id="ms-select-all" class="btn ghost small">全选</button>
+        <button id="ms-add-cat" class="btn ghost small">批量加分类</button>
+        <button id="ms-remove-cat" class="btn ghost small">批量移除分类</button>
+        <button id="ms-del" class="btn ghost small">批量删除</button>
+        <button id="ms-exit" class="btn small">退出</button>
+      </div>
+    </div>
 
     <!-- 安全体检面板 -->
     <section id="watchtower-panel" class="card hidden">

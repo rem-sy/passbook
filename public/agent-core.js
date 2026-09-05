@@ -31,7 +31,7 @@
             account: { type: 'string', description: '账户：用户名/邮箱/手机号' },
             password: { type: 'string', description: '密码明文' },
             url: { type: 'string', description: '网址（可选）' },
-            category: { type: 'string', description: '分类（可选），如：工作/个人/邮箱' },
+            category: { type: 'string', description: '分类（可选，条目可属于多个分类、逗号分隔，如：工作, 个人）' },
             note: { type: 'string', description: '备注·记忆关键词（可选），记用户提到的帮助回忆的信息' },
           },
           required: ['owner', 'account', 'password'],

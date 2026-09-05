@@ -101,8 +101,9 @@
     if (!entry) return null;
     if (filters) {
       if (filters.category != null) {
-        var cat = String(entry.category || '').toLowerCase();
-        if (cat !== filters.category) return null;
+        // v3.4.0：多分类——命中的是集合中任一分类（大小写不敏感），不再整串精确比较
+        var cats = catSplit(entry.category).map(function (c) { return c.toLowerCase(); });
+        if (cats.indexOf(filters.category) < 0) return null;
       }
       if (filters.hasTotp != null) {
         var has = !!entry.totp_secret;
@@ -205,6 +206,50 @@
     } catch (e) { return ''; }
   }
 
+  /* ---------- 多分类体系（v3.4.0）----------
+   * category 列存逗号分隔多值（如 "个人,工作"）；旧单值天然兼容。 */
+  /** 拆分分类串 → 去空格、去空、去重（保序）数组；catSplit('工作, 个人,,工作') → ['工作','个人'] */
+  function catSplit(s) {
+    var out = [], seen = {};
+    var arr = String(s == null ? '' : s).split(/[,，]/);
+    for (var i = 0; i < arr.length; i++) {
+      var t = arr[i].trim();
+      if (!t || seen[t]) continue;
+      seen[t] = 1;
+      out.push(t);
+    }
+    return out;
+  }
+  /** 数组 → 规范逗号串（同样去空去重保序）；catJoin([]) → '' */
+  function catJoin(arr) {
+    return catSplit(Array.isArray(arr) ? arr.join(',') : arr).join(',');
+  }
+  /** 条目集合过滤：mode='any'（含任一）| 'all'（含全部）| 'exclude'（都不含）；大小写不敏感 */
+  function catFilter(items, cats, mode) {
+    var want = (cats || []).map(function (c) { return String(c || '').trim().toLowerCase(); }).filter(Boolean);
+    if (!want.length) return items || [];
+    return (items || []).filter(function (it) {
+      var set = catSplit(it.category).map(function (c) { return c.toLowerCase(); });
+      var hit = want.filter(function (w) { return set.indexOf(w) >= 0; }).length;
+      if (mode === 'all') return hit === want.length;
+      if (mode === 'exclude') return hit === 0;
+      return hit > 0; // any
+    });
+  }
+  /** 批量标签运算：oldStr 应用 add/remove 后的新串（纯函数） */
+  function catApply(oldStr, cats, op) {
+    var cur = catSplit(oldStr);
+    var delta = catSplit(Array.isArray(cats) ? cats.join(',') : cats);
+    var set = {}, out = [];
+    var src = op === 'remove' ? cur.filter(function (c) { return delta.map(function (d) { return d; }).indexOf(c) < 0; }) : cur.concat(delta);
+    for (var i = 0; i < src.length; i++) {
+      if (set[src[i]]) continue;
+      set[src[i]] = 1;
+      out.push(src[i]);
+    }
+    return out.join(',');
+  }
+
   return {
     parseQuery: parseQuery,
     fuzzyMatch: fuzzyMatch,
@@ -214,5 +259,9 @@
     highlightHtml: highlightHtml,
     normalizeRanges: normalizeRanges,
     extractDomain: extractDomain,
+    catSplit: catSplit,
+    catJoin: catJoin,
+    catFilter: catFilter,
+    catApply: catApply,
   };
 });
