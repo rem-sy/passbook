@@ -1188,6 +1188,8 @@ function msUpdateBar() {
   const bar = $('#ms-bar');
   if (!bar) return;
   bar.classList.toggle('hidden', !state.multiSelect);
+  // v3.4.1：多选时给列表底部让出操作台高度，最后一张卡片不再被挡
+  document.body.classList.toggle('ms-on', state.multiSelect);
   const n = state.selectedIds.size;
   $('#ms-count').textContent = `已选 ${n} 项`;
   $('#ms-select-all').textContent = n && n === state.total ? '取消全选' : '全选';
