@@ -1662,7 +1662,9 @@ function openEditModal(item = null, prefillPw = '') {
     if (!entry.owner || !entry.account) return toast('所属和账户不能为空', true);
     if (!entry.password) return toast('密码不能为空', true);
     // v3.3.8：覆盖已有 TOTP 需二次确认（两步模式，参照重新生成按钮）——旧密钥非空
-    // 且新密钥不同时，第一次点击进入确认态，2.6 秒内再点才真正覆盖保存
+    // 且新密钥不同时，第一次点击进入确认态，窗口内再点才真正覆盖保存。
+    // v3.3.9：不再弹 toast——toast 会遮挡弹窗底部 删除/取消/保存 按钮；
+    // 按钮变红改文案本身就是反馈，确认窗放宽到 4 秒
     const btn = ev.currentTarget;
     if (!isNew && item.totp_secret && entry.totp_secret && entry.totp_secret !== item.totp_secret) {
       if (btn.dataset.tconfirm !== '1') {
@@ -1671,8 +1673,7 @@ function openEditModal(item = null, prefillPw = '') {
         btn.dataset.oldTxt = old;
         btn.textContent = '再点一次覆盖 TOTP';
         btn.classList.add('danger');
-        btn.dataset.tm = String(setTimeout(() => { delete btn.dataset.tconfirm; btn.textContent = old; btn.classList.remove('danger'); }, 2600));
-        toast('TOTP 密钥已变化：再次点击保存以覆盖', true);
+        btn.dataset.tm = String(setTimeout(() => { delete btn.dataset.tconfirm; btn.textContent = old; btn.classList.remove('danger'); }, 4000));
         return;
       }
       clearTimeout(Number(btn.dataset.tm || 0));
