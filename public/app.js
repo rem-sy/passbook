@@ -115,6 +115,7 @@ function openModal(html, wide = false) {
     if (e.target === e.currentTarget) closeModal();
   });
   root.querySelector('.modal-close')?.addEventListener('click', closeModal);
+  root.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closeModal)); // v3.3.3：统一关闭约定（TOTP 说明「我知道了」此前无监听）
 }
 function closeModal() {
   $('#modal-root').innerHTML = '';
