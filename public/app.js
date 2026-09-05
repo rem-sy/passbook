@@ -13,6 +13,7 @@ const $$ = (sel) => [...document.querySelectorAll(sel)];
 
 /* 线条图标（Lucide 风格，stroke=currentColor） */
 const ICONS = {
+  qr: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM21 14h.01M14 21h.01M17.5 17.5h.01M21 21h.01"/></svg>',
   eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>',
   eyeOff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>',
   copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>',
@@ -1046,7 +1047,8 @@ function renderEntries(items, hitsMap) {
             <span class="entry-time">${fmtTime(it.updated_at)}</span>
             <div class="entry-ops">
               ${parseHistory(it.history).length ? `<button data-act="history" title="密码历史">${ICONS.history}</button>` : ''}
-              <button data-act="edit" title="编辑">${ICONS.edit}</button>
+              <button data-act="qr" title="二维码">${ICONS.qr}</button>
+<button data-act="edit" title="编辑">${ICONS.edit}</button>
               <button data-act="del" class="del" title="删除">${ICONS.trash}</button>
             </div>
           </div>
@@ -1155,6 +1157,10 @@ $('#entry-list').addEventListener('click', async (e) => {
   } else if (act === 'history') {
     const item = (await store.list({})).items.find((x) => x.id === id);
     if (item) openHistoryModal(item);
+  } else if (act === 'qr') {
+    // v4.0.0：条目 → 二维码（分享/迁移）
+    const item = (await store.list({})).items.find((x) => x.id === id);
+    if (item) openEntryQrModal(item);
   } else if (act === 'fav') {
     // 收藏星标（v2.7.0）：乐观切换 + 重排（收藏置顶）
     const item = (await store.list({})).items.find((x) => x.id === id);
@@ -1889,7 +1895,7 @@ function openEditModal(item = null, prefillPw = '') {
           <button class="btn" id="btn-gen-again" title="用当前生成器设置重新生成">${ICONS.wand}</button>
         </div>
       </label>
-      <label class="field"><span>动态验证码 TOTP（可选）<button class="hint-btn" type="button" data-hint="totp" title="TOTP 使用说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></span>
+      <label class="field"><span>动态验证码 TOTP（可选）<button class="btn totp-scan-btn" type="button" data-totp-scan="1" title="扫码获取 TOTP"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 12h10"/></svg></button><button class="hint-btn" type="button" data-hint="totp" title="TOTP 使用说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></span>
         <input id="f-totp" placeholder="base32 密钥或 otpauth:// 链接，粘贴自动提取" value="${escapeHtml(v('totp_secret'))}" autocomplete="off" spellcheck="false" />
       </label>
       <div class="form-row">
@@ -2155,7 +2161,7 @@ function openManualAddModal() {
           <button class="btn" id="mf-gen" title="用当前生成器设置生成">${ICONS.wand}</button>
         </div>
       </label>
-      <label class="field"><span>动态验证码 TOTP（可选）<button class="hint-btn" type="button" data-hint="totp" title="TOTP 使用说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></span>
+      <label class="field"><span>动态验证码 TOTP（可选）<button class="btn totp-scan-btn" type="button" data-totp-scan="1" title="扫码获取 TOTP"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 12h10"/></svg></button><button class="hint-btn" type="button" data-hint="totp" title="TOTP 使用说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></span>
         <input id="mf-totp" placeholder="base32 密钥或 otpauth:// 链接，粘贴自动提取" autocomplete="off" spellcheck="false" />
       </label>
       <div class="form-row">
@@ -2172,7 +2178,8 @@ function openManualAddModal() {
       </label>
       <div class="hint" id="mf-saved-info"></div>
       <div class="form-actions" id="form-actions">
-        <button class="btn" id="mf-save-continue">保存并继续录入</button>
+        <button class="btn" id="mf-scan-fill">📷 扫码填写</button>
+          <button class="btn" id="mf-save-continue">保存并继续录入</button>
         <button class="btn primary" id="mf-save">保存</button>
       </div>
     </div>
@@ -2270,11 +2277,17 @@ function openImportModal() {
       <div class="import-tabs">
         <button class="btn active" data-tab="paste">粘贴文本</button>
         <button class="btn" data-tab="file">上传文件</button>
+        <button class="btn" data-tab="scan">扫码导入</button>
       </div>
       <div id="tab-paste">
         <label class="field"><span>每行一条：所属,账户,密码[,网址][,备注]（也支持 所属/账户/密码 或 所属 账户 密码）</span>
           <textarea id="import-paste" placeholder="微信,13800000000,P@ssw0rd1&#10;GitHub,user@example.com,Abc12345&#10;网银/张三/XyZ!6789"></textarea>
         </label>
+      </div>
+      <div id="tab-scan" class="hidden">
+        <p class="hint">连续扫描多张二维码：迁移码 / 分享卡片将逐条直接入库（其他类型提示跳过），完成后显示汇总。</p>
+        <button class="btn primary" id="scan-import-start" type="button">开始扫码</button>
+        <div id="scan-import-count" class="hint" style="margin-top:8px"></div>
       </div>
       <div id="tab-file" class="hidden">
         <label class="file-drop" id="file-drop">
@@ -3793,11 +3806,11 @@ function openTotpGuideModal(ownerVal) {
  * 设置弹窗销毁）——自建 overlay 层 append 到 body，z-index 650 高于弹窗；
  * 关闭只移除自身（点遮罩空白/我知道了都关），不压 history 返回栈。
  * TOTP 指南同样走此层。 */
-function openOverlayModal(html, wide = false) {
+function openOverlayModal(html, wide = false, onClose) { // v4.0.0：onClose 关闭回调（扫码层释放相机）
   const mask = document.createElement('div');
   mask.className = 'modal-mask hint-mask';
   mask.innerHTML = `<div class="modal${wide ? ' wide' : ''}">${html}</div>`;
-  const close = () => mask.remove();
+  const close = () => { mask.remove(); if (onClose) try { onClose(); } catch (e) { } };
   mask.addEventListener('click', (e) => { if (e.target === e.currentTarget) close(); });
   mask.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', close));
   mask.querySelector('.modal-close')?.addEventListener('click', close);
@@ -3871,3 +3884,209 @@ document.addEventListener('click', (e) => {
   const h = PB_HINTS[key];
   if (h) openHintModal(h.title, h.body);
 });
+/* ===================== v4.0.0 扫码进出 ===================== */
+/* 依赖：lib/jsQR.js（解码）、lib/qrcode-generator.js（出码）、qr.js（PassQR） */
+
+// 通用扫码浮层：相机取景 + 相册选图；onText(text) 返回 true 且 continuous 时继续扫
+function openScanOverlay(onText, opts = {}) {
+  const continuous = !!opts.continuous;
+  let scanner = null, closed = false;
+  const html = `
+    <div class="modal-head"><h3>${escapeHtml(opts.title || '扫码')}</h3>
+      <button class="modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" x2="19" y1="5" y2="19"/><line x1="19" x2="5" y1="5" y2="19"/></svg></button>
+    </div>
+    <div class="modal-body" style="text-align:center">
+      <div class="scan-frame"><video id="scan-video" autoplay muted playsinline style="width:100%;max-width:340px;border-radius:10px;background:#0b0e14"></video></div>
+      <p class="hint" id="scan-status" style="margin:10px 0">对准二维码（${continuous ? '连续模式：识别一张后自动继续' : '识别后自动回填'}）</p>
+      <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+        <button class="btn" id="scan-album" type="button">相册选图</button>
+        <button class="btn primary" data-close type="button">完成</button>
+      </div>
+      <input type="file" id="scan-file" accept="image/*" class="hidden" />
+    </div>`;
+  const closeIt = openOverlayModal(html, false, () => {
+    closed = true;
+    if (scanner) scanner.stop();
+  });
+  if (closed) return;
+  const handle = async (text) => {
+    if (!text) { toast('未识别到二维码'); return; }
+    const keep = await Promise.resolve(onText(text));
+    if (continuous && !keep && !closed) {
+      // 未入库（跳过）——重启相机继续
+      scanner = PassQR.scanFromVideo($('#scan-video'), handle, (e) => {
+        toast('相机不可用：' + (e && e.name ? e.name : '未知错误'));
+      });
+    }
+  };
+  scanner = PassQR.scanFromVideo($('#scan-video'), handle, (e) => {
+    const msg = e && e.name === 'NotAllowedError' ? '相机权限被拒绝，请在系统设置中允许'
+      : e && e.name === 'NotFoundError' ? '未找到相机设备'
+        : '相机不可用：' + (e && e.name ? e.name : '未知错误');
+    toast(msg);
+  });
+  $('#scan-album').addEventListener('click', () => $('#scan-file').click());
+  $('#scan-file').addEventListener('change', async (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    ev.target.value = '';
+    if (!file) return;
+    const t = await PassQR.scanFromImage(file);
+    if (t) { if (continuous) { await handle(t); } else { closeIt(); await onText(t); } }
+    else toast('图片中未识别到二维码');
+  });
+  return closeIt;
+}
+
+// ① TOTP 扫码录入（手动录入/编辑两处 [data-totp-scan]）
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-totp-scan]');
+  if (!btn) return;
+  const input = btn.closest('label')?.querySelector('input');
+  if (!input) return;
+  openScanOverlay(async (text) => {
+    const r = PassQR.parseQrPayload(text);
+    let fill = '';
+    if (r.level === 'otpauth') {
+      fill = text.trim();
+      // issuer 带回所属（若空）
+      const owner = input.closest('.modal')?.querySelector('#f-owner, #mf-owner');
+      if (owner && !owner.value.trim() && r.totp.issuer) owner.value = r.totp.issuer;
+      toast('已识别 otpauth（签发方 ' + (r.totp.issuer || '未知') + '）');
+    } else if (/^[A-Z2-7 =]{8,}$/i.test(text.trim())) {
+      fill = text.trim();
+      toast('已识别 Base32 密钥');
+    } else {
+      toast('不是 TOTP 二维码（' + levelName(r.level) + '），未回填');
+      return;
+    }
+    input.value = fill;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }, { title: '扫码获取 TOTP' });
+});
+function levelName(l) {
+  return { migrate: '密码本迁移码', share: '分享卡片', otpauth: 'TOTP', url: '网址', text: '纯文本', empty: '空' }[l] || l;
+}
+
+// ② 条目 → 二维码（分享 / 迁移）
+async function openEntryQrModal(item) {
+  let mode = 'share';
+  const render = () => {
+    const text = mode === 'share' ? PassQR.buildShareCard(item) : PassQR.packMigrate(item);
+    const q = PassQR.encodeQR(text, 300);
+    const el = $('#qr-preview');
+    if (el) { el.src = q.dataUrl; el.dataset.payload = text; }
+    const cap = $('#qr-mode-cap');
+    if (cap) cap.textContent = mode === 'share' ? '分享模式：人类可读卡片（含明文密码）' : '迁移模式：PASSBOOK 载荷（全字段，机器可读）';
+  };
+  openOverlayModal(`
+    <div class="modal-head"><h3>条目二维码</h3>
+      <button class="modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" x2="19" y1="5" y2="19"/><line x1="19" x2="5" y1="5" y2="19"/></svg></button>
+    </div>
+    <div class="modal-body" style="text-align:center">
+      <div style="display:flex;gap:8px;justify-content:center;margin-bottom:10px">
+        <button class="btn ${mode === 'share' ? 'primary' : ''}" id="qr-mode-share" type="button">分享模式</button>
+        <button class="btn ${mode === 'migrate' ? 'primary' : ''}" id="qr-mode-migrate" type="button">迁移模式</button>
+      </div>
+      <img id="qr-preview" alt="二维码预览" style="width:280px;height:280px;image-rendering:pixelated;border:1px solid var(--line);border-radius:8px" />
+      <p class="hint" id="qr-mode-cap" style="margin:8px 0"></p>
+      <p class="hint danger-text" style="margin:8px 0">⚠ 明文二维码 = 密码裸奔，请当面扫码、阅后即焚</p>
+      <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+        <button class="btn" id="qr-save" type="button">保存图片</button>
+        <button class="btn" id="qr-copy" type="button">复制图片</button>
+      </div>
+    </div>`, true);
+  render();
+  $('#qr-mode-share').addEventListener('click', () => { mode = 'share'; syncModeBtns(); render(); });
+  $('#qr-mode-migrate').addEventListener('click', () => { mode = 'migrate'; syncModeBtns(); render(); });
+  function syncModeBtns() {
+    $('#qr-mode-share').className = 'btn' + (mode === 'share' ? ' primary' : '');
+    $('#qr-mode-migrate').className = 'btn' + (mode === 'migrate' ? ' primary' : '');
+  }
+  $('#qr-save').addEventListener('click', async () => {
+    try {
+      const dataUrl = $('#qr-preview').src;
+      const bin = atob(dataUrl.split(',')[1]);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const name = 'passbook-qr-' + (item.owner || 'entry').replace(/[\\/:*?"<>|]/g, '_') + '.png';
+      if (window.__passbook_saf) await androidSafSave(bytes, name);
+      else downloadBlob(new Blob([bytes], { type: 'image/png' }), name);
+    } catch (err) { console.error(err); toast('保存失败'); }
+  });
+  $('#qr-copy').addEventListener('click', async () => {
+    try {
+      const blob = await (await fetch($('#qr-preview').src)).blob();
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      toast('图片已复制');
+    } catch { toast('此环境不支持复制图片，请用保存图片'); }
+  });
+}
+
+// ③ 扫码填写（手动录入弹窗，五级识别）
+function bindScanFill() {
+  const btn = $('#mf-scan-fill');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    openScanOverlay(async (text) => {
+      const r = PassQR.parseQrPayload(text);
+      const F = { owner: $('#mf-owner'), account: $('#mf-account'), password: $('#mf-password'), url: $('#mf-url'), note: $('#mf-note'), totp: $('#mf-totp'), cat: $('#mf-category') };
+      const put = (k, v) => { if (F[k] && v != null && String(v).length) F[k].value = v; };
+      if (r.level === 'migrate' || r.level === 'share') {
+        const e = r.entry;
+        put('owner', e.owner); put('account', e.account); put('password', e.password);
+        put('url', e.url); put('note', e.note); put('cat', e.category);
+        put('totp', e.totp_secret);
+        toast('已按' + (r.level === 'migrate' ? '迁移码' : '分享卡片') + '填写全部字段');
+      } else if (r.level === 'otpauth') {
+        put('totp', text.trim());
+        if (!F.owner.value.trim()) put('owner', r.totp.issuer);
+        toast('已识别 TOTP');
+      } else if (r.level === 'url') {
+        put('url', r.url);
+        toast('已填入网址');
+      } else {
+        put('note', ((F.note.value ? F.note.value + '\n' : '') + r.text));
+        toast('纯文本已追加到备注');
+      }
+    }, { title: '扫码填写（迁移码/分享卡片/TOTP/网址/文本）' });
+  });
+}
+
+// ③' 扫码导入（连续，仅迁移码/分享卡片入库）
+function bindScanImport() {
+  const btn = $('#scan-import-start');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    let n = 0;
+    const counter = $('#scan-import-count');
+    counter.textContent = '已导入 0 条';
+    openScanOverlay(async (text) => {
+      const r = PassQR.parseQrPayload(text);
+      if (r.level === 'migrate' || r.level === 'share') {
+        const e = r.entry;
+        await store.create({
+          owner: e.owner || '', account: e.account || '', password: e.password || '',
+          url: e.url || '', category: e.category || '', note: e.note || '',
+          totp_secret: e.totp_secret || '', fav: e.fav || 0,
+        });
+        n++;
+        counter.textContent = '已导入 ' + n + ' 条（最近：' + ((e.owner || '') + ' / ' + (e.account || '')).trim() + '）';
+        toast('已导入：' + (e.owner || e.account || '条目'));
+        await refreshList(); await refreshSidebar();
+      } else {
+        toast(levelName(r.level) + '，跳过（仅支持迁移码/分享卡片）');
+      }
+      return false; // continuous 由浮层自行重启
+    }, { title: '扫码导入（连续）', continuous: true });
+  });
+}
+if (typeof openModal === 'function') {
+  // 手动录入/导入弹窗由 openModal 动态渲染：钩在打开后绑定
+  const _openModalOrig = openModal;
+  openModal = function (html, wide) {
+    const r = _openModalOrig(html, wide);
+    bindScanFill();
+    bindScanImport();
+    return r;
+  };
+}

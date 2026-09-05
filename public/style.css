@@ -1013,3 +1013,8 @@ html.dark .ms-bar { background: #1c202b; box-shadow: 0 -6px 24px rgba(0, 0, 0, 0
   .ms-bar { justify-content: center; }
   .ms-bar #ms-count { width: 100%; text-align: center; }
 }
+
+/* v4.0.0 扫码 */
+.totp-scan-btn { padding: 2px 7px; margin-left: 6px; vertical-align: middle; border-radius: 7px; }
+.scan-frame { display: flex; justify-content: center; background: #0b0e14; border-radius: 12px; padding: 8px; }
+#qr-preview { background: #fff; }

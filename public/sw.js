@@ -1,5 +1,5 @@
 /* 密码本 · Service Worker：离线可用（PWA） */
-const CACHE_NAME = 'passbook-v58';
+const CACHE_NAME = 'passbook-v59';
 const ASSETS = [
   './',
   './index.html',
@@ -20,6 +20,9 @@ const ASSETS = [
   './agent-config.js',
   './lib/sql-wasm.js',
   './lib/sql-wasm.wasm',
+  './lib/jsQR.js',
+  './lib/qrcode-generator.js',
+  './qr.js',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',

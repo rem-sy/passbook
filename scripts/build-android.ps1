@@ -119,9 +119,29 @@ try {
       $rwvSrc = $rwvSrc.Replace($a3, "        // 密码本 v2.6.0/v3.0.5：JS 桥（生物识别 + SAF 另存为）`n        current = this`n        addJavascriptInterface(JsBio(), `"__passbook_bio`")`n        addJavascriptInterface(JsSaf(), `"__passbook_saf`")`n" + $a3)
       $dirty = $true
     }
+    # v4.0.0：摄像头权限桥——WebView onPermissionRequest 对 VIDEO_CAPTURE：grant WebView 请求
+    # + 触发 Android runtime 权限弹窗（requestCode 41028，弹过即不再弹）。幂等锚点：'PbCamGrant'
+    if (-not $rwvSrc.Contains('PbCamGrant')) {
+      $a4 = '        settings.mediaPlaybackRequiresUserGesture = false'
+      $cam = @'
+        // 密码本 v4.0.0：相机权限转发（扫码）PbCamGrant
+        webChromeClient = object : android.webkit.WebChromeClient() {
+            override fun onPermissionRequest(request: android.webkit.PermissionRequest) {
+                if (!request.resources.contains(android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE)) {
+                    request.deny(); return
+                }
+                // WebView 层放行 + 并行触发系统运行时权限（未授权时相机设备本就打不开，用户拒绝则流失败走 onFail）
+                request.grant(request.resources)
+                (context as? android.app.Activity)?.requestPermissions(arrayOf(android.Manifest.permission.CAMERA), 41028)
+            }
+        }
+'@
+      if (-not $rwvSrc.Contains($a4)) { Write-Host '    警告: a4 锚点(mediaPlaybackRequiresUserGesture)未命中，相机权限补丁跳过' }
+      else { $rwvSrc = $rwvSrc.Replace($a4, $a4 + "`n" + $cam); $dirty = $true }
+    }
     if ($dirty) {
       [System.IO.File]::WriteAllText($rwv, $rwvSrc, [System.Text.UTF8Encoding]::new($false))
-      Write-Host '    RustWebView.kt 已补丁（viewport + 生物识别桥 + SAF 保存桥）'
+      Write-Host '    RustWebView.kt 已补丁（viewport + 生物识别桥 + SAF 保存桥 + 相机权限）'
     }
   }
   # APK assets 目录同步一份前端（兜底源；运行时以 .so 内嵌资源为准）
