@@ -890,50 +890,34 @@ function faviconPersistSet(domain, dataUrl) {
   } catch { /* 超配额静默放弃 */ }
 }
 let lastHydration = null; // 最近一次列表水合的 Promise（重试统计要接它）
-async function hydrateFavicons() {
+/* v3.3.1 请求纪律：渲染只读缓存零网络；仅 ①刚导入 ②编辑了网址字段 ③手动重试
+ * 才发起请求，每次至多 3 连试（直连→DDG→直连）。首字母只兜底从未成功过的条目。 */
+const faviconDemand = new Set();
+function pbDomainOf(url) {
+  try { const u = new URL((url || '').includes('://') ? url : 'https://' + url); return u.hostname.replace(/^www\./, ''); } catch { return ''; }
+}
+async function hydrateFavicons(mode = 'cache-only') {
   if (!IS_TAURI) return { ok: 0, fail: 0 };
-  let ok = 0, fail = 0; const jobs = []; // v3.2.0：统计供「重试加载」完成提示
+  let ok = 0, fail = 0; const jobs = [];
   const imgs = document.querySelectorAll('img[data-fd]:not([data-hydrated])');
   for (const img of imgs) {
     const domain = img.dataset.fd;
     if (!domain) continue;
-    img.dataset.hydrated = '1'; // 本轮标记，防重复处理
-    const apply = (dataUrl) => {
-      if (!document.body.contains(img)) return; // 弹窗/列表已重建
-      if (!dataUrl) { img.remove(); return; } // 双源失败 → 移除，仅剩首字头像
-      // v3.0.12：直接 JS 设 src + 显示——不依赖 load 事件（data:URL 已校验魔数，非破损图）
-      img.src = dataUrl;
-      img.style.opacity = '1';
-    };
-    // v3.3.1：持久层——内存未命中先查 localStorage（重启后无需网络即可复显）；
-    // 失败时若持久层有旧图标则用旧的（首字母永远不覆盖已成功过的图标）
-    if (faviconDataCache.has(domain)) { apply(faviconDataCache.get(domain)); continue; }
-    const persisted = faviconPersistGet(domain);
-    if (persisted) {
-      faviconDataCache.set(domain, persisted); // 回填内存层
-      apply(persisted);
-      jobs.push((async () => { // 后台静默刷新，成功才覆盖（含持久层）
-        try {
-          const r = await tauriInvoke('favicon_fetch', { url: `https://${domain}/favicon.ico` });
-          const fresh = r || await tauriInvoke('favicon_fetch', { url: `https://icons.duckduckgo.com/ip3/${domain}.ico` });
-          if (fresh) { faviconDataCache.set(domain, fresh); faviconPersistSet(domain, fresh); apply(fresh); ok++; } // 新图标才能覆盖旧的
-        } catch { /* 刷新失败保留旧图标 */ }
-      })());
-      continue;
-    }
+    img.dataset.hydrated = '1';
+    const apply = (d) => { if (document.body.contains(img) && d) { img.src = d; img.style.opacity = '1'; } };
+    const mem = faviconDataCache.has(domain) ? faviconDataCache.get(domain) : faviconPersistGet(domain);
+    if (mem) { faviconDataCache.set(domain, mem); apply(mem); }
+    const wantFetch = mode === 'fetch-all' || faviconDemand.has(domain) || (!mem && mode === 'fetch-missing');
+    faviconDemand.delete(domain);
+    if (!wantFetch) continue; // cache-only 渲染：零网络
     jobs.push((async () => {
       let dataUrl = null;
-      try {
-        const r1 = await tauriInvoke('favicon_fetch', { url: `https://${domain}/favicon.ico` });
-        if (!r1) {
-          const r2 = await tauriInvoke('favicon_fetch', { url: `https://icons.duckduckgo.com/ip3/${domain}.ico` });
-          dataUrl = r2 || null;
-        } else dataUrl = r1;
-      } catch { dataUrl = null; }
-      faviconDataCache.set(domain, dataUrl);
-      if (dataUrl) faviconPersistSet(domain, dataUrl); // v3.3.1：成功即持久化
-      apply(dataUrl);
-      dataUrl ? ok++ : fail++;
+      const tryUrls = [`https://${domain}/favicon.ico`, `https://icons.duckduckgo.com/ip3/${domain}.ico`, `https://${domain}/favicon.ico`]; // 3 连试
+      for (const u of tryUrls) {
+        try { const r = await tauriInvoke('favicon_fetch', { url: u }); if (r) { dataUrl = r; break; } } catch { /* 换下一个 */ }
+      }
+      if (dataUrl) { faviconDataCache.set(domain, dataUrl); faviconPersistSet(domain, dataUrl); apply(dataUrl); ok++; }
+      else { if (!mem && document.body.contains(img)) img.remove(); fail++; } // 无旧图才回退首字母
     })());
   }
   await Promise.all(jobs);
@@ -1645,7 +1629,10 @@ function openEditModal(item = null, prefillPw = '') {
       closeModal();
       toast('已保存');
       refreshChips();
-      refreshList();
+      await refreshList();
+      // v3.3.1：仅新建或网址字段变更时才请求图标（3 连试），其余渲染零网络
+      const d = pbDomainOf(entry.url);
+      if (d && (isNew || (item.url || '') !== entry.url)) { faviconDemand.add(d); hydrateFavicons('fetch-missing'); }
     } catch (e) { toast(e.message, true); }
   });
 }
@@ -1802,7 +1789,9 @@ function openManualAddModal() {
       mfSavedCount++;
       $('#mf-saved-info').textContent = `✓ 本次已录入 ${mfSavedCount} 条${keepOpen ? '，可继续输入下一条' : ''}`;
       refreshChips();
-      refreshList();
+      await refreshList();
+      const dmf = pbDomainOf(entry.url);
+      if (dmf) { faviconDemand.add(dmf); hydrateFavicons('fetch-missing'); } // v3.3.1：新条目才请求图标（3 连试）
       if (keepOpen) {
         $('#mf-owner').value = ''; $('#mf-account').value = ''; $('#mf-password').value = '';
         $('#mf-url').value = ''; $('#mf-note').value = ''; $('#mf-totp').value = '';
@@ -1998,6 +1987,7 @@ function openImportModal() {
       const r = await store.importItems(rows, mode);
       closeModal();
       toast(`导入完成：新增 ${r.imported} 条${r.skipped ? `，跳过重复 ${r.skipped} 条` : ''}`);
+    hydrateFavicons('fetch-missing'); // v3.3.1 导入完成才请求缺失图标（3 连试）
       refreshChips();
       refreshList();
     } catch (e) { toast(e.message, true); }
@@ -3283,7 +3273,7 @@ document.addEventListener('click', async (e) => {
   toast('开始加载图标…');
   await refreshList(); // v3.2.1：等列表重建完（旧节点已标 hydrated，之前秒扫到 0 个任务）
   // v3.2.0：开始/完成两级提示（完成带成功/失败统计）；探针已退役
-  const st = await (lastHydration || hydrateFavicons()).catch(() => ({ ok: 0, fail: 0 }));
+  const st = await hydrateFavicons('fetch-all').catch(() => ({ ok: 0, fail: 0 })); // v3.3.1 手动重试=全量重取（持久层兜底）
   toast('图标加载完成：成功 ' + st.ok + ' 个' + (st.fail ? '，失败 ' + st.fail + ' 个' : ''));
 });
 
