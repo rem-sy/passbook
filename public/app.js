@@ -1482,13 +1482,13 @@ function openEditModal(item = null, prefillPw = '') {
           <datalist id="dl-account"></datalist>
         </label>
       </div>
-      <label class="field"><span>密码 *</span>
+      <label class="field"><span>密码 *<button class="hint-btn" type="button" data-hint="gen" title="生成器说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></span>
         <div class="pw-input-row">
           <input id="f-password" type="text" value="${escapeHtml(v('password') || prefillPw)}" autocomplete="off" />
           <button class="btn" id="btn-gen-again" title="用当前生成器设置重新生成">${ICONS.refresh}</button>
         </div>
       </label>
-      <label class="field"><span>动态验证码 TOTP（可选）<button class="totp-guide-btn" type="button" title="TOTP 使用说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></span>
+      <label class="field"><span>动态验证码 TOTP（可选）<button class="hint-btn" type="button" data-hint="totp" title="TOTP 使用说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></span>
         <input id="f-totp" placeholder="base32 密钥或 otpauth:// 链接，粘贴自动提取" value="${escapeHtml(v('totp_secret'))}" autocomplete="off" spellcheck="false" />
       </label>
       <div class="form-row">
@@ -1727,13 +1727,13 @@ function openManualAddModal() {
         <input id="mf-account" placeholder="如：user@example.com" autocomplete="off" />
         <datalist id="dl-mf-account"></datalist>
       </label>
-      <label class="field"><span>密码 *</span>
+      <label class="field"><span>密码 *<button class="hint-btn" type="button" data-hint="gen" title="生成器说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></span>
         <div class="pw-input-row">
           <input id="mf-password" type="text" autocomplete="off" placeholder="手动输入，或点右侧按钮生成" />
           <button class="btn" id="mf-gen" title="用当前生成器设置生成">${ICONS.wand}</button>
         </div>
       </label>
-      <label class="field"><span>动态验证码 TOTP（可选）<button class="totp-guide-btn" type="button" title="TOTP 使用说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></span>
+      <label class="field"><span>动态验证码 TOTP（可选）<button class="hint-btn" type="button" data-hint="totp" title="TOTP 使用说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></span>
         <input id="mf-totp" placeholder="base32 密钥或 otpauth:// 链接，粘贴自动提取" autocomplete="off" spellcheck="false" />
       </label>
       <div class="form-row">
@@ -2289,7 +2289,7 @@ function openSettingsModal() {
       </div>
       <p class="hint">任何 OpenAI 兼容渠道均可（DeepSeek / OpenAI / 通义 / 本地 Ollama…）。配置后即可在右上角 AI 助理面板聊天存/查密码。</p>`;
   const encField = currentMode === 'local' ? `
-      <div class="field"><span>数据库加密（防止 .db 文件被拷走后明文泄露）</span>
+      <div class="field"><span>数据库加密（防止 .db 文件被拷走后明文泄露）<button class="hint-btn" type="button" data-hint="enc" title="数据库加密说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></span>
         <div class="lock-toggle">
           <span class="lock-state" id="enc-state">检测中…</span>
         </div>
@@ -2309,7 +2309,7 @@ function openSettingsModal() {
         </div>
       </div>`;
   const backupField = currentMode === 'local' ? `
-      <div class="field"><span>自动备份快照（${IS_TAURI ? '存于应用数据目录 backups\\' : '存于本机浏览器存储'}，加密库快照保持密文）</span>
+      <div class="field"><span>自动备份快照（${IS_TAURI ? '存于应用数据目录 backups\\' : '存于本机浏览器存储'}，加密库快照保持密文）<button class="hint-btn" type="button" data-hint="snap" title="自动备份快照说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></span>
         <div class="chk-group" style="padding-top:2px">
           <label><input type="checkbox" id="set-backup-enabled" ${bk.enabled ? 'checked' : ''} /> 自动备份（每 ${bk.intervalMin} 分钟内至多一次）</label>
         </div>
@@ -3355,10 +3355,73 @@ function openTotpGuideModal(ownerVal) {
     <div class="modal-foot"><button class="btn primary" data-close>我知道了</button></div>
   `);
 }
+/* ---------------- 通用说明弹窗（v3.3.3）----------------
+ * 复用 TOTP 指南的样式（guide-base/guide-note/guide-steps）与「我知道了」
+ * data-close 按钮；各处 ⃝? 按钮统一 class hint-btn + data-hint=key。 */
+function openHintModal(title, bodyHtml) {
+  openModal(`
+    <div class="modal-head"><h3>${escapeHtml(title)}</h3></div>
+    <div class="modal-body totp-guide">
+      ${bodyHtml}
+    </div>
+    <div class="modal-foot"><button class="btn primary" data-close>我知道了</button></div>
+  `);
+}
+const hintSteps = (arr) => `<div class="guide-steps">${arr.map((s, i) => `
+  <div class="guide-step"><span class="guide-step-ico">${TOTP_GUIDE_ICONS[i % TOTP_GUIDE_ICONS.length]}</span><span class="guide-step-num">${i + 1}</span><span>${s}</span></div>`).join('')}</div>`;
+const PB_HINTS = {
+  gen: {
+    title: '密码生成说明',
+    body: `
+      <div class="guide-base">
+        <p><b>长度建议 16 位以上</b>：生成器默认 16 位（可调 4-128）；对重要账户建议 20 位起步，长度比复杂度更防暴力破解。</p>
+        <p><b>字符集</b>：大小写 + 数字 + 符号组合最抗猜测；个别老旧网站会拒绝部分符号（如 <code>*&lt;&gt;|</code>），登录报错时可关闭「符号」重新生成。</p>
+        <p><b>口令模式</b>：生成器可切换为「多词口令」——几个随机词拼成好记的长口令，适合需要手动输入的场合。</p>
+        <p><b>注意</b>：生成结果只在保存进条目后才入库；关闭弹窗即丢弃，不会自动保留明文副本（编辑旧密码时历史仅记录变更）。</p>
+      </div>`,
+  },
+  enc: {
+    title: '数据库加密说明',
+    body: `
+      <div class="guide-base">
+        <p><b>作用</b>：整个 .db 库文件被加密保存——文件被拷走/网盘泄露也无法读取内容。</p>
+        <p><b>密钥机制</b>：密钥由应用自动生成、仅保存在本机，启动时自动解密、日常使用无感。</p>
+        <p><b style="color:var(--danger)">务必备份密钥</b>：加密库丢失密钥 = 数据<b>无法恢复</b>。请在下方点「备份密钥」保存密钥文本（相当于恢复码），换设备导入加密 .db 时也必须提供它。</p>
+        <p><b>与 PIN 锁的区别</b>：PIN 只锁界面（防旁人翻看），加密锁的是文件本身（防文件外泄）；两者互补。</p>
+      </div>`,
+  },
+  snap: {
+    title: '自动备份快照说明',
+    body: `
+      <div class="guide-base">
+        <p><b>频率与保留</b>：默认开启，每 60 分钟内至多自动快照一次；可设保留 3/5/10/20 份，超出自动清理最旧的。</p>
+        <p><b>位置</b>：桌面/手机版存于应用数据目录 <code>backups\\</code>，浏览器版存于本机浏览器存储（清浏览器数据会丢，请定期导出 .db）。</p>
+        <p><b>加密不变</b>：加密库的快照保持密文——快照本身也需密钥才能打开，不会被旁路明文泄露。</p>
+        <p><b>如何恢复</b>：把 .db 快照文件用「导入」功能导入（导入页选 .db 文件，自动识别），或在导入前先备好加密密钥。</p>
+      </div>`,
+  },
+  watch: {
+    title: '安全体检说明',
+    body: `
+      <div class="guide-base">
+        <p><b>弱密码</b>：命中常见弱密码词典（高危）；长度不足 8 位（高危）、不足 10 位且字符组合单一（低危）。</p>
+        <p><b>重复密码</b>：同一密码用于多个条目——一处泄露即殃及全部同密码账户。</p>
+        <p><b>陈旧密码</b>：超过设定期限未修改（默认 12 个月，可设 6/12/24 个月或关闭）。</p>
+        <p><b>信息不完整</b>：缺账户或密码字段的条目，可能影响使用。</p>
+        <p><b>建议动作</b>：点每条发现即可跳到对应条目，改成生成的强密码后体检项自动消除。</p>
+      </div>`,
+  },
+};
 document.addEventListener('click', (e) => {
-  const b = e.target && e.target.closest ? e.target.closest('.totp-guide-btn') : null;
+  const b = e.target && e.target.closest ? e.target.closest('.hint-btn') : null;
   if (!b) return;
-  const modal = b.closest('.modal-mask');
-  const ownerEl = modal ? (modal.querySelector('#f-owner') || modal.querySelector('#mf-owner')) : null;
-  openTotpGuideModal(ownerEl ? ownerEl.value : ''); // 打开瞬间快照，不实时刷新
+  const key = b.dataset.hint;
+  if (key === 'totp') {
+    const modal = b.closest('.modal-mask');
+    const ownerEl = modal ? (modal.querySelector('#f-owner') || modal.querySelector('#mf-owner')) : null;
+    openTotpGuideModal(ownerEl ? ownerEl.value : ''); // 打开瞬间快照，不实时刷新
+    return;
+  }
+  const h = PB_HINTS[key];
+  if (h) openHintModal(h.title, h.body);
 });
