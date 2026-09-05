@@ -68,6 +68,17 @@ class RustWebView(context: Context, val initScripts: Array<String>, val id: Stri
         settings.setGeolocationEnabled(true)
         settings.databaseEnabled = true
         settings.mediaPlaybackRequiresUserGesture = false
+        // 密码本 v4.0.0：相机权限转发（扫码）PbCamGrant
+        webChromeClient = object : android.webkit.WebChromeClient() {
+            override fun onPermissionRequest(request: android.webkit.PermissionRequest) {
+                if (!request.resources.contains(android.webkit.PermissionRequest.RESOURCE_VIDEO_CAPTURE)) {
+                    request.deny(); return
+                }
+                // WebView 层放行 + 并行触发系统运行时权限（未授权时相机设备本就打不开，用户拒绝则流失败走 onFail）
+                request.grant(request.resources)
+                (context as? android.app.Activity)?.requestPermissions(arrayOf(android.Manifest.permission.CAMERA), 41028)
+            }
+        }
         settings.javaScriptCanOpenWindowsAutomatically = true
         settings.useWideViewPort = true
         settings.loadWithOverviewMode = true
