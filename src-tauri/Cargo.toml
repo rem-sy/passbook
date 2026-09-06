@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "passbook-desktop"
 version = "4.1.0"
 description = "密码本桌面端：强密码生成与密码管理"
