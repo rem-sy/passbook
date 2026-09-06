@@ -399,8 +399,8 @@ const LocalStore = {
   async _readRaw() {
     if (IS_TAURI) {
       const path = await getTauriDbPath();
-      const bytes = await tauriInvoke('read_db_file', { path });
-      return bytes && bytes.length ? new Uint8Array(bytes) : null;
+      const bytes = await tauriReadDb(path); // v4.1.1：base64 IPC
+      return bytes && bytes.length ? bytes : null;
     }
     return await idbGet('db');
   },
@@ -431,7 +431,7 @@ const LocalStore = {
     }
     if (IS_TAURI) {
       const path = await getTauriDbPath();
-      await tauriInvoke('write_db_file', { path, bytes: Array.from(out) });
+      await tauriWriteDb(path, out); // v4.1.1：base64 IPC
     } else {
       await idbSet('db', out);
     }
@@ -572,7 +572,7 @@ const LocalStore = {
       const srcPath = await getTauriDbPath();
       // Android 无桌面保存对话框（tauri dialog 不可用）：走 SAF 系统另存为（v3.0.5）
       if (IS_ANDROID && window.__passbook_saf) {
-        const bytes = await tauriInvoke('read_db_file', { path: srcPath });
+        const bytes = await tauriReadDb(srcPath); // v4.1.1：base64 IPC
         await androidSafSave(bytes, 'passwords.db');
         return { safSaved: true };
       }
@@ -649,6 +649,15 @@ function bytesToBase64(bytes) {
   const CH = 0x8000;
   for (let i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
   return btoa(bin);
+}
+/** v4.1.1：数据库文件读写走 base64 IPC——旧的 JSON 数字数组载荷随库体积线性变慢，
+ *  导入大量条目后兆级库单条删除耗时近 10 秒；base64 一次编解码降至毫秒级。 */
+async function tauriWriteDb(path, bytes) {
+  await tauriInvoke('write_db_file_b64', { path, b64: bytesToBase64(bytes) });
+}
+async function tauriReadDb(path) {
+  const b64 = await tauriInvoke('read_db_file_b64', { path });
+  return b64 ? base64ToBytes(b64) : null;
 }
 
 /* ---------------- 存储层选择 ---------------- */
@@ -803,6 +812,7 @@ const state = {
   filterMode: 'any',   // 'any' | 'all' | 'exclude'
   multiSelect: false,  // 列表多选模式
   selectedIds: new Set(),
+  visibleIds: [],      // v4.1.1：当前搜索/筛选后实际可见的条目 id（全选以此为准）
 };
 
 /** 字母头像颜色：按文本 hash 取 HSL（v2.7.0 favicon 回退） */
@@ -978,6 +988,7 @@ async function refreshList() {
     const sKey = sSet.sortKey || 'updated';
     const sOrd = sSet.sortOrder || (sKey === 'updated' || sKey === 'created' || sKey === 'totp' ? 'desc' : 'asc');
     shown = PassSearch.sortEntries(shown, sKey, sOrd);
+    state.visibleIds = shown.map((it) => it.id); // v4.1.1：记录当前可见集合，多选全选按它算
     sortChipRender();
     renderEntries(shown, hitsMap);
     const filtered = (state.q || (state.filterCats && state.filterCats.length) || state.category) && shown.length !== total ? `${shown.length}/` : '';
@@ -1186,6 +1197,7 @@ $('#entry-list').addEventListener('click', async (e) => {
     if (confirm(`确定删除「${item.owner} / ${item.account}」吗？`)) {
       try {
         await store.remove(id);
+        state.selectedIds.delete(id); // v4.1.1：单删也同步勾选集合，多选计数不残留
         toast('已删除');
         refreshChips();
         refreshList();
@@ -1203,7 +1215,9 @@ function msUpdateBar() {
   document.body.classList.toggle('ms-on', state.multiSelect);
   const n = state.selectedIds.size;
   $('#ms-count').textContent = `已选 ${n} 项`;
-  $('#ms-select-all').textContent = n && n === state.total ? '取消全选' : '全选';
+  // v4.1.1：全选按钮状态以当前可见集合为准（搜索/筛选后可见数，而非全库 total）
+  const vis = state.visibleIds.length;
+  $('#ms-select-all').textContent = n && vis && n >= vis ? '取消全选' : '全选';
 }
 function msEnter() {
   state.multiSelect = true;
@@ -1219,16 +1233,9 @@ function msExit() {
   refreshList();
   msUpdateBar();
 }
-/** 取当前列表全量 id（用于全选）：直接拉当前筛选下的条目 */
-async function msCurrentIds() {
-  const { items } = await store.list({ q: '', category: '', sort: serverSortKey(), favOnly: state.favOnly });
-  let arr = items;
-  if (state.category) {
-    const k = state.category.toLowerCase();
-    arr = arr.filter((it) => PassSearch.catSplit(it.category).some((c) => c.toLowerCase() === k));
-  }
-  if (state.filterCats && state.filterCats.length) arr = PassSearch.catFilter(arr, state.filterCats, state.filterMode || 'any');
-  return arr.map((it) => it.id);
+/** v4.1.1：取当前可见条目 id（搜索 + 分类 + 漏斗 + 收藏后的最终列表），全选以此为准 */
+function msCurrentIds() {
+  return state.visibleIds.slice();
 }
 /** 全部分类 → 计数（catSplit 统计，v3.4.0） */
 async function allCatCounts() {
@@ -1293,10 +1300,11 @@ async function batchDelete() {
     clearTimeout(Number(btn.dataset.tm || 0));
     delete btn.dataset.c1; btn.textContent = '批量删除'; btn.classList.remove('danger');
     let n = 0;
-    for (const id of ids) { try { await store.remove(id); n++; } catch { /* 单条失败继续 */ } }
+    for (const id of ids) { try { await store.remove(id); n++; state.selectedIds.delete(id); } catch { /* 单条失败继续，保留勾选 */ } }
     toast(`已删除 ${n} 项`);
     refreshSidebar();
     await refreshList();
+    msUpdateBar(); // v4.1.1：已删条目从勾选集合移除，计数不再残留
   } else {
     btn.dataset.c1 = '1'; btn.textContent = `再点一次删除（${ids.length} 项）`; btn.classList.add('danger');
     btn.dataset.tm = String(setTimeout(() => { delete btn.dataset.c1; btn.textContent = '批量删除'; btn.classList.remove('danger'); }, 3000));
@@ -1776,11 +1784,12 @@ $('#btn-gen-open').addEventListener('click', () => {
 });
 // v3.4.0：多选 + 漏斗 + 分类管理
 $('#btn-multiselect')?.addEventListener('click', () => (state.multiSelect ? msExit() : msEnter()));
-$('#ms-select-all')?.addEventListener('click', async () => {
-  const ids = await msCurrentIds();
+$('#ms-select-all')?.addEventListener('click', () => {
+  const ids = msCurrentIds();
   const allOn = ids.length && ids.every((i) => state.selectedIds.has(i));
-  state.selectedIds = allOn ? new Set() : new Set(ids);
-  await refreshList();
+  if (allOn) { for (const i of ids) state.selectedIds.delete(i); }
+  else { for (const i of ids) state.selectedIds.add(i); } // v4.1.1：并入而非清空重置——跨搜索条件的已有勾选保留
+  refreshList();
   msUpdateBar();
 });
 $('#ms-add-cat')?.addEventListener('click', () => openBatchCatModal('add'));
@@ -2359,15 +2368,16 @@ function openImportModal() {
     nativeBtn.addEventListener('click', async () => {
       try {
         const picked = await tauriInvoke('pick_import_db');
-        if (!picked || !picked.bytes || !picked.bytes.length) return;
+        if (!picked || !picked.b64) return;
         const name = picked.name || '';
+        const pickedBytes = base64ToBytes(picked.b64); // v4.1.1：Rust 返回 b64
         importFileCache = { name };
         const isDb = name.toLowerCase().endsWith('.db');
         if (isDb) {
-          importFileCache.bytes = new Uint8Array(picked.bytes);
+          importFileCache.bytes = pickedBytes;
           await handleImportBytes(importFileCache.bytes, 'db');
         } else {
-          importFileCache.text = new TextDecoder().decode(new Uint8Array(picked.bytes));
+          importFileCache.text = new TextDecoder().decode(pickedBytes);
           $('#file-info').textContent = `${name} · ${importFileCache.text.length} 字符`;
           parseAndPreview(importFileCache.text);
         }
@@ -2525,8 +2535,8 @@ async function browserPickFile() {
     // 桌面/Android：WebView 内文件选择不稳，走 Rust 系统对话框（复用 pick_import_db 通道）
     try {
       const picked = await tauriInvoke('pick_import_db');
-      if (!picked || !picked.bytes || !picked.bytes.length) return;
-      const text = new TextDecoder().decode(new Uint8Array(picked.bytes));
+      if (!picked || !picked.b64) return;
+      const text = new TextDecoder().decode(base64ToBytes(picked.b64)); // v4.1.1：Rust 返回 b64
       browserImportParse(picked.name || '浏览器导出.csv', text);
     } catch (e) { toast(e.message, true); }
   } else {
@@ -3115,7 +3125,7 @@ function openSettingsModal() {
           // 写回主库位置，走启动加载链（自动处理加密/迁移）
           if (IS_TAURI) {
             const path = await getTauriDbPath();
-            await tauriInvoke('write_db_file', { path, bytes: Array.from(bytes) });
+            await tauriWriteDb(path, bytes); // v4.1.1：base64 IPC
           } else {
             await idbSet('db', bytes);
           }
@@ -3237,7 +3247,7 @@ const BackupAdapter = {
   async write(name, bytes) {
     if (IS_TAURI) {
       const dir = await this.dir();
-      await tauriInvoke('write_db_file', { path: dir + '\\' + name, bytes: Array.from(bytes) });
+      await tauriWriteDb(dir + '\\' + name, bytes); // v4.1.1：base64 IPC
       return;
     }
     await idbSet(PassBackup.idbKey(name), bytes);
@@ -3246,8 +3256,8 @@ const BackupAdapter = {
   async read(name) {
     if (IS_TAURI) {
       const dir = await this.dir();
-      const b = await tauriInvoke('read_db_file', { path: dir + '\\' + name });
-      return b && b.length ? new Uint8Array(b) : null;
+      const b = await tauriReadDb(dir + '\\' + name); // v4.1.1：base64 IPC
+      return b && b.length ? b : null;
     }
     return await idbGet(PassBackup.idbKey(name));
   },

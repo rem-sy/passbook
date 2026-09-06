@@ -36,16 +36,44 @@ fn read_db_file(path: String) -> Result<Option<Vec<u8>>, String> {
 /// 原子写入数据库文件：先写临时文件再改名，避免写入中断损坏数据
 #[tauri::command]
 fn write_db_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
-    let p = PathBuf::from(&path);
+    write_db_bytes(&path, &bytes)
+}
+
+/// v4.1.1：base64 写库——JSON 数字数组 IPC 随库体积线性变慢（兆级库删除近 10 秒），base64 一次编解码即可
+#[tauri::command]
+fn write_db_file_b64(path: String, b64: String) -> Result<(), String> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64.as_bytes())
+        .map_err(|e| format!("base64 解码失败: {e}"))?;
+    write_db_bytes(&path, &bytes)
+}
+
+fn write_db_bytes(p_str: &str, bytes: &[u8]) -> Result<(), String> {
+    let p = PathBuf::from(p_str);
     if let Some(parent) = p.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let tmp = p.with_extension("tmp");
-    fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
+    fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
     fs::rename(&tmp, &p).map_err(|e| {
         let _ = fs::remove_file(&tmp);
         e.to_string()
     })
+}
+
+/// v4.1.1：base64 读库（同理避免 JSON 数字数组大载荷）
+#[tauri::command]
+fn read_db_file_b64(path: String) -> Result<Option<String>, String> {
+    use base64::Engine as _;
+    let p = PathBuf::from(&path);
+    if !p.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(&p).map_err(|e| e.to_string())?;
+    Ok(Some(
+        base64::engine::general_purpose::STANDARD.encode(&bytes),
+    ))
 }
 
 /// 备份快照文件元信息（v2.2.0 自动备份）
@@ -307,17 +335,23 @@ async fn pick_import_db(app: AppHandle) -> Result<Option<ImportFile>, String> {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        Ok(Some(ImportFile { name, bytes }))
+        Ok(Some(ImportFile {
+            name,
+            b64: {
+                use base64::Engine as _;
+                base64::engine::general_purpose::STANDARD.encode(&bytes)
+            },
+        }))
     } else {
         Ok(None)
     }
 }
 
-/// 导入文件载荷：文件名 + 字节
+/// 导入文件载荷：文件名 + base64 字节（v4.1.1 改 b64，避免大文件 JSON 数字数组 IPC）
 #[derive(serde::Serialize)]
 struct ImportFile {
     name: String,
-    bytes: Vec<u8>,
+    b64: String,
 }
 
 /// 前端诊断日志（转发到 stderr）
@@ -596,7 +630,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_default_db_path,
             read_db_file,
+            read_db_file_b64,
             write_db_file,
+            write_db_file_b64,
             pick_db_path,
             export_db,
             export_json,
