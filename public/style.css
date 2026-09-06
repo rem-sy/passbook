@@ -528,6 +528,9 @@ html.dark .pw-input-row .btn.danger { background: #b03a2e; border-color: #b03a2e
 }
 .file-drop:hover, .file-drop.drag { border-color: var(--primary); color: var(--primary); }
 .import-preview { font-size: 13px; background: #f2f3f7; border-radius: 8px; padding: 10px 12px; max-height: 160px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+/* v4.1.0：浏览器导入去重策略单选（label 是 inline，需 block 才能撑满点击区） */
+.radio-row { display: block; padding: 4px 0; cursor: pointer; font-size: 13px; }
+.radio-row input { margin-right: 6px; vertical-align: middle; }
 
 /* 导出 */
 .export-grid { display: flex; flex-direction: column; gap: 10px; }

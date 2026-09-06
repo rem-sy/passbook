@@ -2280,6 +2280,7 @@ function openImportModal() {
         <button class="btn active" data-tab="paste">粘贴文本</button>
         <button class="btn" data-tab="file">上传文件</button>
         <button class="btn" data-tab="scan">扫码导入</button>
+        <button class="btn" data-tab="browser">浏览器导入</button>
       </div>
       <div id="tab-paste">
         <label class="field"><span>每行一条：所属,账户,密码[,网址][,备注]（也支持 所属/账户/密码 或 所属 账户 密码）</span>
@@ -2298,6 +2299,24 @@ function openImportModal() {
         </label>
         <input type="file" id="file-input" class="hidden" accept=".csv,.json,.txt,.db" />
         <div id="file-info" class="hint"></div>
+      </div>
+      <div id="tab-browser" class="hidden">
+        <p class="hint">Edge / Chrome / Firefox「导出密码」得到的 CSV 一键导入：表头自动识别，无需手动整理列序。</p>
+        <label class="file-drop" id="browser-drop">
+          <div class="file-drop-main">${('ontouchstart' in window || (navigator.maxTouchPoints || 0) > 0) ? '选择 CSV 文件' : '点击选择或拖入 CSV 文件'}</div>
+          <div class="hint">浏览器「设置 → 密码 → 导出密码」生成的 .csv 明文文件</div>
+        </label>
+        <input type="file" id="browser-input" class="hidden" accept=".csv" />
+        <div id="browser-info" class="hint"></div>
+        <div id="browser-preview-wrap" class="hidden">
+          <span class="hint">解析预览</span>
+          <div class="import-preview" id="browser-preview"></div>
+          <div id="browser-dup-strategy" class="hidden">
+            <span class="hint">去重策略（同网址+账户判重）</span>
+            <label class="radio-row"><input type="radio" name="browser-dup-mode" value="skip" checked> 跳过重复条目</label>
+            <label class="radio-row"><input type="radio" name="browser-dup-mode" value="keep"> 仍导入（保留重复）</label>
+          </div>
+        </div>
       </div>
       <label class="field" id="import-mode-wrap"><span>导入方式</span>
         <select id="import-mode">
@@ -2324,6 +2343,8 @@ function openImportModal() {
     $('#tab-paste').classList.toggle('hidden', tab !== 'paste');
     $('#tab-file').classList.toggle('hidden', tab !== 'file');
     $('#tab-scan').classList.toggle('hidden', tab !== 'scan'); // v4.0.3：漏了这行——扫码 tab 内容从未显示过
+    $('#tab-browser').classList.toggle('hidden', tab !== 'browser'); // v4.1.0：浏览器导入 tab
+    $('#import-mode-wrap').classList.toggle('hidden', tab === 'browser'); // 浏览器导入固定合并模式（去重策略独立单选）
   }));
 
   // 文件选择 / 拖放
@@ -2439,6 +2460,23 @@ function openImportModal() {
   $('#import-paste').addEventListener('input', debounce(() => parseAndPreview($('#import-paste').value), 300));
   $('#btn-import-cancel').addEventListener('click', closeModal);
   $('#btn-import-go').addEventListener('click', async () => {
+    // v4.1.0：浏览器导入 tab——独立管线（去重策略单选 + 明文删除提醒）
+    if (!$('#tab-browser').classList.contains('hidden')) {
+      const r = browserImportCache && browserImportCache.result;
+      if (!r || !r.ok || !r.rows.length) return toast('请先选择浏览器导出的 CSV 文件', true);
+      const keepDup = (document.querySelector('input[name="browser-dup-mode"]:checked') || {}).value === 'keep';
+      const rows = keepDup ? r.rows : r.rows.filter((x) => !x._dup);
+      if (!rows.length) return toast(`${r.dupCount} 条全部为重复（同网址+账户），无新增`, true);
+      try {
+        const res = await store.importItems(rows, 'merge');
+        closeModal();
+        toast(`导入完成：新增 ${res.imported} 条${res.skipped ? `，跳过完全相同 ${res.skipped} 条` : ''}。浏览器导出的 CSV 是明文文件，导入后请及时删除原文件`);
+        hydrateFavicons('fetch-missing'); // 导入完成才请求缺失图标（3 连试）
+        refreshChips();
+        refreshList();
+      } catch (e) { toast(e.message, true); }
+      return;
+    }
     let rows = null;
     if (!$('#tab-file').classList.contains('hidden')) {
       rows = importFileCache?.parsed || null;
@@ -2477,6 +2515,56 @@ function parseImportText(text) {
     rows.push({ owner, account, password, url, category: '', note });
   }
   return rows;
+}
+
+/* ---------------- 浏览器一键导入（v4.1.0） ---------------- */
+let browserImportCache = null; // { name, result: PassImporter.parseBrowserCsv 结果 }
+
+async function browserPickFile() {
+  if (IS_TAURI) {
+    // 桌面/Android：WebView 内文件选择不稳，走 Rust 系统对话框（复用 pick_import_db 通道）
+    try {
+      const picked = await tauriInvoke('pick_import_db');
+      if (!picked || !picked.bytes || !picked.bytes.length) return;
+      const text = new TextDecoder().decode(new Uint8Array(picked.bytes));
+      browserImportParse(picked.name || '浏览器导出.csv', text);
+    } catch (e) { toast(e.message, true); }
+  } else {
+    const inp = document.getElementById('browser-input');
+    if (inp) inp.click();
+  }
+}
+
+async function browserImportHandleFile(file) {
+  try { browserImportParse(file.name, await file.text()); }
+  catch (e) { toast('读取文件失败：' + (e && e.message ? e.message : ''), true); }
+}
+
+async function browserImportParse(name, text) {
+  let existing = [];
+  try { existing = (await store.list({})).items || []; } catch { /* 判重降级为仅文件内部 */ }
+  const r = PassImporter.parseBrowserCsv(text, existing);
+  const info = document.getElementById('browser-info');
+  if (!info) { browserImportCache = null; return; } // 弹窗已关
+  browserImportCache = { name, result: r };
+  const wrap = document.getElementById('browser-preview-wrap');
+  if (!r.ok) {
+    browserImportCache = null;
+    info.textContent = `无法识别「${name}」：${r.error}`;
+    if (wrap) wrap.classList.add('hidden');
+    return;
+  }
+  info.textContent = `${name} · ${(text.length / 1024).toFixed(1)} KB`;
+  if (wrap) wrap.classList.remove('hidden');
+  const pv = document.getElementById('browser-preview');
+  if (pv) pv.textContent =
+    `识别为 ${r.formatLabel} 格式 / 共 ${r.total} 条` +
+    (r.skippedEmpty ? `（另有 ${r.skippedEmpty} 条空密码已跳过）` : '') +
+    (r.dupCount ? ` / ${r.dupCount} 条重复（同网址+账户）` : '') +
+    '\n' + r.rows.slice(0, 12).map((row) => `${row.owner || row.url} | ${row.account} | ${'*'.repeat((row.password || '').length)}`).join('\n') +
+    (r.rows.length > 12 ? `\n… 共 ${r.rows.length} 条` : '');
+  const strat = document.getElementById('browser-dup-strategy');
+  if (strat) strat.classList.toggle('hidden', !r.dupCount); // 无重复时不展示策略
 }
 
 $('#btn-import').addEventListener('click', openImportModal);
@@ -4083,8 +4171,32 @@ document.addEventListener('click', (e) => {
   try {
     if (e.target.closest('#mf-scan-fill')) scanFillStart();
     else if (e.target.closest('#scan-import-start')) scanImportStart();
+    else if (e.target.closest('#browser-drop')) browserPickFile(); // v4.1.0：浏览器导入选文件（委托，动态弹窗按钮勿直绑）
   } catch (err) {
     console.error(err);
     toast('扫码启动失败：' + (err && err.message ? err.message : '未知错误'), true);
   }
+});
+
+// v4.1.0：浏览器导入 change/dragover/drop 也走 document 委托（弹窗重建后仍生效）
+document.addEventListener('change', (e) => {
+  if (e.target && e.target.id === 'browser-input' && e.target.files && e.target.files[0]) {
+    browserImportHandleFile(e.target.files[0]);
+    e.target.value = '';
+  }
+});
+document.addEventListener('dragover', (e) => {
+  const d = e.target.closest && e.target.closest('#browser-drop');
+  if (d) { e.preventDefault(); d.classList.add('drag'); }
+});
+document.addEventListener('dragleave', (e) => {
+  const d = e.target.closest && e.target.closest('#browser-drop');
+  if (d) d.classList.remove('drag');
+});
+document.addEventListener('drop', (e) => {
+  const d = e.target.closest && e.target.closest('#browser-drop');
+  if (!d) return;
+  e.preventDefault();
+  d.classList.remove('drag');
+  if (e.dataTransfer && e.dataTransfer.files[0]) browserImportHandleFile(e.dataTransfer.files[0]);
 });
