@@ -1,6 +1,6 @@
 # 密码本 Roadmap
 
-> 维护约定：每完成一个版本更新此文件。当前已发布：**v4.0.3**（tag + GitHub Release 齐全）。
+> 维护约定：每完成一个版本更新此文件。当前已发布：**v4.1.0**（tag + GitHub Release 383628895 齐全，正式 3 产物）。
 > 历史路线图（v1.1.0→3.0.0 改造期）见 [ROADMAP-history-v1-3.md](ROADMAP-history-v1-3.md)。
 
 ## 版本规范
@@ -13,16 +13,15 @@
 - jsQR 相机+相册统一管线（public/qr.js，public/lib/）；Android 相机权限按需申请（build-android.ps1 RustWebView 补丁 PbCamGrant + manifest CAMERA）
 - 应用图标零白边（逐像素 bbox 0 边距裁剪 + 边界泛洪白底转透明，边界区白像素=0）
 
-## v4.1.0（下一版，方案已定稿）：浏览器一键导入
+## 4.1.0 已交付（浏览器一键导入）
 Edge/Chrome 导出 CSV 一键导入：
-- 导入弹窗新增第 4 个 tab「浏览器导入」，复用 file-drop 选 CSV
-- **表头自动识别**（不硬编码列序）：url/username/password/name/note 关键词模糊匹配 → 所属/网址/账户/密码/备注；Chrome 列 name,url,username,password,note，Edge 同源（个别版本无 note），Firefox 顺手兼容
-- 预览确认：显示「识别为 XX 格式 / N 条 / M 条重复（同网址+账户）」+ 去重策略单选（跳过 / 仍导入）
+- 导入弹窗第 4 个 tab「浏览器导入」，复用 file-drop 选 CSV；Tauri 环境走 Rust 系统对话框
+- **表头自动识别**（不硬编码列序，public/importer.js 纯函数）：url/username/password/name/note 关键词模糊匹配 → 所属/网址/账户/密码/备注；Chrome/Edge（含无 note 变体）/Firefox/中文乱序表头均支持
+- 预览确认：「识别为 XX 格式 / N 条 / M 条重复（同网址+账户，网址归一去协议/www）」+ 去重策略单选（跳过 / 仍导入）
 - 容错：密码列空行跳过并计数；引号转义 / BOM / CRLF 兼容
-- 安全提示：浏览器导出 CSV 为明文，导入完成提示删除原文件
-- 测试：Chrome/Edge 真实导出样例、表头变体、空密码、重复检测（新增 test/importer.test.mjs）
+- 安全提示：导入完成 toast 提醒删除明文 CSV；测试 17 套（新增 test/importer.test.mjs 14 例）
 
-## v4.2.0（已规划）：Passkey 阶段 1（数据托管）
+## v4.2.0（下一版，已规划）：Passkey 阶段 1（数据托管）
 - 新增「Passkey」条目类型：credentialId / rpId / userHandle / 私钥（JWK/PEM）结构化存储
 - 支持从 Bitwarden 导出 JSON 导入；**只存不用**（集中备份价值）
 - 不做完整 WebAuthn provider（见远期阶段 2/3）

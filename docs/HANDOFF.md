@@ -12,7 +12,7 @@
 - `public/app.js`（~4000 行主逻辑，IIFE）· `public/index.html` · `public/style.css`（z-index 阶梯：sidebar 60/modal 500/ms-bar 550/建议 600/hint 650/lock 800/toast 900）
 - 模块：`search.js`（搜索/多分类纯函数 + sortEntries）/ `watchtower.js`（体检 + HIBP k-匿名）/ `qr.js`（扫码五级解析 + jsQR 管线）/ `presets.js`（15 预置站点库）/ `biometric.js` / `autolock.js` / `lib/`（jsQR、qrcode-generator）
 - Rust：`src-tauri/src/lib.rs`（favicon_fetch、SAF、加密、远程模式）
-- 测试 16 套：`node --disable-warning=ExperimentalWarning test/X.test.mjs`（api/generator/agent/db-crypto/watchtower/totp/autolock/theme/search/backup/passphrase/biometric/presets/categories/sort/qr）
+- 测试 17 套：`node --disable-warning=ExperimentalWarning test/X.test.mjs`（api/generator/agent/db-crypto/watchtower/totp/autolock/theme/search/backup/passphrase/biometric/presets/categories/sort/qr/importer；另有 channel-live 为外部 AI 通道实况探测，非单测）
 
 ## Android bypass 构建管线
 - `scripts/build-android.ps1`：cargo aarch64 交叉编译 → .so 入 jniLibs → public/ 入 assets（46/47 文件）→ gradle 打包（跳过 tauri-cli）。`-Preset` 出预置版（含 agent-config.local.js）
@@ -45,7 +45,10 @@
 - 子代理可能因模型波动中断：派活时先让其盘点现场再继续；中断后新 fork 先查 git log/status 接管
 - 分支操作前 `git checkout -- src-tauri/gen/android/tauri.settings.gradle`（构建惯例脏文件）
 
+- **版本文件改写勿用 PS5.1 `-Encoding UTF8`**（带 BOM，曾致 tauri.conf.json 解析失败 cargo 中断）；用 .NET `WriteAllText` + `UTF8Encoding($false)` 且传**绝对路径**（v4.1.0 教训）
+- **失败构建后 RustWebView.kt 会被 tauri build.rs 重新生成**（无补丁状态），勿 `git add -u` 一把梭提交（v4.1.0 曾误入后还原）；构建后该文件与 tauri.settings.gradle 均为惯例脏文件
+
 ## 当前状态（交接时点）
-- HEAD = tag v4.0.3 = `1331d8c`，Release 383250054 已发（正式 3 产物）
-- 工作树干净（惯例脏文件除外）；16 套测试全绿
-- 下一版：**v4.1.0 浏览器一键导入**（规格见 ROADMAP.md，提示词见 NEXT-TASK.md）
+- HEAD = tag v4.1.0 = `a75181c`，Release 383628895 已发（正式 3 产物），Edge 实测导入通过
+- 工作树干净（惯例脏文件除外）；17 套测试全绿
+- 下一版：**v4.2.0 Passkey 阶段 1（数据托管）**（规格见 ROADMAP.md）
