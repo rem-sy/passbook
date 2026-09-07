@@ -171,10 +171,10 @@ body {
 @media (max-width: 560px) { .wt-finding { flex-wrap: wrap; } .wt-actions { width: 100%; } }
 
 /* ---------- TOTP 动态验证码 ---------- */
-.entry-totp { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.entry-totp { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; } /* v4.1.2：放不下时整块换行，不撕验证码 */
 .totp-icon { width: 15px; height: 15px; color: var(--muted); flex: none; }
-.totp-code { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 15px; font-weight: 700; letter-spacing: 1.5px; color: var(--primary); }
-.totp-remain { font-size: 11.5px; color: var(--muted); min-width: 26px; }
+.totp-code { font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: 15px; font-weight: 700; letter-spacing: 1.5px; color: var(--primary); white-space: nowrap; flex: none; } /* v4.1.2：6 位码永不断行（手机端历史按钮挤压下曾断成 3+3） */
+.totp-remain { font-size: 11.5px; color: var(--muted); min-width: 26px; flex: none; }
 .entry-totp.expiring .totp-code { color: #c0392b; }
 .entry-totp.expiring .totp-remain { color: #c0392b; }
 .entry-totp button { border: none; background: none; color: var(--muted); cursor: pointer; padding: 2px; display: flex; }
@@ -440,6 +440,11 @@ html.dark mark.hl { background: rgba(255, 193, 7, 0.38); color: #ffe9b0; }
 .entry-ops button svg { width: 15px; height: 15px; }
 .entry-ops button:hover { background: #f1f2f6; color: var(--text); }
 .entry-ops button.del:hover { color: var(--danger); background: var(--danger-soft); }
+/* v4.1.2：手机端压缩卡片右列操作钮——有历史记录时第 4 个按钮曾挤压左侧 TOTP 行 */
+@media (max-width: 640px) {
+  .entry-ops button { padding: 3px; }
+  .entry-ops button svg { width: 14px; height: 14px; }
+}
 
 .empty { text-align: center; padding: 64px 0; color: var(--muted); }
 .empty p { font-size: 15px; }
