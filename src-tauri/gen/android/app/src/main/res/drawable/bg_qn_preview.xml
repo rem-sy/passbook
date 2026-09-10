@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 密码本 v4.3.1：预览文本底（浅灰圆角，与应用 .note-card 一致） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="#F4F6FA" />
+    <corners android:radius="12dp" />
+</shape>

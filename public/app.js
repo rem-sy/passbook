@@ -853,6 +853,7 @@ const state = {
   selectedIds: new Set(),
   visibleIds: [],      // v4.1.1：当前搜索/筛选后实际可见的条目 id（全选以此为准）
   view: 'pass',        // v4.3.0：页面级三标签 pass | notes | files
+  noteQ: '',           // v4.3.1：便签页独立搜索词（与顶栏密码搜索互不干扰）
 };
 
 /** 字母头像颜色：按文本 hash 取 HSL（v2.7.0 favicon 回退） */
@@ -992,8 +993,6 @@ async function hydrateFavicons(mode = 'cache-only') {
 
 /* ---------------- 列表渲染 ---------------- */
 async function refreshList() {
-  // v4.3.0：便签页走便签检索管线（密码页现有交互零改动）
-  if (state.view === 'notes') return refreshNotesList();
   try {
     // 强搜索管线（v2.1.0）：解析操作符与多词；
     // 单词无操作符 → 服务端 LIKE 粗筛后客户端打分高亮；
@@ -3794,9 +3793,6 @@ function setView(v) {
   closeSidebarDrawer();
   $('#sidebar')?.classList.toggle('hidden', v !== 'pass');
   $('#side-mask')?.classList.add('hidden');
-  $('#search').placeholder = v === 'notes'
-    ? '搜索便签：多词模糊匹配 标题 / 正文 / 标签'
-    : v === 'files' ? '文件仓检索（v4.4 开放）' : '搜索：多词模糊匹配，支持 分类:工作、有验证码、无验证码';
   if (v === 'notes') refreshNotesList();
 }
 
@@ -3826,19 +3822,19 @@ async function refreshNotesList() {
   let notes = [];
   try { notes = LocalStore.notesList() || []; } catch (e) { toast('读取便签失败: ' + e.message, true); return; }
   let shown = notes;
-  if (state.q && window.PassNotes && window.PassSearch) {
-    const res = PassNotes.searchNotes(notes, state.q, PassSearch);
+  if (state.noteQ && window.PassNotes && window.PassSearch) {
+    const res = PassNotes.searchNotes(notes, state.noteQ, PassSearch);
     if (res) shown = res.map((r) => r.note);
   }
   listEl.innerHTML = shown.map(renderNoteCard).join('');
-  countEl.textContent = state.q ? `${shown.length}/${notes.length} 条` : `共 ${notes.length} 条`;
+  countEl.textContent = state.noteQ ? `${shown.length}/${notes.length} 条` : `共 ${notes.length} 条`;
   emptyEl.classList.toggle('hidden', shown.length > 0);
 }
 
 function renderNoteCard(n) {
   const tags = String(n.tags || '').split(/[,，、\s]+/).filter(Boolean);
   return `
-  <article class="note-card" data-id="${n.id}">
+  <article class="note-card" data-id="${n.id}" title="点击查看全文" style="cursor:pointer">
     <div class="note-head">
       <span class="note-title">${escapeHtml(n.title || PassNotes.titleOf(n.content))}</span>
       ${noteSrcBadge(n.source)}
@@ -3856,6 +3852,43 @@ function renderNoteCard(n) {
 }
 
 /** 新建/编辑便签弹窗（标题、正文、标签；来源徽标只读展示） */
+/** 便签详情弹窗（v4.3.1）：卡片只显示截断预览，点卡片看全文（可滚动） */
+function openNoteDetail(note) {
+  const tags = String(note.tags || '').split(/[,，、\s]+/).filter(Boolean);
+  openModal(`
+    <div class="modal-head">
+      <h3>${escapeHtml(note.title || PassNotes.titleOf(note.content))}</h3>
+      <button class="modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;font-size:12px;color:var(--muted,#889)">
+        ${noteSrcBadge(note.source)}
+        <span>${noteTime(note.updated_at)}</span>
+        ${tags.map((t) => `<span class="note-tag-chip">${escapeHtml(t)}</span>`).join('')}
+      </div>
+      <div style="white-space:pre-wrap;word-break:break-word;max-height:58vh;overflow-y:auto;font-size:14px;line-height:1.7">${escapeHtml(note.content)}</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="btn-nd-del">删除</button>
+      <button class="btn" id="btn-nd-copy">复制全文</button>
+      <button class="btn primary" id="btn-nd-edit">编辑</button>
+    </div>
+  `, true);
+  $('#btn-nd-copy').addEventListener('click', () => {
+    copyText(note.content).catch(() => toast('复制失败', true)); // copyText 自带成功 toast
+  });
+  $('#btn-nd-edit').addEventListener('click', () => openNoteModal(note));
+  $('#btn-nd-del').addEventListener('click', async () => {
+    if (!confirm('确定删除这条便签？')) return;
+    try {
+      await LocalStore.noteRemove(note.id);
+      closeModal();
+      toast('便签已删除');
+      refreshNotesList();
+    } catch (e) { toast('删除失败: ' + e.message, true); }
+  });
+}
+
 function openNoteModal(note) {
   const isNew = !note;
   note = note || { title: '', content: '', tags: '', source: 'manual' };
@@ -3971,14 +4004,19 @@ document.querySelectorAll('#view-tabs .view-tab').forEach((b) => {
   b.addEventListener('click', () => setView(b.dataset.view));
 });
 $('#btn-note-add')?.addEventListener('click', () => openNoteModal(null));
+// v4.3.1：便签页独立搜索框（顶栏搜索只管密码页，互不干扰）
+$('#note-search')?.addEventListener('input', debounce((e) => {
+  state.noteQ = e.target.value.trim();
+  refreshNotesList();
+}, 200));
 $('#note-list')?.addEventListener('click', (e) => {
-  const btn = e.target.closest('[data-note-act]');
-  if (!btn) return;
   const card = e.target.closest('.note-card');
   const id = Number(card?.dataset.id);
   if (!(currentMode === 'local' && id)) return;
   const note = (LocalStore.notesList() || []).find((n) => n.id === id);
   if (!note) return;
+  const btn = e.target.closest('[data-note-act]');
+  if (!btn) { openNoteDetail(note); return; } // v4.3.1：点卡片本体看全文详情
   if (btn.dataset.noteAct === 'del') {
     if (!confirm('确定删除这条便签？')) return;
     LocalStore.noteRemove(note.id).then(() => { toast('便签已删除'); refreshNotesList(); }).catch((err) => toast(err.message, true));

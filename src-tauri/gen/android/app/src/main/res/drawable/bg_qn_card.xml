@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 密码本 v4.3.1：确认框卡片背景（白底大圆角，与应用 modal 一致） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="#FFFFFF" />
+    <corners android:radius="18dp" />
+</shape>

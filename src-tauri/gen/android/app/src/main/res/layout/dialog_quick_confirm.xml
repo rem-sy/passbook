@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 密码本 v4.3.1：随手记/分享确认框（简约卡片风，替代原生 AlertDialog） -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/qn_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#59000000"
+    android:clickable="true">
+
+    <LinearLayout
+        android:id="@+id/qn_card"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:layout_marginStart="32dp"
+        android:layout_marginEnd="32dp"
+        android:background="@drawable/bg_qn_card"
+        android:clickable="true"
+        android:elevation="10dp"
+        android:orientation="vertical"
+        android:padding="22dp">
+
+        <TextView
+            android:id="@+id/qn_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="随手记"
+            android:textColor="#1B2330"
+            android:textSize="17sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/qn_sub"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="剪贴板内容预览（前 80 字）"
+            android:textColor="#8A93A6"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/qn_preview"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:background="@drawable/bg_qn_preview"
+            android:ellipsize="end"
+            android:lineSpacingExtra="4dp"
+            android:maxLines="8"
+            android:padding="14dp"
+            android:textColor="#3D4759"
+            android:textSize="14sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:gravity="end"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/qn_cancel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_qn_btn_ghost"
+                android:paddingStart="18dp"
+                android:paddingTop="9dp"
+                android:paddingEnd="18dp"
+                android:paddingBottom="9dp"
+                android:text="取消"
+                android:textColor="#4A5468"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/qn_ok"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:background="@drawable/bg_qn_btn_primary"
+                android:paddingStart="18dp"
+                android:paddingTop="9dp"
+                android:paddingEnd="18dp"
+                android:paddingBottom="9dp"
+                android:text="收入"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>
