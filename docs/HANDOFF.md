@@ -12,7 +12,7 @@
 ## 当前状态（交接时点）
 - HEAD = tag v4.1.2 = `0e4a9e7`；Release 停在 v4.1.0（383628895，正式 3 产物）；4.1.1/4.1.2 为修复小版本未发 Release
 - v4.1.0 浏览器一键导入（Edge 实测通过）；v4.1.1 base64 IPC + 多选三修；v4.1.2 手机端 TOTP 断行修复（实测通过）
-- v4.3.0 随手记 + 三标签页；v4.3.1 便签独立搜索/卡片详情/快捷方式剪贴板重试四修；**v4.4.0 文件仓已交付（待用户真机验收）**：files 表 + files-store 加密分桶（密钥从库密钥派生，未加密库用固定设备密钥，换密钥走 vaultReencryptAll 唯一重加密路径）；四通道收件（分享 ShareFileActivity / 其他应用打开 OpenFileActivity 双动作 / SAF 批量 SafImportActivity + __passbook_saf.pick 桥 / 桌面拖拽 + pick_files）；预览矩阵本地打包（public/lib：pdfjs / docx-preview + jszip / xlsx.full）；zip 导出（store-only 自写 buildZip）；test/filehub.test.mjs 15 项
+- v4.3.0 随手记 + 三标签页；v4.3.1 便签独立搜索/卡片详情/快捷方式剪贴板重试四修；**v4.4.x 文件仓 + v4.5.0 内容检索已交付（待用户真机验收）**；v4.5.0：files 表补 ftext/ftext_ok 列（迁移幂等），正文抽取管线（pdfjs getTextContent / JSZip 解 OOXML / SheetJS CSV，cap 256KB），导入后异步队列 + 工具栏内容索引按钮，searchFiles 内容命中合并（test/ftext.test.mjs 7 项）：files 表 + files-store 加密分桶（密钥从库密钥派生，未加密库用固定设备密钥，换密钥走 vaultReencryptAll 唯一重加密路径）；四通道收件（分享 ShareFileActivity / 其他应用打开 OpenFileActivity 双动作 / SAF 批量 SafImportActivity + __passbook_saf.pick 桥 / 桌面拖拽 + pick_files）；预览矩阵本地打包（public/lib：pdfjs / docx-preview + jszip / xlsx.full）；zip 导出（store-only 自写 buildZip）；test/filehub.test.mjs 15 项
 - 工作树干净（惯例脏文件除外：RustWebView.kt / tauri.settings.gradle / Cargo.lock）
 - 下一版：待用户对 v4.4.0 真机验收后定（候选：v4.4.x 文件仓补丁或 v5.0 收尾，见 ROADMAP）
 

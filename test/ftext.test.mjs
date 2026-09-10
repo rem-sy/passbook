@@ -1,0 +1,112 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+/* v4.5.0 内容检索纯函数补测：装载同 filehub.test.mjs 惯例 */
+globalThis.window = globalThis;
+const fs = (await import('node:fs'));
+(0, eval)(fs.readFileSync(new URL('../public/filehub.js', import.meta.url), 'utf8'));
+(0, eval)(fs.readFileSync(new URL('../public/search.js', import.meta.url), 'utf8'));
+const P = globalThis.window.PassFiles;
+const PassSearch = globalThis.window.PassSearch;
+
+const mk = (id, name, tags, ftext) => ({
+  id, name, mime: '', size: 10, sha256: (String(id) + '0'.repeat(64)).slice(0, 64),
+  source: 'saf', tags: tags || '', note: '', created_at: '2025-01-01T00:00:00Z', ftext: ftext || '',
+});
+
+/* ---------- xmlToText（OOXML 正文抽取核心） ---------- */
+
+test('xmlToText：docx 段落 XML → 换行文本 + 实体还原', () => {
+  const xml = '<w:document><w:body>'
+    + '<w:p><w:r><w:t>第一段</w:t></w:r><w:r><w:t>同行拼接</w:t></w:r></w:p>'
+    + '<w:p><w:r><w:t>第二段 &amp; 引用 &lt;tag&gt; A&quot;B</w:t></w:r></w:p>'
+    + '</w:body></w:document>';
+  const t = P.xmlToText(xml);
+  assert.ok(t.includes('第一段同行拼接'));
+  assert.ok(t.includes('第二段 & 引用 <tag> A"B'));
+  assert.equal(t.split('\n').length, 2);
+});
+
+test('xmlToText：pptx（a:p）与数字实体、压平空白', () => {
+  const xml = '<a:p><a:t>幻灯  </a:t><a:t>片一</a:t></a:p><a:p><a:t>第二&#10;行&#65;</a:t></a:p>';
+  const t = P.xmlToText(xml);
+  assert.ok(t.startsWith('幻灯 片一'));
+  assert.ok(t.includes('第二\n行A'));
+});
+
+test('xmlToText：空/无文本 XML 返回空串', () => {
+  assert.equal(P.xmlToText('<w:p/>'), '');
+  assert.equal(P.xmlToText(''), '');
+  assert.equal(P.xmlToText(null), '');
+});
+
+/* ---------- capText ---------- */
+
+test('capText：超长截断、默认上限、空安全', () => {
+  assert.equal(P.capText('abc'), 'abc');
+  assert.equal(P.capText('abcdefghij', 4), 'abcd');
+  assert.equal(P.capText(null), '');
+  const big = 'x'.repeat(P.FTEXT_CAP + 100);
+  assert.equal(P.capText(big).length, P.FTEXT_CAP);
+  assert.equal(P.FTEXT_CAP, 256 * 1024);
+});
+
+/* ---------- slideKeyOrder ---------- */
+
+test('slideKeyOrder：数值序（slide10 排在 slide2 后）', () => {
+  const names = ['ppt/slides/slide10.xml', 'ppt/slides/slide2.xml', 'ppt/slides/slide1.xml'];
+  assert.deepEqual([...names].sort(P.slideKeyOrder),
+    ['ppt/slides/slide1.xml', 'ppt/slides/slide2.xml', 'ppt/slides/slide10.xml']);
+});
+
+/* ---------- snippetOf ---------- */
+
+test('snippetOf：首个命中词上下文片段 + 未命中 null', () => {
+  const text = '前情提要省略。这里提到预算追加百分之八，需要王工确认。后续内容省略。';
+  const sn = P.snippetOf(text, ['不存在', '预算追加']);
+  assert.ok(sn.includes('预算追加'));
+  assert.ok(sn.startsWith('…') || sn.includes('前情')); // 命中在开头附近 → 无前省略号
+  assert.ok(sn.includes('王工'));
+  assert.ok(sn.length <= text.length);
+  // 长文本：片段有界（radius=10 时远小于全文）
+  const long = '零'.repeat(300) + '预算追加' + '一'.repeat(300);
+  const sn2 = P.snippetOf(long, ['预算追加'], 10);
+  assert.ok(sn2.length < 40 && sn2.startsWith('…') && sn2.endsWith('…') && sn2.includes('预算追加'));
+  assert.equal(P.snippetOf(text, ['zzz']), null);
+  assert.equal(P.snippetOf('', ['a']), null);
+  assert.equal(P.snippetOf(text, []), null);
+});
+
+/* ---------- searchFiles：内容命中合并 ---------- */
+
+test('searchFiles：正文 ftext 命中全部词 → 合并返回并标记 contentHit', () => {
+  const files = [
+    mk(1, '报告.pdf', '健康', '体检结论血脂略高建议复查'),
+    mk(2, '预算.xlsx', '财务', '预算追加百分之八待确认'),
+    mk(3, '合同.docx', '工作', '租赁合同租金五千六'),
+  ];
+  // 名称命中（正常管线）
+  let r = P.searchFiles(files, '合同', PassSearch);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].file.id, 3);
+  assert.equal(r[0].contentHit, false);
+  // 内容命中：名称不含「血脂」但正文含
+  r = P.searchFiles(files, '血脂', PassSearch);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].file.id, 1);
+  assert.equal(r[0].contentHit, true);
+  // 多词 AND：两个词都在正文
+  r = P.searchFiles(files, '预算 追加', PassSearch);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].file.id, 2);
+  // 多词 AND：一个在名称一个在正文 → 两边都不算命中（保持语义简单可测）
+  r = P.searchFiles(files, '合同 租金', PassSearch);
+  assert.equal(r.length, 1); // 「合同 租金」都在 ftext（租金五千六）→ 内容命中
+  // opts.content=false 关闭内容检索
+  r = P.searchFiles(files, '血脂', PassSearch, { content: false });
+  assert.equal(r.length, 0);
+  // 无 ftext 字段（v4.4 老行未迁移语义）不炸
+  const old = files.map((f) => { const { ftext, ...rest } = f; return rest; });
+  r = P.searchFiles(old, '血脂', PassSearch);
+  assert.equal(r.length, 0);
+});

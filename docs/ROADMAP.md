@@ -1,7 +1,7 @@
 # 密码本 Roadmap（v4.3+ 存储扩展时代）
 
 > 维护约定：每完成一个版本更新此文件并归档旧版到 docs/archive/。
-> 当前已发布：**v4.4.0**（v4.3.x 随手记 + v4.4.0 文件仓已交付；Release 停在 v4.1.0，后续版本待用户真机确认后择机发）。
+> 当前已发布：**v4.5.0**（v4.3.x 随手记 / v4.4.x 文件仓 / v4.5.0 文件内容检索已交付；Release 停在 v4.1.0，后续版本待用户真机确认后择机发）。
 > 立项调研：[RESEARCH-v5-storage.md](RESEARCH-v5-storage.md)（随手记/文件仓/三标签页全案）。
 
 ## 版本规范
@@ -34,8 +34,11 @@
 - 加密一致性：换密钥/关加密向导同步重加密文件本体
 - 测试：test/filehub.test.mjs（元数据纯函数、去重键、检索命中、桶路径）
 
+## v4.5.0（已交付）：文件仓内容检索
+**正文抽取全离线本地完成（不上传）**：txt/md/csv/json 直读；docx/footnotes/endnotes 与 pptx slides 用 JSZip 解 XML 抽正文（xmlToText 纯函数）；xlsx 用 SheetJS 转 CSV；PDF 用 pdf.js getTextContent（前 500 页、256KB 截断）；图片与旧 doc/ppt/xls 二进制无文本层不参与（OCR 评估结论：tesseract.js + 中文语料约 20MB、秒级/张，性价比低不做）。抽取文本存 files.ftext（迁移链幂等补列），导入后异步串行队列建索引（不阻塞入库），工具栏「内容索引」补建存量；searchFiles 元数据命中 + 正文 ALL 词命中合并，卡片「内容命中」徽标 + 上下文片段。test/ftext.test.mjs 7 项。
+
 ## v5.0.0（已规划）：统一入口收尾
-- 三 tab 视觉统一打磨；便签贴图/富文本支持；文件文本抽取 FTS 全文检索评估（PDF/DOCX 依赖较重，先出评估再决定）；桌面托盘快捷入口
+- 三 tab 视觉统一打磨；便签贴图/富文本支持；桌面托盘快捷入口（文件内容检索已于 v4.5.0 落地，FTS5 如需再评估）
 - Release 里程碑候选（发版前用户确认）
 
 ## 远期（方向已评估，未排期）

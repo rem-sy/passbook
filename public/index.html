@@ -91,7 +91,7 @@
         <div class="search-row">
           <div class="search-wrap">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-            <input id="file-search" type="search" placeholder="搜索文件：多词模糊匹配 名称 / 备注 / 标签 / 来源" autocomplete="off" />
+            <input id="file-search" type="search" placeholder="搜索文件：多词模糊匹配 名称 / 备注 / 标签 / 来源 / 正文内容" autocomplete="off" />
           </div>
         </div>
         <div class="tb-lines">
@@ -99,6 +99,10 @@
             <button id="btn-files-import" class="btn primary" title="导入文件">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></svg>
               <span class="tb-text">导入文件</span>
+            </button>
+            <button id="btn-files-index" class="btn" title="为未索引文件抽取正文，建立内容检索索引">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
+              <span class="tb-text">内容索引</span>
             </button>
             <label id="file-drop-zone" class="file-drop file-drop-zone" for="file-input-multi" title="拖拽文件到此处导入">拖拽文件到此处（或点击选择）<input type="file" id="file-input-multi" multiple hidden /></label>
           </div>

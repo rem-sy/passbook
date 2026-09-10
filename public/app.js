@@ -172,7 +172,9 @@ const SCHEMA_SQL = `
     source TEXT NOT NULL DEFAULT 'other',
     tags TEXT NOT NULL DEFAULT '',
     note TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    ftext TEXT NOT NULL DEFAULT '',
+    ftext_ok INTEGER NOT NULL DEFAULT 0
   );
   CREATE INDEX IF NOT EXISTS idx_files_created ON files(created_at);
   CREATE INDEX IF NOT EXISTS idx_files_sha ON files(sha256);
@@ -427,6 +429,12 @@ const LocalStore = {
     if (!cols.includes('totp_secret')) { this.db.run("ALTER TABLE entries ADD COLUMN totp_secret TEXT NOT NULL DEFAULT ''"); migrated = true; }
     if (!cols.includes('history')) { this.db.run("ALTER TABLE entries ADD COLUMN history TEXT NOT NULL DEFAULT ''"); migrated = true; }
     if (!cols.includes('fav')) { this.db.run('ALTER TABLE entries ADD COLUMN fav INTEGER NOT NULL DEFAULT 0'); migrated = true; }
+    // v4.5.0：文件仓内容检索列（老库补列，幂等）
+    const fcols = this.query('PRAGMA table_info(files)').map((c) => c.name);
+    if (fcols.length) {
+      if (!fcols.includes('ftext')) { this.db.run("ALTER TABLE files ADD COLUMN ftext TEXT NOT NULL DEFAULT ''"); migrated = true; }
+      if (!fcols.includes('ftext_ok')) { this.db.run('ALTER TABLE files ADD COLUMN ftext_ok INTEGER NOT NULL DEFAULT 0'); migrated = true; }
+    }
     if (migrated || backfilled) await this.persist();
   },
   /** 读取底层原始字节：Tauri 下从数据库文件读，否则从 IndexedDB 读 */
@@ -557,6 +565,11 @@ const LocalStore = {
   },
   async fileRemove(id) {
     this.db.run('DELETE FROM files WHERE id = ?', [id]);
+    await this.persist();
+  },
+  /** v4.5.0 内容检索：写入抽取正文（ok=1 表示已索引；正文空也算已索引，避免反复重试） */
+  async fileSetFtext(id, ftext, ok) {
+    this.db.run('UPDATE files SET ftext = ?, ftext_ok = ? WHERE id = ?', [ftext || '', ok ? 1 : 0, id]);
     await this.persist();
   },
   fileKvGet(k) {
@@ -4153,6 +4166,7 @@ async function vaultImport(meta) {
     await tauriInvoke('store_blob_write_b64', { sha256: sha, b64: bytesToBase64(enc) });
   }
   const id = await LocalStore.fileCreate(row);
+  queueFtext(id); // v4.5.0：入库后异步抽取正文建内容索引（不阻塞入库）
   return { row: { ...row, id }, dupBefore, storedNew: !exists };
 }
 
@@ -4254,18 +4268,22 @@ function fileSrcBadge(src) {
   return `<span class="src-badge src-${src}" title="来源：${label}">${label}</span>`;
 }
 
-function renderFileCard(f) {
+function renderFileCard(f, ci) {
   const tags = String(f.tags || '').split(/[,，、\s]+/).filter(Boolean);
   const k = PassFiles.previewKind(f.mime, f.name);
   const canInline = k !== 'system';
+  const contentBadge = ci && ci.contentHit ? '<span class="src-badge src-content" title="检索词命中文件正文">内容命中</span>' : '';
+  const snippetLine = ci && ci.snippet ? `<div class="file-snippet">${escapeHtml(ci.snippet)}</div>` : '';
+  const body = ci && ci.snippet ? snippetLine : `<div class="note-content">${escapeHtml(f.note || (canInline ? '点击卡片可应用内预览' : '点击卡片可用系统应用打开'))}</div>`;
   return `
   <article class="note-card file-card" data-id="${f.id}" title="点击查看详情" style="cursor:pointer">
     <div class="note-head">
       ${fileIcon(f.mime, f.name)}
       <span class="note-title">${escapeHtml(f.name)}</span>
       ${fileSrcBadge(f.source)}
+      ${contentBadge}
     </div>
-    <div class="note-content">${escapeHtml(f.note || (canInline ? '点击卡片可应用内预览' : '点击卡片可用系统应用打开'))}</div>
+    ${body}
     <div class="note-foot">
       <span>${noteTime(f.created_at)}</span>
       <span>${escapeHtml(PassFiles.formatSize(f.size))}</span>
@@ -4292,11 +4310,21 @@ async function refreshFilesList() {
   let files = [];
   try { files = LocalStore.filesList() || []; } catch (e) { toast('读取文件列表失败: ' + e.message, true); return; }
   let shown = files;
+  let contentInfo = {}; // v4.5.0：id → { contentHit, snippet }（内容命中徽标与片段）
   if (state.fileQ && window.PassFiles && window.PassSearch) {
     const res = PassFiles.searchFiles(files, state.fileQ, PassSearch);
-    if (res) shown = res.map((r) => r.file);
+    if (res) {
+      shown = res.map((r) => r.file);
+      const terms = state.fileQ.split(/\s+/).filter(Boolean);
+      for (const r of res) {
+        if (r.contentHit || (r.file.ftext && terms.length)) {
+          const sn = PassFiles.snippetOf(r.file.ftext || '', terms);
+          if (r.contentHit || sn) contentInfo[r.file.id] = { contentHit: !!r.contentHit, snippet: sn };
+        }
+      }
+    }
   }
-  listEl.innerHTML = shown.map(renderFileCard).join('');
+  listEl.innerHTML = shown.map((f) => renderFileCard(f, contentInfo[f.id])).join('');
   countEl.textContent = state.fileQ ? `${shown.length}/${files.length} 个` : `共 ${files.length} 个`;
   emptyEl.classList.toggle('hidden', shown.length > 0);
 }
@@ -4516,6 +4544,91 @@ async function systemOpenFile(file) {
   }
 }
 
+/* ---------- v4.5.0 内容检索：正文抽取（依赖已打包库：pdfjs / JSZip / XLSX） ---------- */
+
+/** 抽取正文：按预览类型分派。旧二进制（doc/ppt/xls）与图片无文本层 → 空文本（仍记 ok=1 不重试） */
+async function extractFtext(file) {
+  const k = PassFiles.previewKind(file.mime, file.name);
+  const ext = (String(file.name || '').toLowerCase().match(/\.([a-z0-9]+)$/) || [])[1] || '';
+  let text = '';
+  const bytes = await vaultReadBytes(file.sha256);
+  if (k === 'text' || k === 'inline-md') {
+    text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+  } else if (k === 'inline-pdf') {
+    const pdfjs = await ensurePdfJs();
+    const doc = await pdfjs.getDocument({ data: bytes }).promise;
+    const parts = [];
+    const maxPages = Math.min(doc.numPages, 500); // 超长 PDF 抽前 500 页，足够个人检索
+    for (let i = 1; i <= maxPages; i++) {
+      const pg = await doc.getPage(i);
+      const tc = await pg.getTextContent();
+      parts.push(tc.items.map((it) => it.str).join(' '));
+      if (parts.join('\n').length > PassFiles.FTEXT_CAP * 2) break; // 留出余量后早停
+    }
+    text = parts.join('\n');
+  } else if (k === 'inline-docx') {
+    await ensureDocx(); // 载入 JSZip 全局
+    const zip = await window.JSZip.loadAsync(bytes);
+    const parts = [];
+    const names = ['word/document.xml', 'word/footnotes.xml', 'word/endnotes.xml'];
+    for (const n of names) {
+      const f = zip.file(n);
+      if (f) parts.push(PassFiles.xmlToText(await f.async('string')));
+    }
+    text = parts.join('\n');
+  } else if (k === 'inline-xlsx') {
+    const XLSX = await ensureXlsx();
+    const wb = XLSX.read(bytes, { type: 'array' });
+    text = wb.SheetNames.map((n) => '# ' + n + '\n' + XLSX.utils.sheet_to_csv(wb.Sheets[n])).join('\n');
+  } else if (ext === 'pptx') {
+    // pptx 预览走系统打开，但正文抽取便宜（JSZip 解 slides XML），内容检索照样支持
+    await ensureDocx();
+    const zip = await window.JSZip.loadAsync(bytes);
+    const names = Object.keys(zip.files)
+      .filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n))
+      .sort(PassFiles.slideKeyOrder);
+    const parts = [];
+    for (const n of names) parts.push(PassFiles.xmlToText(await zip.file(n).async('string')));
+    text = parts.join('\n');
+  }
+  /* 其余（图片 / doc / ppt / xls 旧二进制 / 未知类型）：无轻量文本层，记空 */
+  text = PassFiles.capText(text);
+  await LocalStore.fileSetFtext(file.id, text, 1);
+  return text;
+}
+
+/** 串行抽取队列（大 PDF 解析慢，排队不阻塞 UI；已索引跳过） */
+let _ftextQueue = [];
+let _ftextRunning = false;
+function queueFtext(fileId) {
+  if (!(currentMode === 'local' && IS_TAURI)) return;
+  _ftextQueue.push(fileId);
+  runFtextQueue();
+}
+async function runFtextQueue() {
+  if (_ftextRunning) return;
+  _ftextRunning = true;
+  try {
+    while (_ftextQueue.length) {
+      const id = _ftextQueue.shift();
+      const f = (LocalStore.filesList() || []).find((x) => x.id === id);
+      if (!f || f.ftext_ok) continue;
+      try { await extractFtext(f); }
+      catch (e) { console.warn('[passbook] 正文抽取失败', f.name, e); }
+    }
+    if (state.view === 'files') refreshFilesList(); // 索引完成后刷新（内容命中徽标可能变化）
+  } finally { _ftextRunning = false; }
+}
+
+/* ---------- 内容索引按钮 + 检索结果渲染 ---------- */
+$('#btn-files-index')?.addEventListener('click', async () => {
+  if (currentMode !== 'local' || !IS_TAURI) return toast('内容索引需在桌面/手机应用内本地模式使用', true);
+  const rows = (LocalStore.filesList() || []).filter((r) => !r.ftext_ok);
+  if (!rows.length) return toast('内容索引已是最新（旧 doc/ppt/xls 与图片无文本层，不参与内容检索）');
+  toast(`开始为 ${rows.length} 个文件抽取正文建索引，大文件稍候…`);
+  for (const r of rows) queueFtext(r.id);
+});
+
 /* ---------- 四通道导入 ---------- */
 async function filesImportClick() {
   if (currentMode !== 'local') return toast('文件仓仅本地存储模式支持', true);
@@ -4697,11 +4810,19 @@ async function injectShotDemo() {
         let i = 0;
         for (const [name, mime, size, source, tags] of demo) {
           i++;
-          await LocalStore.fileCreate(PassFiles.buildMetaRow({
+          const fid = await LocalStore.fileCreate(PassFiles.buildMetaRow({
             name, mime, size, source, tags, note: '',
             sha256: (i.toString(16) + '0'.repeat(64)).slice(0, 64),
             created_at: new Date(Date.now() - i * 86400000 * 3).toISOString(),
           }));
+          const demoText = [
+            '体检结论：各项指标基本正常，血脂略高，建议低脂饮食并三个月后复查。项目明细见附页。',
+            '里程碑：M1 需求冻结 3/10，M2 联调 3/18，M3 上线 3/22。风险：第三方支付接口延期。',
+            '报销范围：差旅住宿每晚上限 400 元，需附发票与行程单，事前审批走 OA。',
+            '读书笔记：第一章讲局部性原理，缓存友好的数据结构能差出一个数量级……',
+            '扫描件：房屋租赁合同，租期 2025-03 至 2026-02，月租金 5600 元。',
+          ][i - 1] || '';
+          await LocalStore.fileSetFtext(fid, demoText, 1);
         }
       }
     }
@@ -4787,7 +4908,7 @@ function openGuideModal() {
            · <b>桌面拖拽</b>：把文件拖进文件仓页的虚线框即导入。</p>
         <p><b>同内容自动去重</b>：按内容 sha256 共用一份加密存储，删除时最后一份引用才会物理清除。</p>
         <p><b>文档预览（全离线本地渲染）</b>：PDF / docx / xlsx / Markdown / txt / 图片直接应用内预览；旧版 doc/ppt/xls 与 pptx 不做内置渲染，提供「系统打开」（临时解密到缓存目录调用系统应用）。桌面与手机同一套渲染。</p>
-        <p>文件页搜索框多词模糊匹配<b>名称 / 备注 / 标签 / 来源</b>（顶栏搜索依旧只管密码页）。点卡片看详情：预览 / 系统打开 / 重命名改标签 / 删除。</p>`)}
+        <p>文件页搜索框多词模糊匹配<b>名称 / 备注 / 标签 / 来源 / 正文内容</b>（顶栏搜索依旧只管密码页）。<b>内容检索</b>：PDF / Word / Excel / PPT / Markdown / 文本文件的正文在导入时自动抽取建索引（本地完成、不上传），命中正文的结果带「内容命中」徽标与上下文片段；点工具栏「内容索引」可为存量/失败的文件补建。旧 doc/ppt/xls 二进制与图片没有文本层，只检索名称等元数据。</p>`)}
       ${guideSec('manual.png', '④ 存一条密码（手动录入）', `
         <p>点工具栏 <b>「＋ 手动录入」</b>，填写<b>所属</b>（应用/网站）、<b>账户</b>、<b>密码</b>三项必填。</p>
         <p>还可选填 <b>TOTP 密钥</b>（base32 或直接粘贴 otpauth:// 链接自动提取）、<b>分类</b>、<b>网址</b>、<b>备注</b>；编辑已有记录时能上传<b>附件</b>（每张 ≤2MB，随数据库加密存储）。</p>

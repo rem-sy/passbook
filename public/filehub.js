@@ -154,13 +154,90 @@
    * 多词检索文件：借助 PassSearch.searchEntries。返回 [{ file, score }]（分数降序）；
    * 空查询返回 null（调用方全量展示）。
    */
-  function searchFiles(files, query, PassSearch) {
+  function searchFiles(files, query, PassSearch, opts) {
     if (!PassSearch || typeof PassSearch.searchEntries !== 'function') return null;
     var pq = PassSearch.parseQuery(query);
     if (!pq.terms.length && !Object.keys(pq.filters).length) return null;
-    var entries = (files || []).map(fileToEntry);
+    var arr = files || [];
+    var entries = arr.map(fileToEntry);
     var res = PassSearch.searchEntries(entries, query) || [];
-    return res.map(function (r) { return { file: r.entry.__file, score: r.score }; });
+    var out = [];
+    var seen = {};
+    for (var i = 0; i < res.length; i++) {
+      seen[res[i].entry.__file.id] = true;
+      out.push({ file: res[i].entry.__file, score: res[i].score, contentHit: false });
+    }
+    /* v4.5.0 内容检索：抽取文本 ftext 命中全部检索词（AND）也返回，标记 contentHit */
+    if (!opts || opts.content !== false) {
+      var terms = pq.terms.map(function (t) { return String(t.term != null ? t.term : t).toLowerCase(); })
+        .filter(Boolean);
+      for (var j = 0; j < arr.length && terms.length; j++) {
+        var f = arr[j];
+        if (seen[f.id]) continue;
+        var ft = String(f.ftext || '').toLowerCase();
+        if (!ft) continue;
+        var all = true;
+        for (var k = 0; k < terms.length; k++) if (ft.indexOf(terms[k]) < 0) { all = false; break; }
+        if (all) out.push({ file: f, score: 0.1, contentHit: true });
+      }
+    }
+    return out;
+  }
+
+  /* ---------- v4.5.0 内容检索：抽取文本处理纯函数 ---------- */
+
+  /** 每文件抽取文本上限（防大 PDF 撑库；截断即够个人检索用） */
+  var FTEXT_CAP = 256 * 1024;
+
+  function capText(t, max) {
+    var s = String(t == null ? '' : t);
+    var cap = max || FTEXT_CAP;
+    return s.length > cap ? s.slice(0, cap) : s;
+  }
+
+  /**
+   * OOXML 内部 XML → 纯文本：段落/单元格边界转换行、去标签、还原实体、压平空白。
+   * 适配 docx（w:）、pptx（a:）、xlsx 共享字符串（<t>）等任意 OOXML XML 片段。
+   */
+  function xmlToText(xml) {
+    var s = String(xml == null ? '' : xml);
+    s = s.replace(/<w:p[ >]|<a:p[ >]/g, '\n');           // 段落起始换行（w:word a:ppt）
+    s = s.replace(/<w:tab\/>|<w:tab[ >]/g, '\t');
+    s = s.replace(/<[^>]*>/g, '');                        // 去标签
+    s = s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+       .replace(/&apos;/g, "'").replace(/&#(\d+);/g, function (_, d) { return String.fromCharCode(+d); })
+       .replace(/&amp;/g, '&');                           // 实体还原（&amp; 最后处理）
+    s = s.replace(/[ \t]+/g, ' ').replace(/ ?\n ?/g, '\n').replace(/\n{3,}/g, '\n\n');
+    return s.trim();
+  }
+
+  /** pptx 幻灯片路径排序（slide2 < slide10，避免字典序 10<2） */
+  function slideKeyOrder(a, b) {
+    var na = (String(a).match(/slide(\d+)\.xml$/i) || [])[1];
+    var nb = (String(b).match(/slide(\d+)\.xml$/i) || [])[1];
+    na = na ? +na : 1e9; nb = nb ? +nb : 1e9;
+    return na - nb || String(a).localeCompare(String(b));
+  }
+
+  /**
+   * 命中片段：在 text 中找 terms 首个出现位置，截前后 radius 字符的上下文（带 …）。
+   * 未命中返回 null。
+   */
+  function snippetOf(text, terms, radius) {
+    var s = String(text == null ? '' : text);
+    var r = radius || 36;
+    var lower = s.toLowerCase();
+    var pos = -1, hitTerm = '';
+    for (var i = 0; i < (terms || []).length; i++) {
+      var t = String(terms[i]).toLowerCase();
+      if (!t) continue;
+      var p = lower.indexOf(t);
+      if (p >= 0 && (pos < 0 || p < pos)) { pos = p; hitTerm = t; }
+    }
+    if (pos < 0) return null;
+    var start = Math.max(0, pos - r);
+    var end = Math.min(s.length, pos + hitTerm.length + r);
+    return (start > 0 ? '…' : '') + s.slice(start, end).replace(/\s+/g, ' ') + (end < s.length ? '…' : '');
   }
 
   /* ---------- 预览类型判定（纯函数：mime/扩展名 → 渲染通道） ---------- */
@@ -478,6 +555,11 @@
     dupHint: dupHint,
     fileToEntry: fileToEntry,
     searchFiles: searchFiles,
+    FTEXT_CAP: FTEXT_CAP,
+    capText: capText,
+    xmlToText: xmlToText,
+    slideKeyOrder: slideKeyOrder,
+    snippetOf: snippetOf,
     mimeFromName: mimeFromName,
     previewKind: previewKind,
     mdToHtml: mdToHtml,
