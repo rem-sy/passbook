@@ -1,4 +1,6 @@
 <resources>
     <string name="app_name">"密码本"</string>
     <string name="main_activity_title">"密码本"</string>
+    <string name="quicknote_short">"随手记"</string>
+    <string name="quicknote_long">"随手记：收入剪贴板"</string>
 </resources>

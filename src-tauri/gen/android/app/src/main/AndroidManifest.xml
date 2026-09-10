@@ -23,6 +23,10 @@
                 <!-- AndroidTV support -->
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
+            <!-- v4.3.0：静态 App Shortcuts（长按图标 → 随手记） -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
 
         <provider
@@ -44,5 +48,26 @@
           android:excludeFromRecents="true"
           android:exported="false"
           android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <!-- v4.3.0：随手记快捷方式（快捷入口读剪贴板写 pending 队列，纯原生秒开） -->
+        <activity
+          android:name=".QuickNoteActivity"
+          android:excludeFromRecents="true"
+          android:noHistory="true"
+          android:exported="true"
+          android:taskAffinity=""
+          android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <!-- v4.3.0：文本分享接收（ACTION_SEND text/plain，微信/QQ 长按文字分享进来） -->
+        <activity
+          android:name=".ShareTextActivity"
+          android:excludeFromRecents="true"
+          android:noHistory="true"
+          android:exported="true"
+          android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
     </application>
 </manifest>

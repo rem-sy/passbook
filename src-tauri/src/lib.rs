@@ -76,6 +76,70 @@ fn read_db_file_b64(path: String) -> Result<Option<String>, String> {
     ))
 }
 
+/// v4.3.0：读取并清空随手记 pending 队列文件（手机快捷方式/分享写入的 JSON 行）。
+/// 返回 base64 编码的文件内容（IPC 走 b64 惯例）；读完即清空（消费语义）。
+/// 路径双候选：数据根目录与 files/ 子目录（QuickNoteActivity 按 dataDir 根写入）。
+#[tauri::command]
+fn read_pending_notes(app: AppHandle) -> Result<Option<String>, String> {
+    use base64::Engine as _;
+    let root = match app.try_state::<DataRoot>() {
+        Some(r) => r.0.clone(),
+        None => return Ok(None),
+    };
+    for cand in [
+        root.join("pending_quicknotes.jsonl"),
+        root.join("files").join("pending_quicknotes.jsonl"),
+    ] {
+        if cand.exists() {
+            let bytes = fs::read(&cand).map_err(|e| e.to_string())?;
+            // 清空队列（写入空文件而非删除，避免与原生追加方竞争重建）
+            fs::write(&cand, b"").map_err(|e| e.to_string())?;
+            if bytes.is_empty() {
+                continue;
+            }
+            return Ok(Some(base64::engine::general_purpose::STANDARD.encode(&bytes)));
+        }
+    }
+    Ok(None)
+}
+
+/// v4.3.0：注册/更换桌面随手记全局快捷键（默认 Ctrl+Alt+N，设置里可改）。
+/// 触发时读剪贴板 → 弹主窗 → 事件 quicknote-clip（payload=base64 文本）交前端确认入库。
+#[cfg(windows)]
+#[tauri::command]
+fn set_quicknote_shortcut(app: AppHandle, accel: String) -> Result<(), String> {
+    use base64::Engine as _;
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all(); // 更换快捷键：先全部注销
+    let shortcut: tauri_plugin_global_shortcut::Shortcut =
+        accel.parse().map_err(|e| format!("快捷键格式无效: {e:?}"))?;
+    gs.on_shortcut(shortcut, move |app, _s, event| {
+        if event.state() == ShortcutState::Pressed {
+            let text = app.clipboard().read_text().ok().unwrap_or_default();
+            if !text.trim().is_empty() {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.unminimize();
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+                let b64 = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+                let _ = app.emit("quicknote-clip", b64);
+            }
+        }
+    })
+    .map_err(|e| format!("注册全局快捷键失败: {e}"))?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn set_quicknote_shortcut(_app: AppHandle, _accel: String) -> Result<(), String> {
+    Ok(()) // 桌面（Windows）专属；移动端无全局快捷键概念
+}
+
 /// 备份快照文件元信息（v2.2.0 自动备份）
 #[derive(serde::Serialize)]
 struct BackupFileInfo {
@@ -648,8 +712,16 @@ pub fn run() {
             agent_abort,
             log_front,
             bio_available,
-            bio_prompt
+            bio_prompt,
+            read_pending_notes,
+            set_quicknote_shortcut
         ]);
+
+    // v4.3.0：桌面随手记——全局快捷键 + 剪贴板读取（仅 Windows 桌面构建）
+    #[cfg(windows)]
+    let builder = builder
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_clipboard_manager::init());
 
     // 单实例（重复启动聚焦已有窗口）仅桌面端可用
     #[cfg(desktop)]

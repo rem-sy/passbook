@@ -41,6 +41,7 @@ const DEFAULT_SETTINGS = {
   theme: 'auto', // 外观：auto 跟随系统 | light | dark
   backup: { enabled: true, keep: 5, intervalMin: 60 }, // 自动备份快照（v2.2.0）
   favicons: false, // 站点图标（v2.7.0）：联网经 DuckDuckGo 图标服务，默认关
+  quickNoteShortcut: 'Ctrl+Alt+N', // v4.3.0：桌面随手记全局快捷键
 };
 
 function loadSettings() {
@@ -152,6 +153,16 @@ const SCHEMA_SQL = `
     created_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_attachments_entry ON attachments(entry_id);
+  CREATE TABLE IF NOT EXISTS notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
+    tags TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'manual',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at);
 `;
 
 /** 附件大小上限（字节）：单文件 2MB */
@@ -244,6 +255,9 @@ const ServerStore = {
     const h = await this.health();
     return h.dbPath;
   },
+  /* v4.3.0：便签仅本地模式支持（远程服务端无 notes 表，返回空并提示） */
+  notesList() { return []; },
+  async noteCreate() { throw new Error('便签仅本地存储模式支持'); },
 
   /* ---------------- 附件（v2.4.0）：服务端存储，BLOB 存库 ---------------- */
   attachments: {
@@ -468,6 +482,31 @@ const LocalStore = {
   lastInsertId() {
     const rows = this.query('SELECT last_insert_rowid() AS id');
     return rows[0].id;
+  },
+
+  /* ---------------- 便签（v4.3.0 随手记）：notes 表 CRUD ---------------- */
+  notesList() {
+    return this.query('SELECT * FROM notes ORDER BY updated_at DESC, id DESC');
+  },
+  async noteCreate({ title = '', content = '', tags = '', source = 'manual' }) {
+    const now = new Date().toISOString();
+    this.db.run(
+      'INSERT INTO notes (title, content, tags, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+      [title, content, tags, source, now, now],
+    );
+    await this.persist();
+    return this.lastInsertId();
+  },
+  async noteUpdate(id, { title, content, tags }) {
+    this.db.run(
+      'UPDATE notes SET title = ?, content = ?, tags = ?, updated_at = ? WHERE id = ?',
+      [title, content, tags, new Date().toISOString(), id],
+    );
+    await this.persist();
+  },
+  async noteRemove(id) {
+    this.db.run('DELETE FROM notes WHERE id = ?', [id]);
+    await this.persist();
   },
   async list({ q = '', category = '', sort = 'updated', favOnly = false } = {}) {
     const where = [];
@@ -813,6 +852,7 @@ const state = {
   multiSelect: false,  // 列表多选模式
   selectedIds: new Set(),
   visibleIds: [],      // v4.1.1：当前搜索/筛选后实际可见的条目 id（全选以此为准）
+  view: 'pass',        // v4.3.0：页面级三标签 pass | notes | files
 };
 
 /** 字母头像颜色：按文本 hash 取 HSL（v2.7.0 favicon 回退） */
@@ -952,6 +992,8 @@ async function hydrateFavicons(mode = 'cache-only') {
 
 /* ---------------- 列表渲染 ---------------- */
 async function refreshList() {
+  // v4.3.0：便签页走便签检索管线（密码页现有交互零改动）
+  if (state.view === 'notes') return refreshNotesList();
   try {
     // 强搜索管线（v2.1.0）：解析操作符与多词；
     // 单词无操作符 → 服务端 LIKE 粗筛后客户端打分高亮；
@@ -2842,6 +2884,12 @@ function openSettingsModal() {
           <div style="margin-top:6px"><button class="btn" id="btn-favicon-refresh" type="button" style="padding:6px 12px;font-size:12.5px">↻ 重试加载全部图标</button><span class="hint" style="margin-left:8px">跳过缓存重新请求（图标未显示/异常时用）</span></div>
         </div>
       </div>`;
+  // v4.3.0：桌面随手记全局快捷键
+  const quickNoteField = (IS_TAURI && !IS_ANDROID) ? `
+      <div class="field"><span>随手记全局快捷键（读取剪贴板 → 确认后存为便签）</span>
+        <input id="set-quicknote-key" type="text" placeholder="如 Ctrl+Alt+N" value="${escapeHtml(s.quickNoteShortcut || 'Ctrl+Alt+N')}" />
+        <p class="hint">修改保存后生效；格式如 Ctrl+Alt+N / CommandOrControl+Shift+N。</p>
+      </div>` : '';
   const backupField = currentMode === 'local' ? `
       <div class="field"><span>自动备份快照（${IS_TAURI ? '存于应用数据目录 backups\\' : '存于本机浏览器存储'}，加密库快照保持密文）<button class="hint-btn" type="button" data-hint="snap" title="自动备份快照说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></span>
         <div class="chk-group" style="padding-top:2px">
@@ -2870,6 +2918,7 @@ function openSettingsModal() {
       ${encField}
       ${backupField}
       ${faviconField}
+      ${quickNoteField}
       ${agentField}
       <div class="field"><span>安全体检</span>
         <div class="chk-group" style="padding-top:2px">
@@ -3041,6 +3090,15 @@ function openSettingsModal() {
     }
     ns.bioUnlock = !!bioEnabled && !!ns.pinHash; // 生物识别依赖启动锁（v2.6.0）
     ns.favicons = !!$('#set-favicons')?.checked; // 站点图标（v2.7.0）
+    const qnEl = $('#set-quicknote-key'); // v4.3.0：随手记全局快捷键（桌面）
+    if (qnEl && qnEl.value.trim()) {
+      ns.quickNoteShortcut = qnEl.value.trim();
+      if (IS_TAURI && !IS_ANDROID) {
+        tauriInvoke('set_quicknote_shortcut', { accel: ns.quickNoteShortcut })
+          .then(() => toast('全局快捷键已更新'))
+          .catch((err) => toast('快捷键注册失败: ' + err, true));
+      }
+    }
     saveSettings(ns);
     saveAgentConfig({
       baseUrl: $('#set-agent-url').value.trim(),
@@ -3718,13 +3776,231 @@ if (!IS_TAURI && 'serviceWorker' in navigator && location.protocol.startsWith('h
 }
 
 /* ---------------- 启动 ---------------- */
+/* ---------------- 随手记 + 三标签页（v4.3.0） ---------------- */
+const VIEW_KEYS = ['pass', 'notes', 'files'];
+const VIEW_LS_KEY = 'passbook-view';
+const NOTE_SOURCE_LABEL = { manual: '手动', clipboard: '剪贴板', share: '分享' };
+
+/** 切换页面级标签：外层显隐 + 记忆停留页；密码页 DOM/交互不动 */
+function setView(v) {
+  if (!VIEW_KEYS.includes(v)) v = 'pass';
+  state.view = v;
+  try { localStorage.setItem(VIEW_LS_KEY, v); } catch { /* 忽略隐私模式 */ }
+  for (const k of VIEW_KEYS) $('#view-' + k)?.classList.toggle('hidden', k !== v);
+  document.querySelectorAll('#view-tabs .view-tab').forEach((b) => {
+    b.classList.toggle('active', b.dataset.view === v);
+  });
+  // 便签/文件页隐藏密码分类侧栏（只做外层显隐，不动密码页结构）
+  closeSidebarDrawer();
+  $('#sidebar')?.classList.toggle('hidden', v !== 'pass');
+  $('#side-mask')?.classList.add('hidden');
+  $('#search').placeholder = v === 'notes'
+    ? '搜索便签：多词模糊匹配 标题 / 正文 / 标签'
+    : v === 'files' ? '文件仓检索（v4.4 开放）' : '搜索：多词模糊匹配，支持 分类:工作、有验证码、无验证码';
+  if (v === 'notes') refreshNotesList();
+}
+
+function noteSrcBadge(src) {
+  const label = NOTE_SOURCE_LABEL[src] || '手动';
+  return `<span class="src-badge src-${src}" title="来源：${label}">${label}</span>`;
+}
+
+function noteTime(iso) {
+  try {
+    const d = new Date(iso);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  } catch { return ''; }
+}
+
+/** 便签页列表渲染（搜索复用 PassSearch 多词管线） */
+async function refreshNotesList() {
+  const listEl = $('#note-list'), emptyEl = $('#note-empty'), countEl = $('#note-count');
+  if (!listEl) return;
+  if (currentMode !== 'local') {
+    listEl.innerHTML = '<div class="note-card"><div class="note-content">便签仅本地存储模式支持（服务器存储模式无 notes 表）。桌面/手机应用内默认即为本地模式。</div></div>';
+    emptyEl.classList.add('hidden');
+    countEl.textContent = '';
+    return;
+  }
+  let notes = [];
+  try { notes = LocalStore.notesList() || []; } catch (e) { toast('读取便签失败: ' + e.message, true); return; }
+  let shown = notes;
+  if (state.q && window.PassNotes && window.PassSearch) {
+    const res = PassNotes.searchNotes(notes, state.q, PassSearch);
+    if (res) shown = res.map((r) => r.note);
+  }
+  listEl.innerHTML = shown.map(renderNoteCard).join('');
+  countEl.textContent = state.q ? `${shown.length}/${notes.length} 条` : `共 ${notes.length} 条`;
+  emptyEl.classList.toggle('hidden', shown.length > 0);
+}
+
+function renderNoteCard(n) {
+  const tags = String(n.tags || '').split(/[,，、\s]+/).filter(Boolean);
+  return `
+  <article class="note-card" data-id="${n.id}">
+    <div class="note-head">
+      <span class="note-title">${escapeHtml(n.title || PassNotes.titleOf(n.content))}</span>
+      ${noteSrcBadge(n.source)}
+    </div>
+    <div class="note-content">${escapeHtml(n.content)}</div>
+    <div class="note-foot">
+      <span>${noteTime(n.updated_at)}</span>
+      ${tags.map((t) => `<span class="note-tag-chip">${escapeHtml(t)}</span>`).join('')}
+      <span class="note-ops">
+        <button class="btn small" data-note-act="edit">编辑</button>
+        <button class="btn small danger" data-note-act="del">删除</button>
+      </span>
+    </div>
+  </article>`;
+}
+
+/** 新建/编辑便签弹窗（标题、正文、标签；来源徽标只读展示） */
+function openNoteModal(note) {
+  const isNew = !note;
+  note = note || { title: '', content: '', tags: '', source: 'manual' };
+  openModal(`
+    <div class="modal-head">
+      <h3>${isNew ? '新建便签' : '编辑便签'}</h3>
+      <button class="modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <label class="field"><span>标题（留空自动取正文首行）</span>
+        <input id="note-f-title" type="text" maxlength="120" value="${escapeHtml(note.title || '')}" placeholder="如：会议要点 / 快递单号" />
+      </label>
+      <label class="field"><span>正文</span>
+        <textarea id="note-f-content" rows="6" placeholder="粘贴或输入内容…">${escapeHtml(note.content || '')}</textarea>
+      </label>
+      <label class="field"><span>标签（空格/逗号分隔，可选）</span>
+        <input id="note-f-tags" type="text" value="${escapeHtml(note.tags || '')}" placeholder="如：工作 灵感" />
+      </label>
+      <p class="hint">来源：${NOTE_SOURCE_LABEL[note.source] || '手动'}（记录该便签的收集通道，不可改）</p>
+    </div>
+    <div class="modal-foot">
+      ${isNew ? '' : '<button class="btn danger" id="btn-note-del">删除</button>'}
+      <button class="btn" id="btn-note-cancel">取消</button>
+      <button class="btn primary" id="btn-note-save">保存</button>
+    </div>
+  `);
+  $('#btn-note-cancel').addEventListener('click', closeModal);
+  $('#btn-note-save').addEventListener('click', async () => {
+    const content = $('#note-f-content').value;
+    if (!content.trim()) return toast('正文不能为空', true);
+    const title = $('#note-f-title').value.trim() || PassNotes.titleOf(content);
+    const tags = $('#note-f-tags').value.trim();
+    try {
+      if (isNew) await LocalStore.noteCreate({ title, content, tags, source: 'manual' });
+      else await LocalStore.noteUpdate(note.id, { title, content, tags });
+      closeModal();
+      toast(isNew ? '便签已保存' : '便签已更新');
+      refreshNotesList();
+    } catch (e) { toast('保存失败: ' + e.message, true); }
+  });
+  $('#btn-note-del')?.addEventListener('click', async () => {
+    if (!confirm('确定删除这条便签？')) return;
+    try {
+      await LocalStore.noteRemove(note.id);
+      closeModal();
+      toast('便签已删除');
+      refreshNotesList();
+    } catch (e) { toast('删除失败: ' + e.message, true); }
+  });
+}
+
+/* ---------- 手机 pending 队列消费（快捷方式/分享写入，启动时入 notes 表） ---------- */
+async function consumePendingNotes() {
+  if (!(IS_TAURI && IS_ANDROID && currentMode === 'local')) return;
+  try {
+    const b64 = await tauriInvoke('read_pending_notes');
+    if (!b64) return;
+    const text = new TextDecoder().decode(base64ToBytes(b64));
+    if (!text.trim()) return;
+    const existing = new Set((LocalStore.notesList() || []).map((n) => n.content));
+    const r = PassNotes.consumePending(text, existing);
+    for (const n of r.toInsert) await LocalStore.noteCreate(n); // source=clipboard|share 随队列
+    if (r.toInsert.length) {
+      toast(`已收入 ${r.toInsert.length} 条随手记${r.dup ? `（跳过重复 ${r.dup} 条）` : ''}`);
+      refreshNotesList();
+    }
+  } catch (e) { console.warn('[passbook] pending notes 消费失败', e); }
+}
+
+/* ---------- 桌面全局快捷键（v4.3.0）：读剪贴板 → 应用内确认 → 直接入库 ---------- */
+async function setupQuickNoteShortcut() {
+  if (!(IS_TAURI && !IS_ANDROID)) return;
+  try {
+    await tauriInvoke('set_quicknote_shortcut', { accel: loadSettings().quickNoteShortcut || 'Ctrl+Alt+N' });
+    await window.__TAURI__.event.listen('quicknote-clip', (ev) => {
+      let text = '';
+      try { text = new TextDecoder().decode(base64ToBytes(ev.payload)); } catch { text = String(ev.payload || ''); }
+      if (text.trim()) openQuickNoteConfirm(text);
+    });
+  } catch (e) { console.warn('[passbook] 全局快捷键不可用', e); }
+}
+
+function openQuickNoteConfirm(text) {
+  const preview = PassNotes.previewText(text);
+  openModal(`
+    <div class="modal-head">
+      <h3>随手记：收入剪贴板内容？</h3>
+      <button class="modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <p class="hint" style="margin-bottom:8px">剪贴板内容预览（前 80 字）：</p>
+      <div class="note-card"><div class="note-content">${escapeHtml(preview)}</div></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="btn-qn-cancel">取消</button>
+      <button class="btn primary" id="btn-qn-ok">收入便签</button>
+    </div>
+  `);
+  $('#btn-qn-cancel').addEventListener('click', closeModal);
+  $('#btn-qn-ok').addEventListener('click', async () => {
+    try {
+      if (currentMode !== 'local') throw new Error('便签仅本地存储模式支持');
+      await LocalStore.noteCreate({ title: PassNotes.titleOf(text), content: text, tags: '', source: 'clipboard' });
+      closeModal();
+      toast('已收入便签');
+      if (state.view === 'notes') refreshNotesList();
+    } catch (e) { toast(e.message, true); }
+  });
+}
+
+/* ---------- 三标签 + 便签页事件绑定 ---------- */
+document.querySelectorAll('#view-tabs .view-tab').forEach((b) => {
+  b.addEventListener('click', () => setView(b.dataset.view));
+});
+$('#btn-note-add')?.addEventListener('click', () => openNoteModal(null));
+$('#note-list')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-note-act]');
+  if (!btn) return;
+  const card = e.target.closest('.note-card');
+  const id = Number(card?.dataset.id);
+  if (!(currentMode === 'local' && id)) return;
+  const note = (LocalStore.notesList() || []).find((n) => n.id === id);
+  if (!note) return;
+  if (btn.dataset.noteAct === 'del') {
+    if (!confirm('确定删除这条便签？')) return;
+    LocalStore.noteRemove(note.id).then(() => { toast('便签已删除'); refreshNotesList(); }).catch((err) => toast(err.message, true));
+  } else {
+    openNoteModal(note);
+  }
+});
+
 (async function boot() {
   try {
     // 先过启动锁（PIN），再自动解锁加密库（本机密钥，无感），最后加载数据渲染
     await showLockIfNeeded();
     await initStore();
     await refreshChips();
+    // v4.3.0：恢复上次停留页（默认密码页）
+    let startView = 'pass';
+    try { startView = localStorage.getItem(VIEW_LS_KEY) || 'pass'; } catch { /* 忽略 */ }
+    setView(startView);
     await refreshList();
+    // v4.3.0：手机消费 pending 队列入库；桌面注册全局快捷键
+    await consumePendingNotes();
+    setupQuickNoteShortcut();
   } catch (e) {
     toast('初始化失败: ' + e.message, true);
     console.error(e);

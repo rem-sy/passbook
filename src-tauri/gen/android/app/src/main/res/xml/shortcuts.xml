@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 密码本 v4.3.0：静态 App Shortcuts（长按图标直达随手记，对标微信扫一扫） -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="quicknote"
+        android:enabled="true"
+        android:icon="@drawable/ic_quicknote"
+        android:shortcutShortLabel="@string/quicknote_short"
+        android:shortcutLongLabel="@string/quicknote_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.passbook.app"
+            android:targetClass="com.passbook.app.QuickNoteActivity" />
+    </shortcut>
+</shortcuts>
