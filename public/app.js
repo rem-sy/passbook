@@ -4322,12 +4322,12 @@ function openFileDetail(file) {
       ${tags.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${tags.map((t) => `<span class="note-tag-chip">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
       ${file.note ? `<div style="white-space:pre-wrap;word-break:break-word;font-size:14px;line-height:1.7;margin-bottom:8px">${escapeHtml(file.note)}</div>` : ''}
     </div>
-    <div class="modal-foot">
+    <div class="modal-foot foot-wrap">
       <button class="btn danger" id="btn-fd-del">删除</button>
       <button class="btn" id="btn-fd-edit">重命名/标签</button>
       <button class="btn" id="btn-fd-open">系统打开</button>
       <button class="btn primary" id="btn-fd-preview">${k === 'system' ? '打开' : '预览'}</button>
-    </div>
+    </div><!-- foot-wrap：手机端四按钮换行不超宽 -->
   `, true);
   $('#btn-fd-preview').addEventListener('click', () => openFilePreview(file));
   $('#btn-fd-open').addEventListener('click', () => systemOpenFile(file).catch((e) => toast(e.message, true)));

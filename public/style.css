@@ -504,6 +504,12 @@ html.dark mark.hl { background: rgba(255, 193, 7, 0.38); color: #ffe9b0; }
 .modal-head h3 svg { width: 16px; height: 16px; color: var(--muted); }
 .modal-body { display: flex; flex-direction: column; gap: 14px; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+/* v4.4.0 文件详情四按钮：手机端一行放不下 → 允许换行并均分收窄 */
+.modal-foot.foot-wrap { flex-wrap: wrap; }
+.modal-foot.foot-wrap .btn { flex: 1 1 auto; min-width: 0; padding-left: 10px; padding-right: 10px; white-space: nowrap; }
+@media (max-width: 640px) {
+  .modal-foot.foot-wrap .btn { flex: 1 1 40%; justify-content: center; }
+}
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .field textarea { min-height: 96px; resize: vertical; }
 .pw-input-row { display: flex; gap: 6px; align-items: stretch; }
