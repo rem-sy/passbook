@@ -48,6 +48,12 @@
           android:excludeFromRecents="true"
           android:exported="false"
           android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <!-- v4.4.0：应用内 SAF 批量导入（__passbook_saf.pick 拉起，多选文档入 pending 队列） -->
+        <activity
+          android:name=".SafImportActivity"
+          android:excludeFromRecents="true"
+          android:exported="false"
+          android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <!-- v4.3.0：随手记快捷方式（快捷入口读剪贴板写 pending 队列，纯原生秒开） -->
         <activity
           android:name=".QuickNoteActivity"
@@ -62,11 +68,72 @@
           android:excludeFromRecents="true"
           android:noHistory="true"
           android:exported="true"
+          android:label="存为随手记"
           android:theme="@android:style/Theme.Translucent.NoTitleBar">
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+        <!-- v4.4.0：文件分享接收（ACTION_SEND */* 主通道；纯文本兜底走随手记队列） -->
+        <activity
+          android:name=".ShareFileActivity"
+          android:excludeFromRecents="true"
+          android:noHistory="true"
+          android:exported="true"
+          android:label="存入文件仓"
+          android:taskAffinity=""
+          android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="application/pdf" />
+                <data android:mimeType="application/msword" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.presentationml.presentation" />
+                <data android:mimeType="application/vnd.ms-excel" />
+                <data android:mimeType="application/vnd.ms-powerpoint" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
+        </activity>
+        <!-- v4.4.0：【其他应用打开】通道（微信/QQ 文件 → 用其他应用打开 → 密码本；先拷贝再弹框） -->
+        <activity
+          android:name=".OpenFileActivity"
+          android:excludeFromRecents="true"
+          android:noHistory="true"
+          android:exported="true"
+          android:label="用密码本打开"
+          android:taskAffinity=""
+          android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="application/pdf" />
+                <data android:mimeType="application/msword" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.presentationml.presentation" />
+                <data android:mimeType="application/vnd.ms-excel" />
+                <data android:mimeType="application/vnd.ms-powerpoint" />
+                <data android:mimeType="application/vnd.ms-office" />
+                <data android:mimeType="text/markdown" />
+                <data android:mimeType="text/plain" />
+                <data android:mimeType="text/csv" />
+                <data android:mimeType="application/json" />
+                <data android:mimeType="application/rtf" />
+                <data android:mimeType="image/*" />
             </intent-filter>
         </activity>
     </application>

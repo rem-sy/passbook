@@ -42,6 +42,9 @@ const SHOTS = [
   { hash: '#shot-agent',    name: 'agent.png' },
   { hash: '#shot-settings', name: 'sync.png' },
   { hash: '#shot-import',   name: 'import.png' },
+  // v4.4.0：随手记/文件仓页（本地功能——深链走「应用内演示注入」分支，见 app.js injectShotDemo）
+  { hash: '#shot-notes',    name: 'notes.png', local: true },
+  { hash: '#shot-files',    name: 'files.png', local: true },
 ];
 
 /* ---------- 工具 ---------- */
@@ -138,18 +141,34 @@ async function cdpScreenshot(baseUrl, cdPort, shot, mobile) {
     });
   }
   console.log(`    导航到主页…`);
-  if (mobile) {
+  if (shot.local) {
+    // hash-only 导航不会重载（boot/演示注入不执行）；且同 profile 下 Service Worker
+    // 旧缓存会拦截旧版 index/app.js（新代码不生效）。顺序：回应用主页 → 清 SW+缓存 →
+    // 回空白 → 全量加载深链 URL
+    await send('Page.navigate', { url });
+    await sleep(1500);
+    await send('Runtime.evaluate', {
+      expression: "(async function(){try{var rs=await navigator.serviceWorker.getRegistrations();for(var r of rs)await r.unregister();var ks=await caches.keys();for(var k of ks)await caches.delete(k);}catch(e){}return 1})()",
+      awaitPromise: true,
+    });
+    await send('Page.navigate', { url: 'about:blank' });
+    await sleep(400);
+  }
+  if (mobile && !shot.local) {
     // 手机默认本机存储（IndexedDB 空库），先注入 server 模式再加载
+    // （#shot-notes/#shot-files 为本地功能，由 app.js 深链分支强制本地模式 + 演示注入）
     await send('Page.navigate', { url });
     await sleep(1500);
     await send('Runtime.evaluate', {
       expression: "(function(){var s={};try{s=JSON.parse(localStorage.getItem('passbook-settings')||'{}')}catch(e){}s.storageMode='server';localStorage.setItem('passbook-settings',JSON.stringify(s));location.reload();})()",
     });
   } else {
-    await send('Page.navigate', { url });
+    // 桌面：带上深链 hash（#shot-notes/#shot-files 需要 hash 触发应用内分支；
+    // 其余 shot 为 hash-only 导航不重载，行为不变，靠 evaluate 触发界面）
+    await send('Page.navigate', { url: url + shot.hash });
   }
-  // 等待列表就绪（最多 15 秒）
-  const rows = await waitListReady(ws, send);
+  // 等待列表就绪（最多 15 秒；#shot-notes/#shot-files 本地分支无密码列表，放行为 0）
+  const rows = shot.local ? 0 : await waitListReady(ws, send);
   if (rows < 0) {
     console.warn('    列表就绪超时，按固定等待继续');
     await sleep(5000);
@@ -200,6 +219,20 @@ async function cdpScreenshot(baseUrl, cdPort, shot, mobile) {
     });
   } else if (shot.hash === '#shot-import') {
     await send('Runtime.evaluate', { expression: 'openImportModal()' });
+  } else if (shot.local) {
+    // 随手记/文件仓：app.js #shot- 深链已强制本地模式 + 演示注入 + 切页；
+    // 本地库初始化（sql.js）+ 演示注入较慢，轮询等页面真正可见（最多 12 秒）
+    let visible = 0;
+    for (let i = 0; i < 24 && !visible; i++) {
+      await sleep(500);
+      const check = await send('Runtime.evaluate', {
+        expression: `(function(){var v=document.querySelector('#view-${shot.hash === '#shot-notes' ? 'notes' : 'files'}');return v&&!v.classList.contains('hidden')?1:0})()`,
+        returnByValue: true,
+      });
+      visible = check.result?.result?.value || 0;
+    }
+    console.log(`    本地页自检(可见=1): ${visible}`);
+    await sleep(1200); // 渲染稳定后再截
   }
   await sleep(2000);
   // 截图（失败重试一次）
@@ -282,6 +315,11 @@ async function main() {
 
   edg.kill();
   srv.kill();
+  // Windows 下 srv.kill() 常杀不干净残留 node 服务器 → 下轮端口被占、演示数据叠加
+  if (process.platform === 'win32') {
+    try { spawn('taskkill', ['/F', '/T', '/PID', String(edg.pid)], { stdio: 'ignore' }); } catch {}
+    try { spawn('taskkill', ['/F', '/T', '/PID', String(srv.pid)], { stdio: 'ignore' }); } catch {}
+  }
   console.log('完成');
 }
 

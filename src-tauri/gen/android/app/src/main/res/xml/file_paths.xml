@@ -2,4 +2,6 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
   <external-path name="my_images" path="." />
   <cache-path name="my_cache_images" path="." />
+  <!-- v4.4.0：文件仓解密预览/系统打开临时目录（缺此条 FileProvider 报 FileNotFound） -->
+  <cache-path name="filehub_tmp" path="filehub_tmp/" />
 </paths>

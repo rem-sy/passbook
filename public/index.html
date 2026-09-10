@@ -85,11 +85,32 @@
       </section>
     </section>
 
-    <!-- 文件仓页（v4.3.0 占位，v4.4 解锁） -->
+    <!-- 文件仓页（v4.4.0：四通道收文件 + 独立搜索 + 文档预览） -->
     <section id="view-files" class="view hidden">
-      <section class="empty">
-        <p>文件仓（规划中）</p>
-        <p class="sub">v4.4 将支持收纳微信/QQ 文档，统一加密存储与检索，敬请期待</p>
+      <section class="toolbar card">
+        <div class="search-row">
+          <div class="search-wrap">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <input id="file-search" type="search" placeholder="搜索文件：多词模糊匹配 名称 / 备注 / 标签 / 来源" autocomplete="off" />
+          </div>
+        </div>
+        <div class="tb-lines">
+          <div class="tb-line">
+            <button id="btn-files-import" class="btn primary" title="导入文件">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></svg>
+              <span class="tb-text">导入文件</span>
+            </button>
+            <label id="file-drop-zone" class="file-drop file-drop-zone" for="file-input-multi" title="拖拽文件到此处导入">拖拽文件到此处（或点击选择）<input type="file" id="file-input-multi" multiple hidden /></label>
+          </div>
+        </div>
+      </section>
+      <section class="list-head">
+        <span id="file-count">共 0 个</span>
+      </section>
+      <section id="file-list" class="entry-list"></section>
+      <section id="file-empty" class="empty hidden">
+        <p>文件仓还是空的</p>
+        <p class="sub">微信/QQ 长按文件分享给密码本、文件「用其他应用打开」选密码本，或在应用内点「导入文件」；文件加密存储在本机，绝不联网上传</p>
       </section>
     </section>
 
@@ -338,6 +359,7 @@
   <script src="qr.js"></script>
   <script src="importer.js"></script>
   <script src="notes.js"></script>
+  <script src="filehub.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

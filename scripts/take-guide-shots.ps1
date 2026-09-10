@@ -1,4 +1,4 @@
-﻿# 生成使用说明配图：服务器模式 + Edge headless 渲染截图（无窗口、不弹框）
+﻿﻿# 生成使用说明配图：服务器模式 + Edge headless 渲染截图（无窗口、不弹框）
 $ErrorActionPreference = 'Stop'
 $proj = 'D:\hobby\源码\密码本'
 $guide = "$proj\public\guide"
@@ -54,7 +54,9 @@ try {
     @{ h = '#shot-gen';      name = 'gen.png';     wait = 3600 },
     @{ h = '#shot-agent';    name = 'agent.png';   wait = 2800 },
     @{ h = '#shot-settings'; name = 'sync.png';    wait = 3200 },
-    @{ h = '#shot-import';   name = 'import.png';  wait = 2800 }
+    @{ h = '#shot-import';   name = 'import.png';  wait = 2800 },
+    @{ h = '#shot-notes';    name = 'notes.png';   wait = 4200 },
+    @{ h = '#shot-files';    name = 'files.png';   wait = 4200 }
   )
   foreach ($s in $shots) {
     # 每张截图前确认服务器仍存活，死了就中止

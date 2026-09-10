@@ -1,7 +1,7 @@
 # 密码本 Roadmap（v4.3+ 存储扩展时代）
 
 > 维护约定：每完成一个版本更新此文件并归档旧版到 docs/archive/。
-> 当前已发布：**v4.1.2**（tag 已推送，Release 停在 v4.1.0——4.1.1/4.1.2 为手机端修复小版本，未发 Release）。
+> 当前已发布：**v4.4.0**（v4.3.x 随手记 + v4.4.0 文件仓已交付；Release 停在 v4.1.0，后续版本待用户真机确认后择机发）。
 > 立项调研：[RESEARCH-v5-storage.md](RESEARCH-v5-storage.md)（随手记/文件仓/三标签页全案）。
 
 ## 版本规范
@@ -22,8 +22,8 @@
 - 桌面对齐：Tauri global-shortcut 全局快捷键 + clipboard-manager 读剪贴板 → 直接入 notes 表（桌面无队列必要）
 - 测试：test/notes.test.mjs（纯函数：队列消费去重、便签检索命中、迁移幂等）
 
-## v4.4.0（已规划）：文件仓
-**目标：微信/QQ/任意来源的文档统一收纳 + 统一检索。**
+## v4.4.0（已交付）：文件仓
+**目标：微信/QQ/任意来源的文档统一收纳 + 统一检索。**（实现要点：files 元数据表 + files-store/<sha256前2位>/<sha256> AES-GCM 加密分桶；四通道=ACTION_SEND */*（ShareFileActivity）+ ACTION_VIEW 文档 mime（OpenFileActivity 双动作）+ SAF 批量（SafImportActivity 桥）+ 桌面拖拽/pick_files；预览矩阵 pdf.js/docx-preview/SheetJS/md 自写/txt/img 本地打包离线渲染，doc/ppt/xls/pptx 走系统打开；删除按 sha256 引用计数；换密钥/开关加密同步重加密本体；zip 导出；test/filehub.test.mjs 15 项）
 - 数据层：`files` 表（name/mime/size/sha256/source/tags/note/created_at）；文件本体按 sha256 分桶存应用私有目录，AES-GCM 加密落盘（密钥从数据库密钥派生）；**不进 SQLite**
 - 收文件三通道：
   1. 分享接收（主通道）：微信/QQ 文件长按 → 分享 → 密码本（ACTION_SEND */*），ShareFileActivity 流式拷贝 content:// URI（Android 11+ scoped storage 下唯一官方授权通道）→ 确认入库

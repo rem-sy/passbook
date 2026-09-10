@@ -103,6 +103,31 @@ fn read_pending_notes(app: AppHandle) -> Result<Option<String>, String> {
     Ok(None)
 }
 
+/// v4.4.0：读取并清空文件仓 pending 队列（ShareFileActivity/OpenFileActivity 写入的 JSON 行）。
+/// 返回 base64 内容；读完清空（消费语义），路径双候选同 read_pending_notes 惯例。
+#[tauri::command]
+fn read_pending_files(app: AppHandle) -> Result<Option<String>, String> {
+    use base64::Engine as _;
+    let root = match app.try_state::<DataRoot>() {
+        Some(r) => r.0.clone(),
+        None => return Ok(None),
+    };
+    for cand in [
+        root.join("pending_files.jsonl"),
+        root.join("files").join("pending_files.jsonl"),
+    ] {
+        if cand.exists() {
+            let bytes = fs::read(&cand).map_err(|e| e.to_string())?;
+            fs::write(&cand, b"").map_err(|e| e.to_string())?;
+            if bytes.is_empty() {
+                continue;
+            }
+            return Ok(Some(base64::engine::general_purpose::STANDARD.encode(&bytes)));
+        }
+    }
+    Ok(None)
+}
+
 /// v4.3.0：注册/更换桌面随手记全局快捷键（默认 Ctrl+Alt+N，设置里可改）。
 /// 触发时读剪贴板 → 弹主窗 → 事件 quicknote-clip（payload=base64 文本）交前端确认入库。
 #[cfg(windows)]
@@ -202,6 +227,203 @@ fn delete_file(path: String) -> Result<(), String> {
         return Ok(());
     }
     fs::remove_file(&p).map_err(|e| e.to_string())
+}
+
+/* ---------------- 文件仓（v4.4.0）：加密本体分桶存文件系统，绝不进 SQLite ---------------- */
+
+/// 文件仓存储根目录：<数据根>/files-store；桶内相对路径 <sha256前两位>/<sha256> 由前端 PassFiles.bucketPath 计算
+fn files_store_dir(app: &AppHandle) -> PathBuf {
+    match app.try_state::<DataRoot>() {
+        Some(root) => root.0.join("files-store"),
+        None => PathBuf::from("files-store"),
+    }
+}
+
+/// 前端获取文件仓目录（展示用）
+#[tauri::command]
+fn get_files_store_dir(app: AppHandle) -> String {
+    files_store_dir(&app).to_string_lossy().to_string()
+}
+
+/// 写入加密本体（字节 IPC 一律 b64）：sha256 定位桶路径，原子写（先 tmp 再改名）
+#[tauri::command]
+fn store_blob_write_b64(app: AppHandle, sha256: String, b64: String) -> Result<(), String> {
+    use base64::Engine as _;
+    let s = sha256.trim().to_lowercase();
+    if s.len() != 64 || !s.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("sha256 格式非法".into());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64.as_bytes())
+        .map_err(|e| format!("base64 解码失败: {e}"))?;
+    let rel = PathBuf::from(&s[..2]).join(&s);
+    let p = files_store_dir(&app).join(rel);
+    if let Some(parent) = p.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let tmp = p.with_extension("tmp");
+    fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &p).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        e.to_string()
+    })
+}
+
+/// 读取加密本体（b64）；不存在返回 null
+#[tauri::command]
+fn store_blob_read_b64(app: AppHandle, sha256: String) -> Result<Option<String>, String> {
+    use base64::Engine as _;
+    let s = sha256.trim().to_lowercase();
+    let p = files_store_dir(&app).join(PathBuf::from(&s[..2]).join(&s));
+    if !p.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(&p).map_err(|e| e.to_string())?;
+    Ok(Some(base64::engine::general_purpose::STANDARD.encode(&bytes)))
+}
+
+/// 本体是否已存在（sha256 去重：已存在则跳过重写）
+#[tauri::command]
+fn store_blob_exists(app: AppHandle, sha256: String) -> Result<bool, String> {
+    let s = sha256.trim().to_lowercase();
+    let p = files_store_dir(&app).join(PathBuf::from(&s[..2]).join(&s));
+    Ok(p.exists())
+}
+
+/// 物理删除本体（引用计数归零后调用）；返回是否确实删除
+#[tauri::command]
+fn store_blob_delete(app: AppHandle, sha256: String) -> Result<bool, String> {
+    let s = sha256.trim().to_lowercase();
+    let p = files_store_dir(&app).join(PathBuf::from(&s[..2]).join(&s));
+    if p.exists() {
+        fs::remove_file(&p).map_err(|e| e.to_string())?;
+        // 桶目录空了顺手清掉（忽略失败）
+        if let Some(dir) = p.parent() {
+            let _ = fs::remove_dir(dir);
+        }
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// 列出全部本体 sha256（换密钥重加密 / 一致性校验用）
+#[tauri::command]
+fn store_blob_list(app: AppHandle) -> Result<Vec<String>, String> {
+    let root = files_store_dir(&app);
+    let mut out = Vec::new();
+    if let Ok(dirs) = fs::read_dir(&root) {
+        for d in dirs.flatten() {
+            if let Ok(files) = fs::read_dir(d.path()) {
+                for f in files.flatten() {
+                    if let Some(name) = f.file_name().to_str() {
+                        if name.len() == 64 && name.chars().all(|c| c.is_ascii_hexdigit()) {
+                            out.push(name.to_lowercase());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// v4.4.0：多选文件（桌面导入通道，pick_import_db 的泛化多选版，旧命令语义不变）。
+/// 返回 [{ name, path, size }]；字节由前端按需 read_file_bytes_b64 逐个读取（b64 IPC）。
+#[derive(serde::Serialize)]
+struct PickedFile {
+    name: String,
+    path: String,
+    size: u64,
+}
+
+#[tauri::command]
+async fn pick_files(app: AppHandle) -> Result<Option<Vec<PickedFile>>, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("选择要导入文件仓的文件")
+        .pick_files(move |fs| {
+            let _ = tx.send(fs.and_then(|list| {
+                let mut out = Vec::new();
+                for fp in list {
+                    if let FilePath::Path(p) = fp {
+                        out.push(p);
+                    }
+                }
+                if out.is_empty() { None } else { Some(out) }
+            }));
+        });
+    let picked = rx.await.unwrap_or(None);
+    match picked {
+        None => Ok(None),
+        Some(paths) => {
+            let mut out = Vec::new();
+            for p in paths {
+                let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                let size = fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+                out.push(PickedFile { name, path: p.to_string_lossy().to_string(), size });
+            }
+            Ok(Some(out))
+        }
+    }
+}
+
+/// 读取任意本地文件字节（b64；桌面 pick_files 选中后由前端逐个拉取）
+#[tauri::command]
+fn read_file_bytes_b64(path: String) -> Result<Option<String>, String> {
+    use base64::Engine as _;
+    let p = PathBuf::from(&path);
+    if !p.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(&p).map_err(|e| e.to_string())?;
+    Ok(Some(base64::engine::general_purpose::STANDARD.encode(&bytes)))
+}
+
+/// 解密后预览/系统打开临时文件：<cache>/filehub_tmp/<name>（FileProvider file_paths 覆盖 cache-path filehub_tmp/）
+#[tauri::command]
+fn filehub_temp_write_b64(app: AppHandle, name: String, b64: String) -> Result<String, String> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64.as_bytes())
+        .map_err(|e| format!("base64 解码失败: {e}"))?;
+    let dir = app.path().cache_dir().map_err(|e| e.to_string())?.join("filehub_tmp");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    // 文件名去路径分隔符，防逃逸
+    let safe = name.replace(['/', '\\'], "_");
+    let p = dir.join(safe);
+    fs::write(&p, &bytes).map_err(|e| e.to_string())?;
+    Ok(p.to_string_lossy().to_string())
+}
+
+/// 桌面「用系统应用打开」：shell open（Android 走 __passbook_saf.open 原生桥，不经此命令）
+#[tauri::command]
+#[cfg(windows)]
+fn shell_open(path: String) -> Result<(), String> {
+    std::process::Command::new("cmd")
+        .args(["/c", "start", "", &path])
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// 非 Windows 平台占位（Android 走 __passbook_saf.open 原生桥，不经此命令）
+#[tauri::command]
+#[cfg(not(windows))]
+fn shell_open(_path: String) -> Result<(), String> {
+    Err("此平台不支持系统打开".into())
+}
+
+/// v4.4.0：文件仓导出 zip（加密本体 + 清单）——export_bytes 的 b64 版（大数据 IPC 惯例）
+#[tauri::command]
+async fn export_bytes_b64(app: AppHandle, b64: String, suggested_name: String) -> Result<Option<String>, String> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64.as_bytes())
+        .map_err(|e| format!("base64 解码失败: {e}"))?;
+    export_bytes(app, bytes, suggested_name).await
 }
 
 /// 附件等二进制另存为（v2.4.0）：弹保存对话框写文件
@@ -714,7 +936,19 @@ pub fn run() {
             bio_available,
             bio_prompt,
             read_pending_notes,
-            set_quicknote_shortcut
+            read_pending_files,
+            set_quicknote_shortcut,
+            get_files_store_dir,
+            store_blob_write_b64,
+            store_blob_read_b64,
+            store_blob_exists,
+            store_blob_delete,
+            store_blob_list,
+            pick_files,
+            read_file_bytes_b64,
+            filehub_temp_write_b64,
+            shell_open,
+            export_bytes_b64
         ]);
 
     // v4.3.0：桌面随手记——全局快捷键 + 剪贴板读取（仅 Windows 桌面构建）

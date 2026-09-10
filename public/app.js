@@ -163,6 +163,23 @@ const SCHEMA_SQL = `
     updated_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at);
+  CREATE TABLE IF NOT EXISTS files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL DEFAULT '',
+    mime TEXT NOT NULL DEFAULT 'application/octet-stream',
+    size INTEGER NOT NULL DEFAULT 0,
+    sha256 TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'other',
+    tags TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_files_created ON files(created_at);
+  CREATE INDEX IF NOT EXISTS idx_files_sha ON files(sha256);
+  CREATE TABLE IF NOT EXISTS file_kv (
+    k TEXT PRIMARY KEY,
+    v TEXT NOT NULL DEFAULT ''
+  );
 `;
 
 /** 附件大小上限（字节）：单文件 2MB */
@@ -258,6 +275,9 @@ const ServerStore = {
   /* v4.3.0：便签仅本地模式支持（远程服务端无 notes 表，返回空并提示） */
   notesList() { return []; },
   async noteCreate() { throw new Error('便签仅本地存储模式支持'); },
+  /* v4.4.0：文件仓仅本地模式支持（远程服务端无 files 表，同便签口径提示） */
+  filesList() { return []; },
+  async fileCreate() { throw new Error('文件仓仅本地存储模式支持'); },
 
   /* ---------------- 附件（v2.4.0）：服务端存储，BLOB 存库 ---------------- */
   attachments: {
@@ -461,14 +481,20 @@ const LocalStore = {
     this._encrypted = true;
     this.saveKey(key);
     await this.persist();
+    // v4.4.0：文件本体从固定设备密钥重加密为数据库密钥（同 DbCrypto 体系）
+    try { const n = await vaultReencryptAll(key, FILE_FIXED_MATERIAL); if (n) toast(`文件仓 ${n} 个文件本体已随库加密`); }
+    catch (e) { console.warn('[passbook] 文件本体重加密失败', e); toast('文件本体重加密失败：' + e.message, true); }
     return key; // 返回密钥材料，供设置页展示备份
   },
   /** 关闭加密：把整库重写为明文，并删除本机保存的密钥 */
   async disableEncryption() {
     if (!this._encrypted) throw new Error('当前文件未加密');
+    const oldKey = this._key; // v4.4.0：关库加密时文件本体回退到固定设备密钥（重加密唯一路径）
     this._encKey = null; this._encSalt = null; this._key = null; this._encrypted = false;
     this.clearKey();
     await this.persist();
+    try { await vaultReencryptAll(FILE_FIXED_MATERIAL, oldKey); }
+    catch (e) { console.warn('[passbook] 文件本体重加密失败', e); }
   },
   query(sql, params = []) {
     const stmt = this.db.prepare(sql);
@@ -506,6 +532,38 @@ const LocalStore = {
   },
   async noteRemove(id) {
     this.db.run('DELETE FROM notes WHERE id = ?', [id]);
+    await this.persist();
+  },
+
+  /* ---------------- 文件仓（v4.4.0）：files 元数据表 CRUD（本体在 files-store 分桶加密，绝不进 SQLite） ---------------- */
+  filesList() {
+    return this.query('SELECT * FROM files ORDER BY created_at DESC, id DESC');
+  },
+  async fileCreate(row) {
+    this.db.run(
+      'INSERT INTO files (name, mime, size, sha256, source, tags, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [row.name, row.mime, row.size, row.sha256, row.source, row.tags, row.note, row.created_at],
+    );
+    await this.persist();
+    return this.lastInsertId();
+  },
+  async fileUpdate(id, { name, tags, note }) {
+    const cur = this.query('SELECT * FROM files WHERE id = ?', [id])[0];
+    if (!cur) throw new Error('文件记录不存在');
+    this.db.run('UPDATE files SET name = ?, tags = ?, note = ? WHERE id = ?', [
+      (name ?? cur.name), (tags ?? cur.tags), (note ?? cur.note), id,
+    ]);
+    await this.persist();
+  },
+  async fileRemove(id) {
+    this.db.run('DELETE FROM files WHERE id = ?', [id]);
+    await this.persist();
+  },
+  fileKvGet(k) {
+    try { return (this.query('SELECT v FROM file_kv WHERE k = ?', [k])[0] || {}).v || null; } catch { return null; }
+  },
+  async fileKvSet(k, v) {
+    this.db.run('INSERT INTO file_kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v', [k, String(v)]);
     await this.persist();
   },
   async list({ q = '', category = '', sort = 'updated', favOnly = false } = {}) {
@@ -724,6 +782,7 @@ async function detectMode() {
 
 /** 解锁成功后，把当前数据库从旧密钥迁移到本机自动生成的密钥并保存 */
 async function migrateToAutoKey() {
+  const oldKey = LocalStore._key; // v4.4.0：换密钥时文件本体随之重加密（唯一重加密路径）
   const newKey = await LocalStore.generateKey();
   LocalStore._key = newKey;
   LocalStore._encSalt = DbCrypto.newSalt();
@@ -731,6 +790,8 @@ async function migrateToAutoKey() {
   LocalStore._encrypted = true;
   LocalStore.saveKey(newKey);
   await LocalStore.persist();
+  try { await vaultReencryptAll(newKey, oldKey); }
+  catch (e) { console.warn('[passbook] 文件本体重加密失败', e); }
 }
 
 async function initStore() {
@@ -2637,6 +2698,10 @@ function openExportModal() {
           <div><div class="t">下载 JSON 备份</div><div class="d">完整备份，便于迁移与查看</div></div>
           <button class="btn" id="btn-export-json">下载</button>
         </div>
+        <div class="export-item">
+          <div><div class="t">文件仓导出（zip）</div><div class="d">加密本体 + 清单打包（.db 导出不含文件本体）；zip 内本体保持加密，导入端需同密钥</div></div>
+          <button class="btn" id="btn-export-files">导出</button>
+        </div>
       </div>
       <p class="hint">当前存储：${IS_TAURI ? (IS_ANDROID ? '手机版 · 应用内存储' : '桌面版数据库文件') : (currentMode === 'server' ? '服务端 SQLite 文件' : '浏览器本地 (IndexedDB)')}${IS_TAURI ? (IS_ANDROID ? '' : ' — 数据库位置可在「设置」中更改') : (currentMode === 'server' ? '' : ' — 建议定期导出 .db 备份')}</p>
     </div>
@@ -2655,6 +2720,11 @@ function openExportModal() {
       } else {
         toast('已取消导出');
       }
+    } catch (e) { toast(e.message, true); }
+  });
+  $('#btn-export-files')?.addEventListener('click', async () => {
+    try {
+      await vaultExportZip();
     } catch (e) { toast(e.message, true); }
   });
   $('#btn-export-json').addEventListener('click', async () => {
@@ -3794,6 +3864,7 @@ function setView(v) {
   $('#sidebar')?.classList.toggle('hidden', v !== 'pass');
   $('#side-mask')?.classList.add('hidden');
   if (v === 'notes') refreshNotesList();
+  if (v === 'files') refreshFilesList();
 }
 
 function noteSrcBadge(src) {
@@ -3999,6 +4070,11 @@ function openQuickNoteConfirm(text) {
   });
 }
 
+// v4.4.0：回前台时消费 pending 文件队列（分享/其他应用打开通道确认后即入库）
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) setTimeout(consumePendingFiles, 300);
+});
+
 /* ---------- 三标签 + 便签页事件绑定 ---------- */
 document.querySelectorAll('#view-tabs .view-tab').forEach((b) => {
   b.addEventListener('click', () => setView(b.dataset.view));
@@ -4025,8 +4101,619 @@ $('#note-list')?.addEventListener('click', (e) => {
   }
 });
 
+
+/* ---------------- 文件仓（v4.4.0）：加密分桶存储 + 四通道收件 + 文档预览 ---------------- */
+/* 密钥策略：文件本体始终加密——密钥从数据库密钥派生（DbCrypto 同体系，salt 记 file_kv）；
+ * 未启用整库加密的库用固定设备密钥派生；换密钥/关加密走 vaultReencryptAll 唯一重加密路径。 */
+const FILE_FIXED_MATERIAL = 'passbook-device-fixed-key-v1';
+const FILE_SOURCE_LABEL = { wechat: '微信', qq: 'QQ', saf: '导入', drag: '拖拽', open: '其他应用打开', other: '其他' };
+
+function fileMaterial() {
+  return (currentMode === 'local' && LocalStore._key) || FILE_FIXED_MATERIAL;
+}
+
+async function sha256Hex(bytes) {
+  const d = await crypto.subtle.digest('SHA-256', bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+  return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** 取文件加密上下文 { material, saltB64, key }：salt 惰性建（file_kv 随 .db 走，本体绝不进 SQLite） */
+async function vaultEnsureCrypto() {
+  if (currentMode !== 'local') throw new Error('文件仓仅本地存储模式支持');
+  if (!IS_TAURI) throw new Error('文件仓需在桌面/手机应用内使用');
+  let saltB64 = LocalStore.fileKvGet('files_salt');
+  if (!saltB64) {
+    saltB64 = bytesToBase64(crypto.getRandomValues(new Uint8Array(16)));
+    await LocalStore.fileKvSet('files_salt', saltB64);
+  }
+  const mat = fileMaterial();
+  const matHash = await sha256Hex(new TextEncoder().encode(mat));
+  const stored = LocalStore.fileKvGet('files_material');
+  if (stored && stored !== matHash) {
+    // 正常路径（启用/关闭加密、导入换钥）已在钩子里显式重加密；走到这里说明材料变化未被挂钩
+    console.warn('[passbook] 文件仓密钥材料指纹变化但未走重加密路径，旧本体将无法解密');
+  }
+  if (stored !== matHash) await LocalStore.fileKvSet('files_material', matHash);
+  const key = await DbCrypto.deriveKey(mat, base64ToBytes(saltB64));
+  return { material: mat, saltB64, key };
+}
+
+/** 共用入库管线：sha256 → 去重查桶 → 加密入桶 → 元数据入库 */
+async function vaultImport(meta) {
+  const fc = await vaultEnsureCrypto();
+  const sha = await sha256Hex(meta.bytes);
+  const row = PassFiles.buildMetaRow({
+    name: meta.name, mime: meta.mime, size: meta.bytes.length, sha256: sha,
+    source: meta.source, tags: meta.tags || '', note: meta.note || '',
+  });
+  const dupBefore = PassFiles.dupCount(LocalStore.filesList() || [], sha);
+  const exists = await tauriInvoke('store_blob_exists', { sha256: sha });
+  if (!exists) {
+    const enc = await DbCrypto.encryptBytes(meta.bytes, fc.key, base64ToBytes(fc.saltB64));
+    await tauriInvoke('store_blob_write_b64', { sha256: sha, b64: bytesToBase64(enc) });
+  }
+  const id = await LocalStore.fileCreate(row);
+  return { row: { ...row, id }, dupBefore, storedNew: !exists };
+}
+
+/** 解密读取本体 */
+async function vaultReadBytes(sha256) {
+  const fc = await vaultEnsureCrypto();
+  const b64 = await tauriInvoke('store_blob_read_b64', { sha256 });
+  if (!b64) throw new Error('加密本体缺失（可能已被清理）');
+  return await DbCrypto.decryptBytes(base64ToBytes(b64), fc.key);
+}
+
+/** 删除：引用计数——同内容多条共享本体，最后一条引用删掉才物理删桶内文件 */
+async function vaultRemove(id) {
+  const rows = LocalStore.filesList() || [];
+  const row = rows.find((r) => r.id === id);
+  if (!row) throw new Error('文件记录不存在');
+  const remaining = rows.filter((r) => r.sha256 === row.sha256 && r.id !== id);
+  const lastRef = PassFiles.shouldDeleteBlob(remaining);
+  await LocalStore.fileRemove(id);
+  if (lastRef && IS_TAURI) {
+    try { await tauriInvoke('store_blob_delete', { sha256: row.sha256 }); } catch (e) { console.warn('本体删除失败', e); }
+  }
+  return { lastRef };
+}
+
+/** 换密钥重加密（唯一路径）：全部本体 旧材料解密 → 新材料加密 → 回写 */
+async function vaultReencryptAll(newMaterial, oldMaterial) {
+  if (!(IS_TAURI && currentMode === 'local')) return 0;
+  let shas = [];
+  try { shas = await tauriInvoke('store_blob_list') || []; } catch { return 0; }
+  if (!shas.length) return 0;
+  const saltB64 = LocalStore.fileKvGet('files_salt');
+  if (!saltB64) return 0;
+  const salt = base64ToBytes(saltB64);
+  const plan = PassFiles.reencryptTasks(shas);
+  const oldKey = await DbCrypto.deriveKey(oldMaterial || FILE_FIXED_MATERIAL, salt);
+  const newKey = await DbCrypto.deriveKey(newMaterial, salt);
+  for (const t of plan.tasks) {
+    const b64 = await tauriInvoke('store_blob_read_b64', { sha256: t.sha256 });
+    if (!b64) continue;
+    const plain = await DbCrypto.decryptBytes(base64ToBytes(b64), oldKey);
+    const enc = await DbCrypto.encryptBytes(plain, newKey, salt);
+    await tauriInvoke('store_blob_write_b64', { sha256: t.sha256, b64: bytesToBase64(enc) });
+  }
+  LocalStore.fileKvSet('files_material', await sha256Hex(new TextEncoder().encode(newMaterial)));
+  return plan.tasks.length;
+}
+
+/** 文件仓导出：zip（store-only）= manifest.json + blobs/<sha256>（本体保持加密原样） */
+async function vaultExportZip() {
+  if (currentMode !== 'local') throw new Error('文件仓仅本地存储模式支持');
+  if (!IS_TAURI) throw new Error('文件仓导出需在桌面/手机应用内使用');
+  const rows = LocalStore.filesList() || [];
+  if (!rows.length) throw new Error('文件仓为空');
+  const fc = await vaultEnsureCrypto();
+  const parts = [{
+    name: 'manifest.json',
+    bytes: new TextEncoder().encode(JSON.stringify({
+      app: 'passbook', kind: 'filehub-export', version: 1,
+      exported_at: new Date().toISOString(),
+      files_salt: fc.saltB64,
+      files: rows.map((r) => ({
+        name: r.name, mime: r.mime, size: r.size, sha256: r.sha256,
+        source: r.source, tags: r.tags, note: r.note, created_at: r.created_at,
+      })),
+    }, null, 2)),
+  }];
+  const seen = {};
+  for (const r of rows) {
+    if (seen[r.sha256]) continue;
+    seen[r.sha256] = true;
+    const b64 = await tauriInvoke('store_blob_read_b64', { sha256: r.sha256 });
+    if (b64) parts.push({ name: 'blobs/' + r.sha256, bytes: base64ToBytes(b64) });
+  }
+  const zip = PassFiles.buildZip(parts);
+  const fname = `passbook-filehub-${new Date().toISOString().slice(0, 10)}.zip`;
+  if (IS_ANDROID && window.__passbook_saf) {
+    await androidSafSave(zip, fname); // SAF 系统另存（v3.0.5 桥）
+    toast('文件仓 zip 已另存');
+  } else {
+    const dest = await tauriInvoke('export_bytes_b64', { b64: bytesToBase64(zip), suggestedName: fname });
+    if (dest) toast('文件仓 zip 已导出：' + dest);
+    else toast('已取消导出');
+  }
+}
+
+/* ---------- 文件仓页 UI ---------- */
+
+/** mime 类型着色图标（纯 CSS 色块 + 缩写） */
+function fileIcon(mime, name) {
+  const k = PassFiles.previewKind(mime, name);
+  const ext = (String(name || '').toLowerCase().match(/\.([a-z0-9]+)$/) || [])[1] || '?';
+  const cls = { 'inline-pdf': 'ft-pdf', 'inline-docx': 'ft-doc', 'inline-xlsx': 'ft-xls', 'text': 'ft-txt', 'inline-md': 'ft-md', 'inline-img': 'ft-img' }[k] || 'ft-sys';
+  return `<span class="file-icon ${cls}">${escapeHtml(ext.toUpperCase().slice(0, 4))}</span>`;
+}
+
+function fileSrcBadge(src) {
+  const label = FILE_SOURCE_LABEL[src] || '其他';
+  return `<span class="src-badge src-${src}" title="来源：${label}">${label}</span>`;
+}
+
+function renderFileCard(f) {
+  const tags = String(f.tags || '').split(/[,，、\s]+/).filter(Boolean);
+  const k = PassFiles.previewKind(f.mime, f.name);
+  const canInline = k !== 'system';
+  return `
+  <article class="note-card file-card" data-id="${f.id}" title="点击查看详情" style="cursor:pointer">
+    <div class="note-head">
+      ${fileIcon(f.mime, f.name)}
+      <span class="note-title">${escapeHtml(f.name)}</span>
+      ${fileSrcBadge(f.source)}
+    </div>
+    <div class="note-content">${escapeHtml(f.note || (canInline ? '点击卡片可应用内预览' : '点击卡片可用系统应用打开'))}</div>
+    <div class="note-foot">
+      <span>${noteTime(f.created_at)}</span>
+      <span>${escapeHtml(PassFiles.formatSize(f.size))}</span>
+      ${tags.map((t) => `<span class="note-tag-chip">${escapeHtml(t)}</span>`).join('')}
+    </div>
+  </article>`;
+}
+
+async function refreshFilesList() {
+  const listEl = $('#file-list'), emptyEl = $('#file-empty'), countEl = $('#file-count');
+  if (!listEl) return;
+  if (currentMode !== 'local') {
+    listEl.innerHTML = '<div class="note-card"><div class="note-content">文件仓仅本地存储模式支持（服务器存储模式无 files 表）。桌面/手机应用内默认即为本地模式。</div></div>';
+    emptyEl.classList.add('hidden');
+    countEl.textContent = '';
+    return;
+  }
+  if (!IS_TAURI) {
+    listEl.innerHTML = '<div class="note-card"><div class="note-content">文件仓需在桌面/手机应用内使用（浏览器 PWA 无加密文件存储通道）。</div></div>';
+    emptyEl.classList.add('hidden');
+    countEl.textContent = '';
+    return;
+  }
+  let files = [];
+  try { files = LocalStore.filesList() || []; } catch (e) { toast('读取文件列表失败: ' + e.message, true); return; }
+  let shown = files;
+  if (state.fileQ && window.PassFiles && window.PassSearch) {
+    const res = PassFiles.searchFiles(files, state.fileQ, PassSearch);
+    if (res) shown = res.map((r) => r.file);
+  }
+  listEl.innerHTML = shown.map(renderFileCard).join('');
+  countEl.textContent = state.fileQ ? `${shown.length}/${files.length} 个` : `共 ${files.length} 个`;
+  emptyEl.classList.toggle('hidden', shown.length > 0);
+}
+
+/** 文件详情（照 openNoteDetail 模式：元数据+备注+预览/系统打开/编辑/删除） */
+function openFileDetail(file) {
+  const tags = String(file.tags || '').split(/[,，、\s]+/).filter(Boolean);
+  const k = PassFiles.previewKind(file.mime, file.name);
+  openModal(`
+    <div class="modal-head">
+      <h3>${escapeHtml(file.name)}</h3>
+      <button class="modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;font-size:12px;color:var(--muted,#889)">
+        ${fileIcon(file.mime, file.name)}
+        ${fileSrcBadge(file.source)}
+        <span>${escapeHtml(PassFiles.formatSize(file.size))}</span>
+        <span>${escapeHtml(file.mime || PassFiles.mimeFromName(file.name) || '未知类型')}</span>
+        <span>${noteTime(file.created_at)}</span>
+      </div>
+      <div style="font-size:12px;color:var(--muted,#889);margin-bottom:8px" class="mono">sha256: ${escapeHtml(file.sha256)}</div>
+      ${tags.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${tags.map((t) => `<span class="note-tag-chip">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
+      ${file.note ? `<div style="white-space:pre-wrap;word-break:break-word;font-size:14px;line-height:1.7;margin-bottom:8px">${escapeHtml(file.note)}</div>` : ''}
+    </div>
+    <div class="modal-foot">
+      <button class="btn danger" id="btn-fd-del">删除</button>
+      <button class="btn" id="btn-fd-edit">重命名/标签</button>
+      <button class="btn" id="btn-fd-open">系统打开</button>
+      <button class="btn primary" id="btn-fd-preview">${k === 'system' ? '打开' : '预览'}</button>
+    </div>
+  `, true);
+  $('#btn-fd-preview').addEventListener('click', () => openFilePreview(file));
+  $('#btn-fd-open').addEventListener('click', () => systemOpenFile(file).catch((e) => toast(e.message, true)));
+  $('#btn-fd-edit').addEventListener('click', () => openFileEditModal(file));
+  $('#btn-fd-del').addEventListener('click', async () => {
+    const rows = LocalStore.filesList() || [];
+    const same = rows.filter((r) => r.sha256 === file.sha256).length;
+    const lastRef = same <= 1;
+    if (!confirm(lastRef ? '确定删除该文件？这是此内容的最后一份引用，删除后加密存储将一并清除。' : `确定删除该文件？该内容还有 ${same - 1} 份引用，加密本体将保留。`)) return;
+    try {
+      await vaultRemove(file.id);
+      closeModal();
+      toast(lastRef ? '文件已删除（加密本体已清理）' : '文件已删除');
+      refreshFilesList();
+    } catch (e) { toast('删除失败: ' + e.message, true); }
+  });
+}
+
+function openFileEditModal(file) {
+  openModal(`
+    <div class="modal-head">
+      <h3>编辑文件信息</h3>
+      <button class="modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <label class="field"><span>文件名</span>
+        <input id="file-f-name" type="text" maxlength="160" value="${escapeHtml(file.name || '')}" />
+      </label>
+      <label class="field"><span>标签（空格/逗号分隔，可选）</span>
+        <input id="file-f-tags" type="text" value="${escapeHtml(file.tags || '')}" placeholder="如：工作 合同" />
+      </label>
+      <label class="field"><span>备注（可选）</span>
+        <textarea id="file-f-note" rows="3" placeholder="记录这份文件的背景…">${escapeHtml(file.note || '')}</textarea>
+      </label>
+      <p class="hint">来源（${FILE_SOURCE_LABEL[file.source] || '其他'}）与内容指纹不可改；文件本体保持加密不变。</p>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="btn-file-edit-cancel">取消</button>
+      <button class="btn primary" id="btn-file-edit-save">保存</button>
+    </div>
+  `);
+  $('#btn-file-edit-cancel').addEventListener('click', closeModal);
+  $('#btn-file-edit-save').addEventListener('click', async () => {
+    try {
+      await LocalStore.fileUpdate(file.id, {
+        name: $('#file-f-name').value.trim() || file.name,
+        tags: $('#file-f-tags').value.trim(),
+        note: $('#file-f-note').value,
+      });
+      closeModal();
+      toast('文件信息已更新');
+      refreshFilesList();
+    } catch (e) { toast(e.message, true); }
+  });
+}
+
+/* ---------- 第三方预览库按需加载（本地打包，绝不走 CDN） ---------- */
+let _libCache = {};
+function loadScriptOnce(src) {
+  if (!_libCache[src]) {
+    _libCache[src] = new Promise((resolve, reject) => {
+      const el = document.createElement('script');
+      el.src = src;
+      el.onload = () => resolve();
+      el.onerror = () => { delete _libCache[src]; reject(new Error('加载 ' + src + ' 失败')); };
+      document.head.appendChild(el);
+    });
+  }
+  return _libCache[src];
+}
+async function ensurePdfJs() {
+  if (!window.__pdfjsLib) {
+    const mod = await import('./lib/pdfjs/pdf.min.mjs');
+    mod.GlobalWorkerOptions.workerSrc = './lib/pdfjs/pdf.worker.min.mjs';
+    window.__pdfjsLib = mod;
+  }
+  return window.__pdfjsLib;
+}
+async function ensureDocx() {
+  await loadScriptOnce('./lib/jszip.min.js');
+  await loadScriptOnce('./lib/docx-preview.min.js');
+  if (!window.docx) throw new Error('docx 渲染库未就绪');
+  return window.docx;
+}
+async function ensureXlsx() {
+  await loadScriptOnce('./lib/xlsx.full.min.js');
+  if (!window.XLSX) throw new Error('表格渲染库未就绪');
+  return window.XLSX;
+}
+
+/* ---------- 预览矩阵（全部离线本地渲染，文件不出本机） ---------- */
+async function openFilePreview(file) {
+  const kind = PassFiles.previewKind(file.mime, file.name);
+  openModal(`
+    <div class="modal-head">
+      <h3>${escapeHtml(file.name)}</h3>
+      <button class="modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div id="file-preview-box" style="min-height:120px"><p class="hint">解密读取中…（大文件稍等）</p></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="btn-fp-open">系统打开</button>
+      <button class="btn primary" id="btn-fp-close">关闭</button>
+    </div>
+  `, true);
+  $('#btn-fp-close').addEventListener('click', closeModal);
+  $('#btn-fp-open').addEventListener('click', () => systemOpenFile(file).catch((e) => toast(e.message, true)));
+  const box = $('#file-preview-box');
+  try {
+    if (kind === 'system') {
+      box.innerHTML = `<p class="hint">该类型（${escapeHtml(file.mime || '未知')}）不做内置渲染：可点「系统打开」用系统应用查看，文件已加密保存于文件仓。</p>`;
+      return;
+    }
+    if (file.size > 30 * 1024 * 1024) box.innerHTML = '<p class="hint">文件较大（' + escapeHtml(PassFiles.formatSize(file.size)) + '），解密与渲染可能需要一会儿…</p>';
+    const bytes = await vaultReadBytes(file.sha256);
+    if (kind === 'inline-img') {
+      const url = URL.createObjectURL(new Blob([bytes], { type: file.mime || 'image/*' }));
+      box.innerHTML = `<img src="${url}" alt="${escapeHtml(file.name)}" style="max-width:100%;border-radius:8px" />`;
+      box.querySelector('img').addEventListener('load', () => URL.revokeObjectURL(url), { once: true });
+    } else if (kind === 'text') {
+      box.innerHTML = `<pre style="white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.6;max-height:60vh;overflow-y:auto">${escapeHtml(new TextDecoder('utf-8', { fatal: false }).decode(bytes))}</pre>`;
+    } else if (kind === 'inline-md') {
+      box.innerHTML = `<div class="md-body" style="max-height:60vh;overflow-y:auto">${PassFiles.mdToHtml(new TextDecoder().decode(bytes))}</div>`;
+    } else if (kind === 'inline-pdf') {
+      const pdfjs = await ensurePdfJs();
+      const doc = await pdfjs.getDocument({ data: bytes }).promise;
+      let page = 1;
+      const render = async () => {
+        box.innerHTML = `<p class="hint" id="fp-status">渲染第 ${page}/${doc.numPages} 页…</p>
+          <div id="fp-pages" style="display:flex;flex-direction:column;gap:12px;align-items:center"></div>
+          <div style="display:flex;gap:8px;justify-content:center;margin-top:10px">
+            <button class="btn small" id="fp-prev" ${page <= 1 ? 'disabled' : ''}>上一页</button>
+            <span style="align-self:center;font-size:12px;color:var(--muted,#889)">${page} / ${doc.numPages}</span>
+            <button class="btn small" id="fp-next" ${page >= doc.numPages ? 'disabled' : ''}>下一页</button>
+          </div>`;
+        const pg = await doc.getPage(page);
+        const scale = Math.min(1.6, (box.clientWidth || 600) / pg.getViewport({ scale: 1 }).width);
+        const viewport = pg.getViewport({ scale: Math.max(0.5, scale) });
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width; canvas.height = viewport.height;
+        canvas.style.maxWidth = '100%';
+        box.querySelector('#fp-pages').appendChild(canvas);
+        await pg.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+        box.querySelector('#fp-status')?.remove();
+        box.querySelector('#fp-prev')?.addEventListener('click', () => { if (page > 1) { page--; render(); } });
+        box.querySelector('#fp-next')?.addEventListener('click', () => { if (page < doc.numPages) { page++; render(); } });
+      };
+      await render();
+    } else if (kind === 'inline-docx') {
+      const docx = await ensureDocx();
+      box.innerHTML = '<div id="fp-docx" style="max-height:60vh;overflow-y:auto"></div>';
+      await docx.renderAsync(bytes, box.querySelector('#fp-docx'), null, { inWrapper: true });
+    } else if (kind === 'inline-xlsx') {
+      const XLSX = await ensureXlsx();
+      const wb = XLSX.read(bytes, { type: 'array' });
+      const sheets = wb.SheetNames;
+      let html = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${sheets.map((n, i) => `<button class="btn small fp-sheet-tab" data-sheet="${i}">${escapeHtml(n)}</button>`).join('')}</div><div id="fp-sheet-box" style="max-height:56vh;overflow:auto"></div>`;
+      box.innerHTML = html;
+      const show = (i) => {
+        const ws = wb.Sheets[sheets[i]];
+        box.querySelector('#fp-sheet-box').innerHTML = XLSX.utils.sheet_to_html(ws, { id: 'fp-xlsx-table' });
+        box.querySelectorAll('.fp-sheet-tab').forEach((b) => b.classList.toggle('primary', Number(b.dataset.sheet) === i));
+      };
+      box.querySelectorAll('.fp-sheet-tab').forEach((b) => b.addEventListener('click', () => show(Number(b.dataset.sheet))));
+      show(0);
+    }
+  } catch (e) {
+    box.innerHTML = `<p class="hint" style="color:var(--danger,#c33)">预览失败：${escapeHtml(e.message || String(e))}</p><p class="hint">可尝试「系统打开」。</p>`;
+  }
+}
+
+/** 系统打开：解密到临时目录 → Android FileProvider+ACTION_VIEW / 桌面 shell open */
+async function systemOpenFile(file) {
+  const bytes = await vaultReadBytes(file.sha256);
+  const path = await tauriInvoke('filehub_temp_write_b64', { name: file.name, b64: bytesToBase64(bytes) });
+  const mime = file.mime || PassFiles.mimeFromName(file.name) || '*/*';
+  if (IS_ANDROID) {
+    if (window.__passbook_saf && typeof window.__passbook_saf.open === 'function') {
+      window.__passbook_saf.open(path, mime);
+      toast('已用系统应用打开（临时解密文件在系统缓存目录）');
+    } else toast('当前环境不支持系统打开', true);
+  } else {
+    await tauriInvoke('shell_open', { path });
+    toast('已用系统应用打开');
+  }
+}
+
+/* ---------- 四通道导入 ---------- */
+async function filesImportClick() {
+  if (currentMode !== 'local') return toast('文件仓仅本地存储模式支持', true);
+  if (!IS_TAURI) return toast('文件仓导入需在桌面/手机应用内使用', true);
+  if (IS_ANDROID) {
+    // SAF 批量导入：ACTION_OPEN_DOCUMENT 多选 → SafImportActivity 流式拷贝入 pending 队列 → 前端消费
+    if (!(window.__passbook_saf && typeof window.__passbook_saf.pick === 'function')) return toast('此环境不支持 SAF 导入', true);
+    const t0 = Date.now();
+    const iv = setInterval(() => {
+      let r = 'pending';
+      try { r = window.__passbook_saf.pickResult(); } catch { /* 忽略 */ }
+      if (r !== 'pending') { clearInterval(iv); setTimeout(consumePendingFiles, 400); }
+      else if (Date.now() - t0 > 300000) clearInterval(iv);
+    }, 500);
+    window.__passbookSafPickResult = () => { clearInterval(iv); setTimeout(consumePendingFiles, 400); }; // evaluateJavascript 快路径
+    window.__passbook_saf.pick();
+  } else {
+    // 桌面：系统对话框多选（pick_files 多选版，保持 pick_import_db 旧语义）→ 应用内确认
+    const picked = await tauriInvoke('pick_files');
+    if (!picked || !picked.length) return;
+    openFilesImportConfirm(picked.map((f) => ({ name: f.name, path: f.path, size: f.size, file: null })), 'saf');
+  }
+}
+
+/** 桌面导入确认弹窗（动态按钮 document 委托） */
+function openFilesImportConfirm(items, source) {
+  openModal(`
+    <div class="modal-head">
+      <h3>导入 ${items.length} 个文件到文件仓？</h3>
+      <button class="modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <p class="hint">文件将以 AES-GCM 加密存入本机文件仓（同内容自动去重，只存一份）。</p>
+      <div style="max-height:44vh;overflow-y:auto;display:flex;flex-direction:column;gap:6px;margin-top:8px">
+        ${items.map((f, i) => `
+        <label class="note-card" style="display:flex;gap:8px;align-items:center;cursor:pointer">
+          <input type="checkbox" class="files-import-ck" data-i="${i}" checked />
+          <span style="flex:1;word-break:break-all">${escapeHtml(f.name)}</span>
+          <span style="font-size:12px;color:var(--muted,#889);white-space:nowrap;flex:none">${escapeHtml(PassFiles.formatSize(f.size))}</span>
+        </label>`).join('')}
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="btn-files-import-cancel">取消</button>
+      <button class="btn primary" id="btn-files-import-ok">导入</button>
+    </div>
+  `, true);
+  $('#btn-files-import-cancel').addEventListener('click', closeModal);
+  const doImport = async () => {
+    const cks = [...document.querySelectorAll('.files-import-ck')].filter((c) => c.checked).map((c) => items[Number(c.dataset.i)]);
+    if (!cks.length) return toast('未选择任何文件', true);
+    const okBtn = document.getElementById('btn-files-import-ok');
+    if (okBtn) { okBtn.disabled = true; okBtn.textContent = '导入中…'; }
+    let ok = 0, dup = 0;
+    for (const f of cks) {
+      try {
+        let bytes;
+        if (f.file) bytes = new Uint8Array(await f.file.arrayBuffer());
+        else {
+          const b64 = await tauriInvoke('read_file_bytes_b64', { path: f.path });
+          if (!b64) throw new Error('读取失败');
+          bytes = base64ToBytes(b64);
+        }
+        const r = await vaultImport({ name: f.name, mime: '', bytes, source });
+        if (r.dupBefore) dup++;
+        ok++;
+      } catch (e) { console.warn('[passbook] 导入失败', f.name, e); toast(`「${f.name}」导入失败：` + e.message, true); }
+    }
+    closeModal();
+    toast(`已导入 ${ok} 个文件${dup ? `（${dup} 个与已有内容相同）` : ''}`);
+    refreshFilesList();
+  };
+  // 动态弹窗按钮 document 委托（v4.1.0 教训）
+  if (!document.getElementById('btn-files-import-ok')) {
+    document.addEventListener('click', function onImportOk(e) {
+      const btn = e.target.closest('#btn-files-import-ok');
+      if (btn) { document.removeEventListener('click', onImportOk); doImport(); }
+    });
+  } else {
+    document.getElementById('btn-files-import-ok').addEventListener('click', doImport);
+  }
+}
+
+/* ---------- 手机 pending 队列消费（分享/其他应用打开/SAF 写入，启动与回前台时入库） ---------- */
+let _pendingFilesBusy = false;
+async function consumePendingFiles() {
+  if (!(IS_TAURI && IS_ANDROID && currentMode === 'local') || _pendingFilesBusy) return;
+  _pendingFilesBusy = true;
+  try {
+    const b64 = await tauriInvoke('read_pending_files');
+    if (!b64) return;
+    const text = new TextDecoder().decode(base64ToBytes(b64));
+    if (!text.trim()) return;
+    const r = PassFiles.parsePendingFiles(text);
+    let ok = 0, dup = 0, openRow = null;
+    for (const it of r.items) {
+      try {
+        const fb64 = await tauriInvoke('read_file_bytes_b64', { path: it.tempPath });
+        if (!fb64) continue;
+        const res = await vaultImport({ name: it.name, mime: it.mime, bytes: base64ToBytes(fb64), source: it.source });
+        if (res.dupBefore) dup++;
+        ok++;
+        if (it.open) openRow = res.row;
+      } catch (e) { console.warn('[passbook] 文件入库失败', it.name, e); }
+      try { await tauriInvoke('delete_file', { path: it.tempPath }); } catch { /* 临时文件清理尽力而为 */ }
+    }
+    if (ok) {
+      toast(`文件仓已收入 ${ok} 个文件${dup ? `（${dup} 个与已有内容相同）` : ''}`);
+      if (state.view === 'files') refreshFilesList();
+      if (openRow) {
+        setView('files');
+        setTimeout(() => {
+          const row = (LocalStore.filesList() || []).find((x) => x.id === openRow.id);
+          if (row) { openFileDetail(row); openFilePreview(row); }
+        }, 300);
+      }
+    }
+  } catch (e) { console.warn('[passbook] pending files 消费失败', e); }
+  finally { _pendingFilesBusy = false; }
+}
+
+/* ---------- 文件仓页事件绑定 ---------- */
+$('#btn-files-import')?.addEventListener('click', filesImportClick);
+$('#file-search')?.addEventListener('input', debounce((e) => {
+  state.fileQ = e.target.value.trim();
+  refreshFilesList();
+}, 200));
+$('#file-list')?.addEventListener('click', (e) => {
+  const card = e.target.closest('.file-card');
+  const id = Number(card?.dataset.id);
+  if (!(currentMode === 'local' && id)) return;
+  const file = (LocalStore.filesList() || []).find((f) => f.id === id);
+  if (file) openFileDetail(file);
+});
+// 桌面拖拽导入（label.file-drop 必须 display:block —— inline label width:100% 不生效，v4.0 教训）
+(() => {
+  const zone = $('#file-drop-zone');
+  if (!zone) return;
+  zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('drag'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag'));
+  zone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    zone.classList.remove('drag');
+    const fs = [...(e.dataTransfer?.files || [])];
+    if (!fs.length) return;
+    if (!IS_TAURI || currentMode !== 'local') return toast('文件仓导入需在桌面应用内本地模式使用', true);
+    openFilesImportConfirm(fs.map((f) => ({ name: f.name, size: f.size, file: f })), 'drag');
+  });
+  $('#file-input-multi')?.addEventListener('change', (e) => {
+    const fs = [...(e.target.files || [])];
+    e.target.value = '';
+    if (!fs.length) return;
+    if (!IS_TAURI || currentMode !== 'local') return toast('文件仓导入需在桌面应用内本地模式使用', true);
+    openFilesImportConfirm(fs.map((f) => ({ name: f.name, size: f.size, file: f })), 'drag');
+  });
+})();
+
+/* ---------- 截图/深链演示注入（#shot-notes / #shot-files 专用）：空库注入演示行 ---------- */
+async function injectShotDemo() {
+  if (currentMode !== 'local') return;
+  try {
+    if (location.hash === '#shot-notes') {
+      if (!(LocalStore.notesList() || []).length) {
+        for (const n of [
+          { title: '快递单号', content: '顺丰 SF1388821992199，预计明天下午到，放驿站', tags: '生活', source: 'clipboard' },
+          { title: '会议要点 0308', content: '1. 二期功能 3/22 上线\n2. 预算追加 8%\n3. 找王工要压测报告\n4. 新人周四入职', tags: '工作 灵感', source: 'manual' },
+          { title: '租房燃气开户', content: '周一打 96777 预约，带身份证 + 房本照片，地址：朝阳区xx路 12 号', tags: '生活', source: 'share' },
+        ]) await LocalStore.noteCreate(n);
+      }
+    } else if (location.hash === '#shot-files') {
+      if (!(LocalStore.filesList() || []).length) {
+        const demo = [
+          ['2025 年度体检报告.pdf', 'application/pdf', 842133, 'wechat', '健康'],
+          ['项目排期表 v3.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 53248, 'qq', '工作'],
+          ['出差报销说明.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 88340, 'open', '工作 财务'],
+          ['读书笔记.md', 'text/markdown', 4211, 'drag', '灵感'],
+          ['合同扫描件.jpg', 'image/jpeg', 1024768, 'saf', '财务'],
+        ];
+        let i = 0;
+        for (const [name, mime, size, source, tags] of demo) {
+          i++;
+          await LocalStore.fileCreate(PassFiles.buildMetaRow({
+            name, mime, size, source, tags, note: '',
+            sha256: (i.toString(16) + '0'.repeat(64)).slice(0, 64),
+            created_at: new Date(Date.now() - i * 86400000 * 3).toISOString(),
+          }));
+        }
+      }
+    }
+  } catch (e) { console.warn('[passbook] 演示注入失败', e); }
+}
+
 (async function boot() {
   try {
+    // 截图/深链演示分支：#shot-notes / #shot-files 强制本地模式（便签/文件仓为本地功能，截图走空库+演示注入）
+    if (/^#shot-(notes|files)/.test(location.hash)) {
+      try { const s = loadSettings(); s.storageMode = 'local'; saveSettings(s); } catch { /* 忽略 */ }
+    }
     // 先过启动锁（PIN），再自动解锁加密库（本机密钥，无感），最后加载数据渲染
     await showLockIfNeeded();
     await initStore();
@@ -4038,6 +4725,8 @@ $('#note-list')?.addEventListener('click', (e) => {
     await refreshList();
     // v4.3.0：手机消费 pending 队列入库；桌面注册全局快捷键
     await consumePendingNotes();
+    await consumePendingFiles();
+    await injectShotDemo(); // 截图深链演示注入（非截图场景为 no-op）
     setupQuickNoteShortcut();
   } catch (e) {
     toast('初始化失败: ' + e.message, true);
@@ -4054,6 +4743,8 @@ $('#note-list')?.addEventListener('click', (e) => {
     else if (shot === 'settings') openSettingsModal();
     else if (shot === 'import') openImportModal();
     else if (shot === 'guide') openGuideModal();
+    else if (shot === 'notes') setView('notes');
+    else if (shot === 'files') setView('files');
   }, 500);
 })();
 
@@ -4079,21 +4770,35 @@ function openGuideModal() {
       <button class="modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
     <div class="modal-body guide-body">
-      ${guideSec('main.png', '① 界面总览与强搜索', `
-        <p>左侧<b>分类侧栏</b>（手机端点左上角 ☰ 按钮呼出）可按「全部 / 收藏 / 各分类」快速切换；卡片左侧的<b>星标</b> ☆ 可收藏常用条目，收藏的自动<b>置顶</b>显示。</p>
-        <p>顶部<b>搜索框</b>支持多词与操作符：除了关键词（命中 所属 / 账户 / 网址 / 备注 / 分类，自动打分排序+高亮），还可以用 <code>分类：工作</code>、<code>有验证码</code>、<code>有收藏</code> 这样的过滤语法组合筛选。</p>
-        <p>每条记录默认打码，点 <b>眼睛</b> 看明文、<b>复制</b> 进剪贴板；带 <b>TOTP 动态码</b> 的记录会实时显示 6 位验证码与倒计时（点一下即复制）；带 <b>📎 徽标</b> 的记录挂着附件（点开即可查看/另存）。卡片左侧默认显示<b>首字头像</b>，可在设置里开启<b>站点图标</b>（联网加载网站 favicon）。</p>`)}
-      ${guideSec('manual.png', '② 存一条密码（手动录入）', `
+      ${guideSec('main.png', '① 界面总览：三标签页与强搜索', `
+        <p>顶栏下方是页面级<b>三标签</b>：<b>密码 | 随手记 | 文件仓</b>，点选切换，停留页自动记忆。三个页面各有<b>独立的搜索框</b>，互不干扰——密码页用顶栏搜索，随手记/文件仓用各自工具栏内的搜索框。</p>
+        <p>密码页：左侧<b>分类侧栏</b>（手机端点左上角 ☰ 呼出）按「全部 / 收藏 / 各分类」切换；卡片左侧<b>星标</b> ☆ 收藏常用条目并自动置顶。顶部<b>搜索框</b>支持多词与操作符：关键词（命中 所属 / 账户 / 网址 / 备注 / 分类，打分排序+高亮）+ <code>分类：工作</code>、<code>有验证码</code>、<code>有收藏</code> 等过滤语法。</p>
+        <p>每条记录默认打码，点 <b>眼睛</b> 看明文、<b>复制</b> 进剪贴板；<b>TOTP 动态码</b>实时显示 6 位验证码与倒计时（点一下即复制）；带 <b>📎 徽标</b> 的记录挂着附件。卡片左侧默认<b>首字头像</b>，设置里可开启<b>站点图标</b>。</p>`)}
+      ${guideSec('notes.png', '② 随手记：碎片信息一键收集', `
+        <p><b>手机快捷方式</b>：长按应用图标 →「随手记」，秒开小卡片预览剪贴板（前 80 字），点「收入」入队，下次打开应用自动入库并提示补了几条。</p>
+        <p><b>微信/QQ 分享</b>：聊天里长按<b>文字</b> → 分享 →「存为随手记」，卡片确认后保存。</p>
+        <p><b>电脑 Ctrl+Alt+N</b>（可在设置里改键）：读剪贴板弹应用内确认，点「收入便签」直接入库。</p>
+        <p>便签页：卡片列表（标题/正文预览/来源徽标/标签/时间），<b>点卡片看全文详情</b>（可复制全文/编辑/删除）；工具栏「新建便签」手动录入。搜索框多词模糊匹配<b>标题 / 正文 / 标签</b>。</p>`)}
+      ${guideSec('files.png', '③ 文件仓：文档统一加密收纳', `
+        <p><b>四条收文件通道</b>（共用「拷贝 → sha256 → 加密入桶 → 元数据入库」管线，全程本机加密、不上传）：</p>
+        <p>· <b>分享</b>（主通道）：微信/QQ 里长按<b>文件</b> → 分享 →「存入文件仓」，卡片确认（文件名/大小/类型/同内容去重提示）后保存；<br/>
+           · <b>其他应用打开</b>：微信/QQ 文件右上角「…」→「选择用其他应用打开」→ 密码本。卡片提供两个动作：<b>保存到文件仓</b>，或<b>用密码本打开</b>（直接进文件仓并弹出预览）；<br/>
+           · <b>应用内导入</b>：文件仓页点「导入文件」，手机走系统文档多选，电脑弹系统对话框多选；<br/>
+           · <b>桌面拖拽</b>：把文件拖进文件仓页的虚线框即导入。</p>
+        <p><b>同内容自动去重</b>：按内容 sha256 共用一份加密存储，删除时最后一份引用才会物理清除。</p>
+        <p><b>文档预览（全离线本地渲染）</b>：PDF / docx / xlsx / Markdown / txt / 图片直接应用内预览；旧版 doc/ppt/xls 与 pptx 不做内置渲染，提供「系统打开」（临时解密到缓存目录调用系统应用）。桌面与手机同一套渲染。</p>
+        <p>文件页搜索框多词模糊匹配<b>名称 / 备注 / 标签 / 来源</b>（顶栏搜索依旧只管密码页）。点卡片看详情：预览 / 系统打开 / 重命名改标签 / 删除。</p>`)}
+      ${guideSec('manual.png', '④ 存一条密码（手动录入）', `
         <p>点工具栏 <b>「＋ 手动录入」</b>，填写<b>所属</b>（应用/网站）、<b>账户</b>、<b>密码</b>三项必填。</p>
         <p>还可选填 <b>TOTP 密钥</b>（base32 或直接粘贴 otpauth:// 链接自动提取）、<b>分类</b>、<b>网址</b>、<b>备注</b>；编辑已有记录时能上传<b>附件</b>（每张 ≤2MB，随数据库加密存储）。</p>
         <p>连续录入用<b>「保存并继续录入」</b>；改密码时旧密码自动归档进<b>历史</b>，随时可查看/复制。</p>`)}
-      ${guideSec('gen.png', '③ 生成强密码（字符型）', `
+      ${guideSec('gen.png', '⑤ 生成强密码（字符型）', `
         <p>点 <b>「生成密码」</b> 展开生成器：选长度、字符类型，可勾选排除易混淆字符、键盘布局不连续、禁止连续相同/顺序字符等约束。</p>
         <p>实时显示<b>熵值与强度评级</b>；生成后一键<b>复制</b>或<b>保存到密码本</b>。手动录入表单里的魔棒按钮也能按当前设置快速生成。</p>`)}
-      ${guideSec('phrase.png', '④ 生成密码短语（好记型）', `
+      ${guideSec('phrase.png', '⑥ 生成密码短语（好记型）', `
         <p>切到 <b>「密码短语」</b> 标签：用<b>中文词表</b>（或 English words）随机组词，自选词数（推荐 6+）、分隔符，可附加两位数字。</p>
         <p>例如「灯塔-枫叶-晨曦-海豚-麦浪-松柏-47」，比随机字符串好记得多，6 词约 54 bits、8 词约 72 bits，配合数字更高。</p>`)}
-      ${guideSec('agent.png', '⑤ AI 助理：聊天存 / 查 / 改密码', `
+      ${guideSec('agent.png', '⑦ AI 助理：聊天存 / 查 / 改密码', `
         <p>点右上角 <b>星形图标</b> 打开侧边对话面板，直接说人话：</p>
         <p>· 「帮我存一下：GitHub，账户 tom@example.com，密码 Abc!2345，备注工作主力号」<br/>
            · 「我 GitHub 的密码是什么？」<br/>
@@ -4101,19 +4806,19 @@ function openGuideModal() {
            · 「生成一个 20 位不含符号的密码」</p>
         <p><b>隐私保护</b>：查询结果里的密码已打码，真实密码只在应用内卡片展示（可点眼睛/一键复制，与主页一致），不会发送给 AI 渠道；存、改密码时你提供的内容会发送给你配置的模型渠道。</p>
         <p>面板右上角可<b>清空对话</b>；生成过程中可点<b>停止</b>按钮随时中断。</p>`)}
-      ${guideSec('sync.png', '⑥ 设置：加密 / 备份 / 锁定', `
+      ${guideSec('sync.png', '⑧ 设置：加密 / 备份 / 锁定', `
         <p>点右上角<b>齿轮</b>打开设置：</p>
-        <p>· <b>自动备份快照</b>：每小时自动把数据库整份快照存入 <code>backups/</code>，滚动保留最近 3~20 份；可随时<b>立即备份</b>，列表里每份可一键<b>恢复</b>或删除——误删、写坏都能救回来。</p>
-        <p>· <b>数据库加密</b>：AES-256 全库加密（含导出的 .db），密钥自动生成仅存本机，启动自动解密。<b>请务必备份密钥</b>（设置页 → 数据库加密 → 备份密钥），换设备导入加密 .db 时需要它。</p>
-        <p>· <b>存储模式 / 数据库位置</b>：桌面版默认本地文件，可指向网盘文件夹多机共用。</p>
-        <p>· <b>AI 助理</b>：填接口地址 / 模型名 / API Key（OpenAI 兼容渠道均可）。</p>
-        <p>· <b>启动锁 PIN</b> 与 <b>自动锁定</b>：闲置可锁定（默认 5 分钟，可选），复制密码后剪贴板自动清除；深色主题跟随系统或手动固定。电脑（Windows Hello）与手机（指纹/面容）可开启<b>生物识别解锁</b>，启动时免输 PIN，未通过自动回退 PIN。</p>`)}
-      ${guideSec('', '⑦ 多端同步（手机 ↔ 电脑）', `
-        <p>每台设备各存一份完整数据库（桌面是本地 <b>.db</b> 文件，手机是应用内存储），通过<b>导出 .db → 网盘/Syncthing → 另一端导入</b>合并；导入时选<b>「合并（跳过重复）」</b>即可汇总。</p>
+        <p>· <b>自动备份快照</b>：每小时自动把数据库整份快照存入 <code>backups/</code>，滚动保留最近 3~20 份；可随时<b>立即备份</b>，列表里每份可一键<b>恢复</b>或删除。</p>
+        <p>· <b>数据库加密</b>：AES-256 全库加密（含导出的 .db）；<b>文件仓本体同样始终加密</b>（密钥从数据库密钥派生，未启用整库加密时用本机固定密钥），开启/关闭加密或更换密钥时文件本体自动重加密。<b>请务必备份密钥</b>（设置 → 数据库加密 → 备份密钥）。</p>
+        <p>· <b>存储模式 / 数据库位置</b>：桌面版默认本地文件，可指向网盘文件夹多机共用。随手记与文件仓为本地模式功能。</p>
+        <p>· <b>AI 助理</b>：填接口地址 / 模型名 / API Key（OpenAI 兼容渠道均可）；<b>随手记快捷键</b>（默认 Ctrl+Alt+N）。</p>
+        <p>· <b>启动锁 PIN</b> 与 <b>自动锁定</b>：闲置可锁定（默认 5 分钟），复制密码后剪贴板自动清除；深色主题跟随系统或手动固定。电脑（Windows Hello）与手机（指纹/面容）可开启<b>生物识别解锁</b>。</p>`)}
+      ${guideSec('', '⑨ 多端同步（手机 ↔ 电脑）', `
+        <p>每台设备各存一份完整数据库（桌面是本地 <b>.db</b> 文件，手机是应用内存储），通过<b>导出 .db → 网盘/Syncthing → 另一端导入</b>合并；导入时选<b>「合并（跳过重复）」</b>即可汇总。导出的 .db 不含文件仓本体——文件仓单独用「导出 → 文件仓导出（zip：加密本体+清单）」。</p>
         <p>Android 版默认开启<b>防截屏</b>：截图、最近任务卡片都看不到密码内容。</p>`)}
-      ${guideSec('import.png', '⑧ 批量导入 / 导出备份', `
-        <p>「导入」支持三种方式：<b>粘贴文本</b>（每行一条：<code>所属,账户,密码[,网址][,备注]</code>）、上传 <b>CSV / JSON / TXT</b>、以及直接导入别的设备的 <b>.db</b> 文件（加密的 .db 会提示输入密钥文本解锁后导入）。</p>
-        <p>「导出」可导出 .db 数据库（用于同步，已启用加密时导出副本同样为密文）或 JSON 备份（用于留存）。</p>`)}
+      ${guideSec('import.png', '⑩ 批量导入 / 导出备份', `
+        <p>「导入」支持三种方式：<b>粘贴文本</b>（每行一条：<code>所属,账户,密码[,网址][,备注]</code>）、上传 <b>CSV / JSON / TXT</b>、以及直接导入别的设备的 <b>.db</b> 文件（加密的 .db 会提示输入密钥文本解锁后导入）。手机端也可从别的应用「分享 / 用其他应用打开」把数据送进来（随手记与文件仓）。</p>
+        <p>「导出」可导出 .db 数据库（用于同步，已启用加密时导出副本同样为密文）、JSON 备份（用于留存），以及<b>文件仓 zip</b>（加密本体 + 清单）。</p>`)}
       <p class="hint">提示：请保管好数据库文件，建议开启数据库加密（自动密钥，请备份密钥文本）与启动锁 PIN；配合自动备份快照更安心。</p>
     </div>
     <div class="modal-foot">

@@ -1060,3 +1060,69 @@ html.dark .view-tab.active { color: #fff; }
 html.dark .src-badge.src-clipboard { background: #1e3a5f; color: #93c5fd; }
 html.dark .src-badge.src-share { background: #14452c; color: #86efac; }
 @media (max-width: 640px) { .view-tabs { padding: 0 10px; } }
+
+/* ---------------- 文件仓（v4.4.0） ---------------- */
+/* 拖拽导入区：label 是 inline，必须 display:block 才有宽度（v4.0 教训重申） */
+.file-drop-zone {
+  display: block;
+  flex: 1;
+  min-width: 200px;
+  margin: 0;
+  padding: 8px 12px;
+  border: 1.5px dashed var(--border, #d5d9e0);
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--muted, #889);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-drop-zone:hover, .file-drop-zone.drag { border-color: var(--primary); color: var(--primary); }
+/* mime 类型着色图标 */
+.file-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 38px;
+  height: 30px;
+  padding: 0 6px;
+  border-radius: 7px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  color: #fff;
+}
+.file-icon.ft-pdf  { background: #e5484d; }
+.file-icon.ft-doc  { background: #3b82f6; }
+.file-icon.ft-xls  { background: #22a06b; }
+.file-icon.ft-md   { background: #6366f1; }
+.file-icon.ft-txt  { background: #8a93a6; }
+.file-icon.ft-img  { background: #a855f7; }
+.file-icon.ft-sys  { background: #5d6678; }
+.file-card .note-head { align-items: center; gap: 8px; }
+.file-card .note-title { word-break: break-all; }
+/* 应用内 Markdown 预览（零依赖自写渲染） */
+.md-body { font-size: 14px; line-height: 1.75; }
+.md-body h1, .md-body h2, .md-body h3, .md-body h4 { margin: .9em 0 .4em; line-height: 1.35; }
+.md-body h1 { font-size: 1.35em; } .md-body h2 { font-size: 1.2em; } .md-body h3 { font-size: 1.08em; }
+.md-body p { margin: .45em 0; }
+.md-body ul, .md-body ol { margin: .45em 0; padding-left: 1.5em; }
+.md-body blockquote { margin: .5em 0; padding: .3em .9em; border-left: 3px solid var(--primary); color: var(--muted, #667); background: rgba(127,127,127,.06); border-radius: 4px; }
+.md-body code { background: rgba(127,127,127,.12); padding: 1px 5px; border-radius: 4px; font-size: .92em; }
+.md-body pre { background: rgba(127,127,127,.1); padding: 10px 12px; border-radius: 8px; overflow-x: auto; margin: .5em 0; }
+.md-body pre code { background: none; padding: 0; }
+.md-body table { border-collapse: collapse; margin: .6em 0; font-size: .95em; }
+.md-body th, .md-body td { border: 1px solid var(--border, #d5d9e0); padding: 4px 10px; }
+.md-body hr { border: none; border-top: 1px solid var(--border, #d5d9e0); margin: 1em 0; }
+/* xlsx 表格预览 */
+#fp-sheet-box table { border-collapse: collapse; font-size: 13px; }
+#fp-sheet-box td { border: 1px solid var(--border, #d5d9e0); padding: 4px 8px; white-space: nowrap; }
+#fp-sheet-box tr:first-child td { background: rgba(127,127,127,.08); font-weight: 600; }
+/* 来源徽标扩展（文件仓四通道） */
+.src-badge.src-drag { background: rgba(99,102,241,.14); color: #6366f1; }
+.src-badge.src-open { background: rgba(14,165,233,.14); color: #0ea5e9; }
+.src-badge.src-saf  { background: rgba(34,160,107,.14); color: #22a06b; }
+.src-badge.src-wechat { background: rgba(7,193,96,.14); color: #07c130; }
+.src-badge.src-qq { background: rgba(0,153,255,.14); color: #0099ff; }

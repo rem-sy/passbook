@@ -1,5 +1,5 @@
 /* 密码本 · Service Worker：离线可用（PWA） */
-const CACHE_NAME = 'passbook-v67';
+const CACHE_NAME = 'passbook-v68';
 const ASSETS = [
   './',
   './index.html',
@@ -25,6 +25,12 @@ const ASSETS = [
   './qr.js',
   './importer.js',
   './notes.js',
+  './filehub.js',
+  './lib/jszip.min.js',
+  './lib/docx-preview.min.js',
+  './lib/xlsx.full.min.js',
+  './lib/pdfjs/pdf.min.mjs',
+  './lib/pdfjs/pdf.worker.min.mjs',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -35,6 +41,8 @@ const ASSETS = [
   './guide/agent.png',
   './guide/sync.png',
   './guide/import.png',
+  './guide/notes.png',
+  './guide/files.png',
   './guide-mobile/main.png',
   './guide-mobile/manual.png',
   './guide-mobile/gen.png',
@@ -42,6 +50,8 @@ const ASSETS = [
   './guide-mobile/agent.png',
   './guide-mobile/sync.png',
   './guide-mobile/import.png',
+  './guide-mobile/notes.png',
+  './guide-mobile/files.png',
 ];
 
 self.addEventListener('install', (e) => {

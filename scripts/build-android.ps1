@@ -139,9 +139,43 @@ try {
       if (-not $rwvSrc.Contains($a4)) { Write-Host '    警告: a4 锚点(mediaPlaybackRequiresUserGesture)未命中，相机权限补丁跳过' }
       else { $rwvSrc = $rwvSrc.Replace($a4, $a4 + "`n" + $cam); $dirty = $true }
     }
+    # v4.4.0：文件仓桥——JsSaf 增 open(系统打开) + pick/pickResult(SAF 批量导入)。
+    # 幂等锚点：'PbFileHubOpen'（依赖 a2 已注入 JsSaf 类，锚点取 save 方法签名）
+    if (-not $rwvSrc.Contains('PbFileHubOpen')) {
+      $a5 = "        @android.webkit.JavascriptInterface`n        fun save(name: String, tempPath: String) {"
+      $open = @'
+        // 密码本 v4.4.0：文件仓「系统打开」桥 PbFileHubOpen（FileProvider + ACTION_VIEW）
+        @android.webkit.JavascriptInterface
+        fun open(tempPath: String, mime: String) {
+            val f = java.io.File(tempPath)
+            if (!f.exists()) return
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                context, context.packageName + ".fileprovider", f)
+            val i = android.content.Intent(android.content.Intent.ACTION_VIEW)
+            i.setDataAndType(uri, mime.ifBlank { "*/*" })
+            i.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(i)
+        }
+
+        // 密码本 v4.4.0：SAF 批量导入桥（配合 SafImportActivity，ACTION_OPEN_DOCUMENT 多选）
+        @android.webkit.JavascriptInterface
+        fun pick() {
+            val i = android.content.Intent(context, SafImportActivity::class.java)
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(i)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun pickResult(): String { return SafImportActivity.lastResult }
+
+'@
+      if (-not $rwvSrc.Contains($a5)) { Write-Host '    警告: a5 锚点(JsSaf save 方法)未命中，文件仓桥补丁跳过' }
+      else { $rwvSrc = $rwvSrc.Replace($a5, $open + $a5); $dirty = $true }
+    }
     if ($dirty) {
       [System.IO.File]::WriteAllText($rwv, $rwvSrc, [System.Text.UTF8Encoding]::new($false))
-      Write-Host '    RustWebView.kt 已补丁（viewport + 生物识别桥 + SAF 保存桥 + 相机权限）'
+      Write-Host '    RustWebView.kt 已补丁（viewport + 生物识别桥 + SAF 保存桥 + 相机权限 + 文件仓系统打开）'
     }
   }
   # APK assets 目录同步一份前端（兜底源；运行时以 .so 内嵌资源为准）
