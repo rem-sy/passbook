@@ -2549,9 +2549,10 @@ function openImportModal() {
           if (!pickedF) return;
           const pickedBytes = pickedF.bytes;
           importFileCache = { name: pickedF.name };
-          if (pickedF.name.toLowerCase().endsWith('.db')) {
+          const ext = pickedF.name.toLowerCase().split('.').pop();
+          if (ext === 'db' || ext === 'json') {
             importFileCache.bytes = pickedBytes;
-            await handleImportBytes(pickedBytes, 'db');
+            await handleImportBytes(pickedBytes, ext);
           } else {
             importFileCache.text = new TextDecoder().decode(pickedBytes);
             $('#file-info').textContent = `${pickedF.name} · ${importFileCache.text.length} 字符`;
@@ -2564,10 +2565,10 @@ function openImportModal() {
         const name = picked.name || '';
         const pickedBytes = base64ToBytes(picked.b64); // v4.1.1：Rust 返回 b64
         importFileCache = { name };
-        const isDb = name.toLowerCase().endsWith('.db');
-        if (isDb) {
+        const ext = name.toLowerCase().split('.').pop();
+        if (ext === 'db' || ext === 'json') {
           importFileCache.bytes = pickedBytes;
-          await handleImportBytes(importFileCache.bytes, 'db');
+          await handleImportBytes(importFileCache.bytes, ext);
         } else {
           importFileCache.text = new TextDecoder().decode(pickedBytes);
           $('#file-info').textContent = `${name} · ${importFileCache.text.length} 字符`;
@@ -2595,6 +2596,10 @@ function openImportModal() {
       importFileCache.bytes = buf;
       $('#file-info').textContent = `${file.name} · ${buf.length} 字节`;
       await handleImportBytes(buf, 'db');
+    } else if (file.name.toLowerCase().endsWith('.json')) {
+      const buf = new Uint8Array(await file.arrayBuffer());
+      $('#file-info').textContent = `${file.name} · ${buf.length} 字节`;
+      await handleImportBytes(buf, 'json');
     } else {
       importFileCache.text = await file.text();
       $('#file-info').textContent = `${file.name} · ${importFileCache.text.length} 字符`;
@@ -2629,7 +2634,8 @@ function openImportModal() {
         const SQL = await getSqlModule();
         const tdb = new SQL.Database(bytes);
         const rows = [];
-        const stmt = tdb.prepare('SELECT owner, account, password, url, category, note FROM entries');
+        // v4.6.3：补全 totp_secret/history/fav——此前只取 6 字段，跨设备导入后 TOTP 与收藏全丢
+        const stmt = tdb.prepare('SELECT owner, account, password, url, category, note, totp_secret, history, fav FROM entries');
         while (stmt.step()) rows.push(stmt.getAsObject());
         stmt.free();
         tdb.close();
@@ -2637,6 +2643,23 @@ function openImportModal() {
         showImportPreview(rows);
       } catch (e) {
         $('#file-info').textContent = '无法解析该 .db 文件: ' + e.message;
+      }
+    } else if (ext === 'json') {
+      // v4.6.3：JSON 导入走结构化解析（此前当纯文本按行拆，字段全错）——
+      // 支持本应用导出格式 { items: [...] } 与裸数组；totp_secret/fav 完整保留
+      const text = new TextDecoder().decode(bytes);
+      importFileCache.text = text;
+      let arr = null;
+      try {
+        const j = JSON.parse(text);
+        arr = Array.isArray(j) ? j : (Array.isArray(j.items) ? j.items : null);
+      } catch { /* 非法 JSON 走兜底 */ }
+      if (arr) {
+        const rows = arr.filter((x) => x && typeof x === 'object' && (x.owner || x.url));
+        importFileCache.parsed = rows;
+        showImportPreview(rows);
+      } else {
+        parseAndPreview(text);
       }
     } else {
       const text = new TextDecoder().decode(bytes);
@@ -5186,6 +5209,15 @@ $('#btn-guide').addEventListener('click', openGuideModal);
     const r = e && e.reason;
     show((r && (r.message || r)) || 'Promise 未处理拒绝');
   });
+
+/* v4.6.3：只读调试出口（scripts/e2e-import.mjs 端到端回归用；不写任何状态） */
+window.__PB_DEBUG = {
+  cols: () => { try { return LocalStore.query('PRAGMA table_info(entries)').map((c) => c.name); } catch (e) { return 'err ' + e.message; } },
+  entries: () => (currentMode === 'local' && LocalStore.db) ? LocalStore.query('SELECT id, owner, totp_secret, fav FROM entries') : null,
+  files: () => (currentMode === 'local' && LocalStore.db) ? LocalStore.query('SELECT id, name, sha256 FROM files') : null,
+  parsed: () => { try { return (importFileCache && importFileCache.parsed || []).map((r) => ({ o: r.owner, t: r.totp_secret, f: r.fav })); } catch (e) { return 'err ' + e.message; } },
+  store: () => { try { return currentMode + '/' + (store === LocalStore ? 'LocalStore' : 'Other') + '/mode=' + (document.querySelector('#import-mode')?.value || '?'); } catch (e) { return 'err ' + e.message; } },
+};
 })();
 /* 手动刷新站点图标（v3.0.5）：文档级委托——设置弹窗里的「重试加载全部图标」
  * 计数 +1 并重绘列表，图标 URL 带新版本号跳过浏览器缓存强制重取。
