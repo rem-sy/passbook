@@ -1,6 +1,6 @@
 [package]
 name = "passbook-desktop"
-version = "4.6.1"
+version = "4.6.2"
 description = "密码本桌面端：强密码生成与密码管理"
 authors = ["passbook"]
 edition = "2021"

@@ -859,7 +859,7 @@ function promptKeyInput(err = '', hint = '') {
   return new Promise((resolve) => {
     const mask = document.createElement('div');
     mask.className = 'modal-mask';
-    mask.style.zIndex = '320';
+    mask.style.zIndex = '660'; // v4.6.2：密钥输入弹窗须高于业务弹窗（500）——曾沉在导入弹窗背后看不见，加密 .db 导入因此卡死
     mask.innerHTML = `
       <div class="modal" style="max-width:360px">
         <div class="modal-head"><h3>解锁加密数据库</h3><span></span></div>
@@ -2686,7 +2686,12 @@ function openImportModal() {
     } else {
       rows = parseImportText($('#import-paste').value);
     }
-    if (!rows || !rows.length) return toast('没有可导入的数据', true);
+    if (!rows || !rows.length) {
+      // v4.6.2：区分场景给可行动的提示（此前一律"没有可导入的数据"误导排查方向）
+      if (!$('#tab-zip')?.classList.contains('hidden')) return toast('文件仓 zip 无需点「导入」：点上方「选择 zip 文件…」选完即自动导入', true);
+      if (!$('#tab-file')?.classList.contains('hidden')) return toast(importFileCache?.bytes ? '文件尚未解析成功（加密 .db 需在弹出的密钥框输入密钥）' : '尚未选择文件', true);
+      return toast('没有可导入的数据', true);
+    }
     const mode = $('#import-mode').value;
     if (mode === 'replace' && !confirm('覆盖模式会清空现有全部密码记录，确定继续？')) return;
     try {

@@ -76,6 +76,9 @@
 
 ## 8. 已知坑（勿重蹈）
 
+- **自建弹窗层的 z-index 统一 660**：`promptKeyInput`/`showKeyBackup` 等手工 `document.createElement('div.modal-mask')` 的层曾用 320——业务弹窗（openModal）是 500，叠在导入/设置弹窗上打开时会被压在下面看不见（加密 .db 导入的密钥框"没弹出来"即此因）。新增自建层一律 660（联想 650 之上、锁页 800 之下）
+- **ps1 文件必须恰好单 BOM**：对已有 BOM 的脚本再用 utf-8-sig 写一遍会产生双 BOM，第二个 BOM 使 `param()` 不在首语句 → `-Preset` 开关静默失效（预置版按正式版构建并覆盖产物）。改 ps1 用 `io.open(p,'rb')` 剥干净再写单 BOM
+
 - **PS 5.1**：`-Encoding UTF8` 带 BOM（曾致 tauri.conf.json 解析失败）；`-replace` 是全局正则（v3.4.4 曾打断 dark 作用域）；.NET File API 用**绝对路径**（进程 cwd 可能是 D:\hobby）
 - **失败构建后 RustWebView.kt 处于无补丁重生成状态**，勿误提交；构建后它与 tauri.settings.gradle 是惯例脏文件
 - **Cargo.lock 随版本号变动**：版本 bump 后首次 cargo 构建会改它，随功能一起提交即可
