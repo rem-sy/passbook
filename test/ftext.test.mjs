@@ -154,3 +154,28 @@ test('unionTagCounts：三源并集聚合（总数与分源计数）', () => {
   const u2 = P.unionTagCounts([{ items: [{ tags: 'a b' }] }]);
   assert.equal(u2['a'].total, 1);
 });
+
+/* ---------- v4.6.1 zip 解析（文件仓导入） ---------- */
+
+test('parseZip：buildZip 产物往返还原（manifest + blobs 中文与二进制）', () => {
+  const enc = new TextEncoder();
+  const blob = new Uint8Array([0, 1, 2, 250, 251, 253, 0, 99]);
+  const zip = P.buildZip([
+    { name: 'manifest.json', bytes: enc.encode('{"files_salt":"QUJD","files":[{"name":"报告.pdf"}]}') },
+    { name: 'blobs/' + 'ab'.padEnd(64, '0'), bytes: blob },
+  ]);
+  const r = P.parseZip(zip);
+  assert.equal(r.ok, true);
+  assert.equal(r.files.length, 2);
+  assert.equal(r.files[0].name, 'manifest.json');
+  assert.equal(new TextDecoder().decode(r.files[0].bytes).includes('报告.pdf'), true);
+  assert.equal(r.files[1].name, 'blobs/' + 'ab'.padEnd(64, '0'));
+  assert.deepEqual(Array.from(r.files[1].bytes), Array.from(blob));
+});
+
+test('parseZip：坏输入与截断报错', () => {
+  assert.equal(P.parseZip(new Uint8Array(4)).ok, false);
+  assert.equal(P.parseZip(new TextEncoder().encode('not a zip at all........')).ok, false);
+  const zip = P.buildZip([{ name: 'a', bytes: new Uint8Array([1]) }]);
+  assert.equal(P.parseZip(zip.subarray(0, zip.length - 5)).ok, false); // 截掉 EOCD
+});

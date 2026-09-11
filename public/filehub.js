@@ -539,6 +539,43 @@
     return (v / 1024 / 1024 / 1024).toFixed(2) + ' GB';
   }
 
+  /**
+   * 解析 store-only ZIP（buildZip 的逆运算，兼容带 extra/描述字段的一般 zip 结构）。
+   * 返回 { ok, files: [{ name, bytes }], error }；仅支持非压缩（method 0）条目。
+   */
+  function parseZip(bytes) {
+    var u = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+    var dv = new DataView(u.buffer, u.byteOffset, u.byteLength);
+    function err(msg) { return { ok: false, files: [], error: msg }; }
+    if (u.length < 22) return err('文件过小');
+    var eocd = -1;
+    for (var i = u.length - 22; i >= 0 && i > u.length - 22 - 65536; i--) {
+      if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) return err('不是有效的 zip（缺少目录尾）');
+    var count = dv.getUint16(eocd + 10, true);
+    var off = dv.getUint32(eocd + 16, true);
+    var files = [];
+    for (var n = 0; n < count; n++) {
+      if (off + 46 > u.length || dv.getUint32(off, true) !== 0x02014b50) return err('zip 目录损坏');
+      var method = dv.getUint16(off + 10, true);
+      var csize = dv.getUint32(off + 20, true);
+      var nameLen = dv.getUint16(off + 28, true);
+      var extraLen = dv.getUint16(off + 30, true);
+      var cmtLen = dv.getUint16(off + 32, true);
+      var lfhOff = dv.getUint32(off + 42, true);
+      var name = new TextDecoder().decode(u.subarray(off + 46, off + 46 + nameLen));
+      if (method !== 0) return err('不支持的压缩方式（' + name + '）——仅支持未压缩 zip');
+      if (lfhOff + 30 > u.length || dv.getUint32(lfhOff, true) !== 0x04034b50) return err('zip 数据损坏');
+      var lNameLen = dv.getUint16(lfhOff + 26, true);
+      var lExtraLen = dv.getUint16(lfhOff + 28, true);
+      var dataStart = lfhOff + 30 + lNameLen + lExtraLen;
+      files.push({ name: name, bytes: u.subarray(dataStart, dataStart + csize) });
+      off += 46 + nameLen + extraLen + cmtLen;
+    }
+    return { ok: true, files: files, error: '' };
+  }
+
   /* ---------- v4.6.0 跨类型分类体系：统一标签串处理与三源聚合 ---------- */
 
   /**
@@ -634,6 +671,7 @@
     parsePendingFiles: parsePendingFiles,
     reencryptTasks: reencryptTasks,
     buildZip: buildZip,
+    parseZip: parseZip,
     crc32: crc32,
     formatSize: formatSize,
   };

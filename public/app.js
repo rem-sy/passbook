@@ -890,7 +890,7 @@ function promptKeyInput(err = '', hint = '') {
 function showKeyBackup(key) {
   const mask = document.createElement('div');
   mask.className = 'modal-mask';
-  mask.style.zIndex = '320';
+  mask.style.zIndex = '660'; // v4.6.1：高于设置弹窗（500）与联想层——曾沉在设置页下面
   mask.innerHTML = `
     <div class="modal" style="max-width:400px">
       <div class="modal-head"><h3>数据库加密密钥</h3><span></span></div>
@@ -2459,6 +2459,7 @@ function openImportModal() {
         <button class="btn" data-tab="file">上传文件</button>
         <button class="btn" data-tab="scan">扫码导入</button>
         <button class="btn" data-tab="browser">浏览器导入</button>
+        <button class="btn" data-tab="zip">文件仓 zip</button>
       </div>
       <div id="tab-paste">
         <label class="field"><span>每行一条：所属,账户,密码[,网址][,备注]（也支持 所属/账户/密码 或 所属 账户 密码）</span>
@@ -2477,6 +2478,11 @@ function openImportModal() {
         </label>
         <input type="file" id="file-input" class="hidden" accept=".csv,.json,.txt,.db" />
         <div id="file-info" class="hint"></div>
+      </div>
+      <div id="tab-zip" class="hidden">
+        <p class="hint">导入另一台密码本「导出 → 文件仓导出」生成的 zip（加密本体 + 清单）：文件元数据入文件仓、加密本体按 sha256 落桶，同内容自动去重。若导出端库启用了加密，本机需使用同一密钥体系才能打开预览。</p>
+        <button class="btn primary" id="zip-import-pick" type="button" style="margin-top:8px">选择 zip 文件…</button>
+        <div id="zip-import-info" class="hint" style="margin-top:8px"></div>
       </div>
       <div id="tab-browser" class="hidden">
         <p class="hint">Edge / Chrome / Firefox「导出密码」得到的 CSV 一键导入：表头自动识别，无需手动整理列序。</p>
@@ -2522,6 +2528,7 @@ function openImportModal() {
     $('#tab-file').classList.toggle('hidden', tab !== 'file');
     $('#tab-scan').classList.toggle('hidden', tab !== 'scan'); // v4.0.3：漏了这行——扫码 tab 内容从未显示过
     $('#tab-browser').classList.toggle('hidden', tab !== 'browser'); // v4.1.0：浏览器导入 tab
+    $('#tab-zip').classList.toggle('hidden', tab !== 'zip'); // v4.6.1：文件仓 zip 导入 tab
     $('#import-mode-wrap').classList.toggle('hidden', tab === 'browser'); // 浏览器导入固定合并模式（去重策略独立单选）
   }));
 
@@ -2536,6 +2543,22 @@ function openImportModal() {
     nativeBtn.style.marginTop = '8px';
     nativeBtn.addEventListener('click', async () => {
       try {
+        // v4.6.1：Android 走 pickRaw 桥（tauri dialog 在 Android 返回 content://，选不到文件）
+        if (IS_ANDROID && window.__passbook_saf && typeof window.__passbook_saf.pickRaw === 'function') {
+          const pickedF = await pickImportFileAny('.db,.csv,.json,.txt');
+          if (!pickedF) return;
+          const pickedBytes = pickedF.bytes;
+          importFileCache = { name: pickedF.name };
+          if (pickedF.name.toLowerCase().endsWith('.db')) {
+            importFileCache.bytes = pickedBytes;
+            await handleImportBytes(pickedBytes, 'db');
+          } else {
+            importFileCache.text = new TextDecoder().decode(pickedBytes);
+            $('#file-info').textContent = `${pickedF.name} · ${importFileCache.text.length} 字符`;
+            parseAndPreview(importFileCache.text);
+          }
+          return;
+        }
         const picked = await tauriInvoke('pick_import_db');
         if (!picked || !picked.b64) return;
         const name = picked.name || '';
@@ -2847,6 +2870,126 @@ function androidSafSave(bytes, name) {
     } catch (e) { reject(e); }
   });
 }
+
+/* ---------- v4.6.1：Android 通用选文件桥（导入 .db/CSV/JSON/zip 用；tauri dialog 在
+ * Android 返回 content:// URI，Rust fs 读不了，pick_import_db 在手机端一直拿不到文件） ---------- */
+function androidPickRawFile() {
+  return new Promise((resolve, reject) => {
+    if (!(IS_ANDROID && window.__passbook_saf && typeof window.__passbook_saf.pickRaw === 'function')) {
+      reject(new Error('此环境不支持选文件'));
+      return;
+    }
+    let done = false;
+    const finish = (r) => { if (done) return; done = true; clearInterval(iv); resolve(r); };
+    const t0 = Date.now();
+    const iv = setInterval(() => {
+      let r = 'pending';
+      try { r = window.__passbook_saf.pickRawResult(); } catch { /* 忽略 */ }
+      if (r && r !== 'pending') {
+        clearInterval(iv);
+        if (r.startsWith('false:')) reject(new Error(r.slice(6) || '选择失败'));
+        else { try { finish(JSON.parse(r)); } catch (e) { reject(e); } }
+      } else if (Date.now() - t0 > 300000) { clearInterval(iv); reject(new Error('选择超时')); }
+    }, 400);
+    window.__passbookSafPickRawResult = () => { // evaluateJavascript 快路径
+      const r = window.__passbook_saf.pickRawResult();
+      if (r && r !== 'pending') {
+        clearInterval(iv);
+        if (r.startsWith('false:')) reject(new Error(r.slice(6) || '选择失败'));
+        else { try { finish(JSON.parse(r)); } catch (e) { reject(e); } }
+      }
+    };
+    window.__passbook_saf.pickRaw();
+  });
+}
+
+/** 按平台选一个导入文件 → { name, bytes }（Android 走 pickRaw 桥；桌面 pick_files；浏览器 input） */
+async function pickImportFileAny(acceptExt) {
+  if (IS_TAURI && IS_ANDROID) {
+    const picked = await androidPickRawFile();
+    const b64 = await tauriInvoke('read_file_bytes_b64', { path: picked.tempPath });
+    try { await tauriInvoke('delete_file', { path: picked.tempPath }); } catch { /* 清理尽力而为 */ }
+    if (!b64) throw new Error('读取文件失败');
+    return { name: picked.name, bytes: base64ToBytes(b64) };
+  }
+  if (IS_TAURI) {
+    const picked = await tauriInvoke('pick_files');
+    if (!picked || !picked.length) return null;
+    const f = picked[0];
+    const b64 = await tauriInvoke('read_file_bytes_b64', { path: f.path });
+    if (!b64) throw new Error('读取文件失败');
+    return { name: f.name, bytes: base64ToBytes(b64) };
+  }
+  // 浏览器：临时 input
+  return await new Promise((resolve) => {
+    const inp = document.createElement('input');
+    inp.type = 'file';
+    if (acceptExt) inp.accept = acceptExt;
+    inp.onchange = async () => {
+      const f = inp.files && inp.files[0];
+      if (!f) return resolve(null);
+      resolve({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) });
+    };
+    inp.click();
+  });
+}
+
+/* ---------- v4.6.1：文件仓 zip 导入（导出的逆过程：manifest + 加密本体落桶） ---------- */
+async function importFilehubZip(bytes, name) {
+  if (currentMode !== 'local') throw new Error('文件仓仅本地存储模式支持');
+  if (!IS_TAURI) throw new Error('文件仓导入需在桌面/手机应用内使用');
+  const r = PassFiles.parseZip(bytes);
+  if (!r.ok) throw new Error('zip 解析失败：' + r.error);
+  const manifestFile = r.files.find((f) => f.name === 'manifest.json');
+  if (!manifestFile) throw new Error('缺少 manifest.json（不是文件仓导出包）');
+  let manifest = null;
+  try { manifest = JSON.parse(new TextDecoder().decode(manifestFile.bytes)); } catch { /* 下面的校验兜底 */ }
+  if (!manifest || manifest.app !== 'passbook' || manifest.kind !== 'filehub-export') {
+    throw new Error('清单格式不正确（不是密码本文件仓导出包）');
+  }
+  const blobs = {};
+  for (const f of r.files) if (f.name.startsWith('blobs/')) blobs[f.name.slice(6)] = f.bytes;
+  // 本库还没有 files_salt 时才导入导出端的 salt（有了就保留本库体系）
+  if (!LocalStore.fileKvGet('files_salt') && manifest.files_salt) {
+    await LocalStore.fileKvSet('files_salt', manifest.files_salt);
+  }
+  const existing = LocalStore.filesList() || [];
+  let added = 0, dup = 0, blobMiss = 0;
+  for (const row of manifest.files || []) {
+    if (!row || !/^[0-9a-f]{64}$/.test(String(row.sha256 || ''))) continue;
+    if (existing.some((x) => x.sha256 === row.sha256 && x.name === row.name && x.size === row.size)) { dup++; continue; }
+    const blobBytes = blobs[row.sha256];
+    if (!blobBytes) { blobMiss++; continue; }
+    const has = await tauriInvoke('store_blob_exists', { sha256: row.sha256 });
+    if (!has) await tauriInvoke('store_blob_write_b64', { sha256: row.sha256, b64: bytesToBase64(blobBytes) });
+    await LocalStore.fileCreate(PassFiles.buildMetaRow(row));
+    added++;
+  }
+  return { added, dup, blobMiss };
+}
+
+/* zip 导入 tab 事件 */
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('#zip-import-pick');
+  if (!btn) return;
+  (async () => {
+    const info = document.getElementById('zip-import-info');
+    if (info) info.textContent = '选择并读取 zip…';
+    try {
+      const picked = await pickImportFileAny('.zip');
+      if (!picked) { if (info) info.textContent = ''; return; }
+      const r = await importFilehubZip(picked.bytes, picked.name);
+      if (info) info.textContent = `「${picked.name}」导入完成：新增 ${r.added} 个文件` +
+        (r.dup ? `（跳过重复 ${r.dup} 个）` : '') + (r.blobMiss ? `（${r.blobMiss} 个缺本体已跳过）` : '');
+      toast(`文件仓已导入 ${r.added} 个文件`);
+      refreshFilesList();
+      refreshSidebar();
+    } catch (err) {
+      if (info) info.textContent = '';
+      toast(err.message, true);
+    }
+  })();
+});
 
 $('#btn-export').addEventListener('click', openExportModal);
 
@@ -5005,7 +5148,8 @@ function openGuideModal() {
         <p>Android 版默认开启<b>防截屏</b>：截图、最近任务卡片都看不到密码内容。</p>`)}
       ${guideSec('import.png', '⑩ 批量导入 / 导出备份', `
         <p>「导入」支持三种方式：<b>粘贴文本</b>（每行一条：<code>所属,账户,密码[,网址][,备注]</code>）、上传 <b>CSV / JSON / TXT</b>、以及直接导入别的设备的 <b>.db</b> 文件（加密的 .db 会提示输入密钥文本解锁后导入）。手机端也可从别的应用「分享 / 用其他应用打开」把数据送进来（随手记与文件仓）。</p>
-        <p>「导出」可导出 .db 数据库（用于同步，已启用加密时导出副本同样为密文）、JSON 备份（用于留存），以及<b>文件仓 zip</b>（加密本体 + 清单）。</p>`)}
+        <p>「导出」可导出 .db 数据库（用于同步，已启用加密时导出副本同样为密文）、JSON 备份（用于留存），以及<b>文件仓 zip</b>（加密本体 + 清单）。</p>
+        <p>导入加密 .db 时会提示输入密钥文本（设置 → 数据库加密 → 备份密钥）解锁后合并；「文件仓 zip」tab 导入另一端导出的文件仓包（同内容自动去重；两端需同一密钥体系才能打开预览）。</p>`)}
       <p class="hint">提示：请保管好数据库文件，建议开启数据库加密（自动密钥，请备份密钥文本）与启动锁 PIN；配合自动备份快照更安心。</p>
     </div>
     <div class="modal-foot">

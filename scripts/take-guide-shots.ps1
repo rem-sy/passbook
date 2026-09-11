@@ -1,4 +1,4 @@
-﻿﻿# 生成使用说明配图：服务器模式 + Edge headless 渲染截图（无窗口、不弹框）
+﻿# 生成使用说明配图：服务器模式 + Edge headless 渲染截图（无窗口、不弹框）
 $ErrorActionPreference = 'Stop'
 $proj = 'D:\hobby\源码\密码本'
 $guide = "$proj\public\guide"

@@ -169,6 +169,17 @@ try {
         @android.webkit.JavascriptInterface
         fun pickResult(): String { return SafImportActivity.lastResult }
 
+        // 密码本 v4.6.1：通用单文件选取桥（配合 SafPickRawActivity，导入选文件用）
+        @android.webkit.JavascriptInterface
+        fun pickRaw() {
+            val i = android.content.Intent(context, SafPickRawActivity::class.java)
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(i)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun pickRawResult(): String { return SafPickRawActivity.lastResult }
+
 '@
       if (-not $rwvSrc.Contains($a5)) { Write-Host '    警告: a5 锚点(JsSaf save 方法)未命中，文件仓桥补丁跳过' }
       else { $rwvSrc = $rwvSrc.Replace($a5, $open + $a5); $dirty = $true }

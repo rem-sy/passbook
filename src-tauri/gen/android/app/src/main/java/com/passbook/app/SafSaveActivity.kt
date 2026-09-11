@@ -28,7 +28,7 @@ class SafSaveActivity : Activity() {
         lastResult = "pending"
         val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
-            type = "application/octet-stream"
+            type = "*/*" // v4.6.1：octet-stream 会被部分系统选择器按 MIME 强改扩展名成 .bin；改 */* 保留 EXTRA_TITLE 全名
             putExtra(Intent.EXTRA_TITLE, displayName)
         }
         @Suppress("DEPRECATION")

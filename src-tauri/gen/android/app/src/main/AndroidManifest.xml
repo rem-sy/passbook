@@ -48,6 +48,12 @@
           android:excludeFromRecents="true"
           android:exported="false"
           android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <!-- v4.6.1：通用单文件选取桥（导入 .db/CSV/JSON/文件仓 zip 的选文件步骤，Android 无 tauri dialog 路径） -->
+        <activity
+          android:name=".SafPickRawActivity"
+          android:excludeFromRecents="true"
+          android:exported="false"
+          android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <!-- v4.4.0：应用内 SAF 批量导入（__passbook_saf.pick 拉起，多选文档入 pending 队列） -->
         <activity
           android:name=".SafImportActivity"
