@@ -110,3 +110,47 @@ test('searchFiles：正文 ftext 命中全部词 → 合并返回并标记 conte
   r = P.searchFiles(old, '血脂', PassSearch);
   assert.equal(r.length, 0);
 });
+
+
+/* ---------- v4.6.0 跨类型分类体系：标签串处理与三源聚合 ---------- */
+
+test('tagsSplit/tagsJoin：容错分隔（逗号/中文逗号/顿号/空白）、去重保序、规范串', () => {
+  assert.deepEqual(P.tagsSplit('工作, 个人，工作、灵感  生活'), ['工作', '个人', '灵感', '生活']);
+  assert.deepEqual(P.tagsSplit('工作 灵感'), ['工作', '灵感']); // 空格分隔的存量数据
+  assert.deepEqual(P.tagsSplit(''), []);
+  assert.deepEqual(P.tagsSplit(null), []);
+  assert.equal(P.tagsJoin(['工作', '工作', '灵感']), '工作,灵感');
+  assert.equal(P.tagsJoin('工作、灵感'), '工作,灵感'); // 规范化
+});
+
+test('renameTagInTags / removeTagInTags：命中改写、未命中 null', () => {
+  assert.equal(P.renameTagInTags('工作, 灵感', '工作', '职场'), '职场,灵感');
+  assert.equal(P.renameTagInTags('工作、灵感', '工作', '职场'), '职场,灵感'); // 顿号分隔也命中
+  assert.equal(P.renameTagInTags('灵感', '工作', '职场'), null);
+  assert.equal(P.removeTagInTags('工作, 灵感', '工作'), '灵感');
+  assert.equal(P.removeTagInTags('工作', '工作'), '');
+  assert.equal(P.removeTagInTags('灵感', '工作'), null);
+});
+
+test('unionTagCounts：三源并集聚合（总数与分源计数）', () => {
+  const pass = [{ category: '工作,个人' }, { category: '工作' }, { category: '财务' }];
+  const notes = [{ tags: '工作 灵感' }, { tags: '灵感' }];
+  const files = [{ tags: '工作,财务' }];
+  const u = P.unionTagCounts([
+    { items: pass, field: 'category', splitter: PassSearch.catSplit },
+    { items: notes, field: 'tags' },
+    { items: files, field: 'tags' },
+  ]);
+  assert.equal(u['工作'].total, 4);
+  assert.deepEqual(u['工作'].by, [2, 1, 1]);
+  assert.equal(u['灵感'].total, 2);
+  assert.equal(u['灵感'].by[0], undefined); // 稀疏数组：未出现的源为空位
+  assert.equal(u['灵感'].by[1], 2);
+  assert.equal(u['灵感'].by[2], undefined);
+  assert.equal(u['财务'].total, 2);
+  assert.equal(u['个人'].total, 1);
+  assert.deepEqual(P.unionTagCounts([]), {});
+  // 默认 splitter = tagsSplit（容错空格）
+  const u2 = P.unionTagCounts([{ items: [{ tags: 'a b' }] }]);
+  assert.equal(u2['a'].total, 1);
+});

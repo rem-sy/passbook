@@ -539,6 +539,69 @@
     return (v / 1024 / 1024 / 1024).toFixed(2) + ' GB';
   }
 
+  /* ---------- v4.6.0 跨类型分类体系：统一标签串处理与三源聚合 ---------- */
+
+  /**
+   * 容错标签拆分（便签/文件 tags 串）：按 [,，、空白] 拆，去空去重保序。
+   * 与密码分类的 catSplit（仅 [,，]）不同——便签/文件历史数据可能带空格/顿号分隔。
+   */
+  function tagsSplit(s) {
+    var out = [], seen = {};
+    var arr = String(s == null ? '' : s).split(/[,，、\s]+/);
+    for (var i = 0; i < arr.length; i++) {
+      var t = arr[i].trim();
+      if (!t || seen[t]) continue;
+      seen[t] = 1;
+      out.push(t);
+    }
+    return out;
+  }
+
+  /** 数组 → 规范逗号串（保存时归一，读取端 tagsSplit 容错兼容旧数据） */
+  function tagsJoin(arr) {
+    return tagsSplit(Array.isArray(arr) ? arr.join(',') : arr).join(',');
+  }
+
+  /** 标签串重命名：把 from 改为 to（未命中返回 null；结果经 tagsJoin 规范） */
+  function renameTagInTags(s, from, to) {
+    var arr = tagsSplit(s);
+    var hit = false;
+    for (var i = 0; i < arr.length; i++) if (arr[i] === from) { arr[i] = to; hit = true; }
+    return hit ? tagsJoin(arr) : null;
+  }
+
+  /** 标签串删除某标签：未命中返回 null */
+  function removeTagInTags(s, tag) {
+    var arr = tagsSplit(s);
+    var next = arr.filter(function (t) { return t !== tag; });
+    if (next.length === arr.length) return null;
+    return tagsJoin(next);
+  }
+
+  /**
+   * 三源标签并集聚合：sources = [{ items, field }]（如 密码entries/便签notes/文件files，
+   * field 为标签字段名）。返回 { tag: { total, by: [n1, n2, ...] } }；splitter 可覆盖
+   * （密码源传 PassSearch.catSplit，便签/文件默认 tagsSplit）。
+   */
+  function unionTagCounts(sources) {
+    var map = {};
+    var srcs = sources || [];
+    for (var i = 0; i < srcs.length; i++) {
+      var items = (srcs[i] && srcs[i].items) || [];
+      var splitter = (srcs[i] && srcs[i].splitter) || tagsSplit;
+      for (var j = 0; j < items.length; j++) {
+        var tags = splitter(items[j][(srcs[i] && srcs[i].field) || 'tags']);
+        for (var k = 0; k < tags.length; k++) {
+          var t = tags[k];
+          if (!map[t]) map[t] = { total: 0, by: [] };
+          map[t].total++;
+          map[t].by[i] = (map[t].by[i] || 0) + 1;
+        }
+      }
+    }
+    return map;
+  }
+
   return {
     FILES_SCHEMA_SQL: FILES_SCHEMA_SQL,
     SOURCES: SOURCES,
@@ -560,6 +623,11 @@
     xmlToText: xmlToText,
     slideKeyOrder: slideKeyOrder,
     snippetOf: snippetOf,
+    tagsSplit: tagsSplit,
+    tagsJoin: tagsJoin,
+    renameTagInTags: renameTagInTags,
+    removeTagInTags: removeTagInTags,
+    unionTagCounts: unionTagCounts,
     mimeFromName: mimeFromName,
     previewKind: previewKind,
     mdToHtml: mdToHtml,

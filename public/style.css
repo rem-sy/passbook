@@ -983,8 +983,12 @@ html.dark .totp-guide .guide-note { background: #232733; color: #aab2c5; }
 .tb-line .btn { flex: 1; justify-content: center; min-width: 0; }
 .tb-line .btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
 @media (max-width: 640px) {
-  .tb-line .btn { padding: 8px 6px; }
+  .tb-line { flex-wrap: wrap; }
+  .tb-line .btn { padding: 8px 6px; flex: 1 1 45%; }
   .tb-line .btn .tb-text { font-size: 12.5px; }
+  /* v4.5.1：文件仓工具栏「导入文件/内容索引」+ 拖拽区三元素窄屏挤爆——
+     拖拽区在触屏无意义，窄屏隐藏；按钮允许换行兜底 */
+  .file-drop-zone { display: none; }
 }
 /* v3.4.1：多选时列表底部让出操作台高度（操作台约 64px + 安全区） */
 body.ms-on .entry-list { padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px)); }

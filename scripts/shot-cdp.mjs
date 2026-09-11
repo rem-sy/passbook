@@ -6,7 +6,8 @@
  *   node scripts/shot-cdp.mjs [port] --mobile # 手机版 -> public/guide-mobile/
  * 依赖：Node ≥ 22（内置 WebSocket），Edge 已安装
  */
-import { existsSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, writeFileSync, mkdirSync, rmSync, readdirSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -108,15 +109,26 @@ async function writeDemo(port) {
 async function cdpScreenshot(baseUrl, cdPort, shot, mobile) {
   const url = mobile ? baseUrl : baseUrl + '/';
   const list = await (await fetch(`http://127.0.0.1:${cdPort}/json`)).json();
-  const wsUrl = list[0]?.webSocketDebuggerUrl;
+  // Edge 更新后 /json 可能带出多个目标：必须挑 type=page 的真实页面（list[0] 曾连到
+  // 非页面目标——导航/求值"正常"但永不渲染、无帧）
+  const page = list.find((t) => t.type === 'page') || list[0];
+  console.log(`    CDP 目标 ${list.length} 个，用 type=${page.type} url=${(page.url || '').slice(0, 40)}`);
+  const wsUrl = page?.webSocketDebuggerUrl;
   if (!wsUrl) throw new Error('CDP 未就绪');
 
   const ws = new WebSocket(wsUrl);
   const pending = {};
   let id = 0;
 
+  let frameCb = null; // v4.5.1：screencast 推帧回调（captureScreenshot 在本机 headless 上不可靠）
   ws.onmessage = (raw) => {
     const msg = JSON.parse(raw.data.toString());
+    if (msg.method && String(msg.method).includes('screencast') && !frameCb) console.log('    [事件] ' + msg.method);
+    if (msg.method === 'Page.screencastFrame' && frameCb) {
+      const cb = frameCb; frameCb = null;
+      ws.send(JSON.stringify({ id: 900001 + (id++), method: 'Page.screencastFrameAck', params: { sessionId: msg.params.sessionId } }));
+      cb(msg.params);
+    }
     if (msg.id && pending[msg.id]) pending[msg.id](msg);
   };
   await new Promise((r) => ws.onopen = r);
@@ -235,21 +247,28 @@ async function cdpScreenshot(baseUrl, cdPort, shot, mobile) {
     await sleep(1200); // 渲染稳定后再截
   }
   await sleep(2000);
-  // 截图（失败重试一次）
-  let resp = null;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      resp = await send('Page.captureScreenshot', { format: 'png', fromSurface: true });
-      break;
-    } catch (e) {
-      console.warn(`    截图尝试 ${attempt + 1} 失败: ${e.message}，重试…`);
-      await sleep(2000);
-    }
+  // v4.5.1：优先 captureScreenshot（保留 deviceScaleFactor 3x 分辨率）。
+  // 注意：之前"无限挂起"的真正元凶是 spawn 参数里的 --disable-gpu——Edge 更新后
+  // 新版 headless 加它会令合成器完全不出帧（导航/求值正常，唯独截不出图）。
+  // screencast 推帧作为兜底（1x 分辨率，帧质量略低但永不挂）。
+  try {
+    const resp = await send('Page.captureScreenshot', { format: 'png', fromSurface: true }, 12000);
+    const b64 = resp?.result?.data;
+    if (!b64) throw new Error('截图响应为空');
+    ws.close();
+    return Buffer.from(b64, 'base64');
+  } catch (e) {
+    console.warn(`    captureScreenshot 失败（${e.message}），回退 screencast…`);
   }
+  const params = await new Promise((resolve, reject) => {
+    const t = setTimeout(() => { frameCb = null; reject(new Error('screencast 15s 无帧')); }, 15000);
+    frameCb = (p) => { clearTimeout(t); resolve(p); };
+    ws.send(JSON.stringify({ id: 900001 + (id++), method: 'Page.startScreencast', params: { format: 'png', everyNthFrame: 1 } }));
+  });
+  try { ws.send(JSON.stringify({ id: 900001 + (id++), method: 'Page.stopScreencast' })); } catch { /* 忽略 */ }
   ws.close();
-  const b64 = resp?.result?.data;
-  if (!b64) throw new Error('截图响应为空');
-  return Buffer.from(b64, 'base64');
+  if (!params.data) throw new Error('screencast 帧为空');
+  return Buffer.from(params.data, 'base64');
 }
 
 /** 轮询等待列表行就绪 */
@@ -282,6 +301,10 @@ async function main() {
   if (!EDGE) { console.error('找不到 msedge.exe'); process.exit(1); }
 
   try { rmSync(DATA_DIR, { recursive: true, force: true }); } catch {}
+  // v4.5.1：每轮独立 profile（时间戳目录）——固定 profile 时上轮僵尸 Edge（data 目录被清后
+  // 其 profile 已失效）会接管新窗口，导致 CDP 导航/截图全部超时；独立目录保证每次都是新进程。
+  // 清理只杀本脚本 spawn 的 PID 树（taskkill /T），绝不按映像名杀 Edge。
+  const PROFILE_DIR = join(DATA_DIR, '.edge-profile-' + Date.now());
 
   console.log(`启动服务器 (${mobile ? '手机版' : '桌面版'})…`);
   const srv = spawn('node', ['--disable-warning=ExperimentalWarning', 'server.mjs', '--port', String(port), '--no-open'], {
@@ -290,35 +313,61 @@ async function main() {
   await waitServer(port);
   await writeDemo(port);
 
+  // v4.5.1：调试端口被占用（多半是上轮失败残留的僵尸 headless Edge）会导致
+  // 新 Edge 绑不上端口、脚本连到坏实例上全部超时——启动前精准清理（只匹配
+  // remote-debugging-port 特征进程，绝不碰正常 Edge）后仍被占则明确报错。
+  {
+    const { execSync } = await import('node:child_process');
+    const out = (() => { try { return execSync(`netstat -ano | findstr ":${cdPort}" | findstr "LISTENING"`, { shell: "cmd.exe" }).toString(); } catch { return ""; } })(); // 无监听=端口空闲
+    const pids = [...new Set(out.trim().split(/\r?\n/).map((l) => l.trim().split(/\s+/).pop()).filter(Boolean))];
+    for (const pid of pids) {
+      try {
+        // 用 PowerShell 查命令行（wmic 在新 Windows 上已移除，查询失败会被静默放过）
+        const cp = execSync(
+          `powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine"`,
+          { shell: 'cmd.exe' },
+        ).toString();
+        if (/remote-debugging-port/.test(cp) && /headless/.test(cp)) {
+          console.log(`  清理残留僵尸 headless Edge PID ${pid}…`);
+          execSync(`taskkill /F /T /PID ${pid}`, { shell: 'cmd.exe' });
+        } else { console.warn(`  端口 ${cdPort} 被非脚本进程 PID ${pid} 占用，请换端口运行`); process.exit(1); }
+      } catch (e) { console.warn(`  端口 ${cdPort} 占用进程核查失败（${e.message.slice(0, 60)}），请换端口运行`); process.exit(1); }
+    }
+  }
+
   console.log('启动 Edge headless…');
   const edgArgs = [
     `--remote-debugging-port=${cdPort}`,
-    '--headless=new', '--disable-gpu', '--disable-crash-reporter', '--noerrdialogs',
+    '--headless=new', '--disable-crash-reporter', '--noerrdialogs', // v4.5.1：去掉 --disable-gpu——Edge 更新后新版 headless 加它会完全不出帧（截图全灭）
     '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--no-sandbox',
-    '--user-data-dir=' + join(DATA_DIR, '.edge-profile'),
+    '--user-data-dir=' + PROFILE_DIR,
     'about:blank',
   ];
   const edg = spawn(EDGE, edgArgs, { stdio: 'ignore' });
   await sleep(2000);
 
   mkdirSync(OUT_DIR, { recursive: true });
-  for (const shot of SHOTS) {
-    try {
-      console.log(`  截取 ${shot.name} …`);
-      const png = await cdpScreenshot(baseUrl, cdPort, shot, mobile);
-      writeFileSync(join(OUT_DIR, shot.name), png);
-      console.log(`    -> ${(png.length / 1024).toFixed(0)}KB`);
-    } catch (e) {
-      console.error(`  失败 ${shot.name}: ${e.message}`);
+  try {
+    for (const shot of SHOTS) {
+      try {
+        console.log(`  截取 ${shot.name} …`);
+        const png = await cdpScreenshot(baseUrl, cdPort, shot, mobile);
+        writeFileSync(join(OUT_DIR, shot.name), png);
+        console.log(`    -> ${(png.length / 1024).toFixed(0)}KB`);
+      } catch (e) {
+        console.error(`  失败 ${shot.name}: ${e.message}`);
+      }
     }
-  }
-
-  edg.kill();
-  srv.kill();
-  // Windows 下 srv.kill() 常杀不干净残留 node 服务器 → 下轮端口被占、演示数据叠加
-  if (process.platform === 'win32') {
-    try { spawn('taskkill', ['/F', '/T', '/PID', String(edg.pid)], { stdio: 'ignore' }); } catch {}
-    try { spawn('taskkill', ['/F', '/T', '/PID', String(srv.pid)], { stdio: 'ignore' }); } catch {}
+  } finally {
+    // 失败/异常退出也必须清理自己 spawn 的进程树（v4.5.1 教训：半途挂掉的
+    // headless Edge 残留占用调试端口，导致下一轮整体超时）。只按 PID 杀树。
+    edg.kill();
+    srv.kill();
+    if (process.platform === 'win32') {
+      // 同步执行——spawn 异步任务可能在进程退出前没跑完（僵尸残留教训）
+      try { execSync(`taskkill /F /T /PID ${edg.pid}`, { stdio: 'ignore', shell: 'cmd.exe' }); } catch {}
+      try { execSync(`taskkill /F /T /PID ${srv.pid}`, { stdio: 'ignore', shell: 'cmd.exe' }); } catch {}
+    }
   }
   console.log('完成');
 }

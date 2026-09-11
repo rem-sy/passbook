@@ -1428,15 +1428,36 @@ async function batchDelete() {
 
 /* ---------------- 分类管理（v3.4.0）---------------- */
 async function openCatManageModal() {
-  const counts = await allCatCounts();
-  if (!counts.size) return toast('暂无分类', true);
+  // v4.6.0：跨类型分类统一管理——并集密码分类 + 便签标签 + 文件标签
+  const passCounts = await allCatCounts();
+  let notes = [], files = [];
+  if (currentMode === 'local') {
+    try { notes = LocalStore.notesList() || []; } catch { /* 忽略 */ }
+    try { files = LocalStore.filesList() || []; } catch { /* 忽略 */ }
+  }
+  const SRC = ['密码', '便签', '文件'];
+  const rows = [];
+  {
+    const m = new Map();
+    const add = (tag, src) => {
+      if (!tag) return;
+      if (!m.has(tag)) m.set(tag, [0, 0, 0]);
+      m.get(tag)[src]++;
+    };
+    for (const [c, n] of passCounts.entries()) for (let i = 0; i < n; i++) add(c, 0);
+    for (const nt of notes) for (const t of PassFiles.tagsSplit(nt.tags)) add(t, 1);
+    for (const f of files) for (const t of PassFiles.tagsSplit(f.tags)) add(t, 2);
+    for (const [tag, by] of m) rows.push([tag, by[0] + by[1] + by[2], by]);
+  }
+  if (!rows.length) return toast('暂无分类', true);
+  const counts = new Map(rows.map(([c, n]) => [c, n]));
   const close = openOverlayModal(`
-    <div class="modal-head"><h3>管理分类</h3></div>
+    <div class="modal-head"><h3>管理分类（密码 · 便签 · 文件）</h3></div>
     <div class="modal-body">
       <div class="cman-list">
-        ${[...counts.entries()].sort((a, b) => b[1] - a[1]).map(([c, n]) => `
+        ${rows.sort((a, b) => b[1] - a[1]).map(([c, n, by]) => `
           <div class="cman-row" data-cat="${escapeHtml(c)}">
-            <span class="cman-name">${escapeHtml(c)}</span><span class="hint">${n} 条</span>
+            <span class="cman-name">${escapeHtml(c)}</span><span class="hint">${SRC.map((nm, i) => by[i] ? nm + ' ' + by[i] : '').filter(Boolean).join(' · ')}</span>
             <span class="cman-ops">
               <button class="btn ghost small" data-cman="rename">重命名</button>
               <button class="btn ghost small" data-cman="merge">合并到…</button>
@@ -1449,15 +1470,36 @@ async function openCatManageModal() {
     <div class="modal-foot"><button class="btn primary" data-close>关闭</button></div>
   `);
   const applyTo = async (fn) => {
+    // v4.6.0：fn(tagsArray) → 新数组 | null（未命中）；同步 密码分类 + 便签标签 + 文件标签，
+    // 各源用各自的 joiner 规范落库（密码 catJoin / 便签文件 tagsJoin）
     const all = (await store.list({})).items;
     let n = 0;
     for (const it of all) {
-      const next = fn(it);
-      if (next === null) continue; // 未命中
-      await store.update(it.id, { ...it, category: next });
+      const next = fn(PassSearch.catSplit(it.category));
+      if (next === null) continue;
+      await store.update(it.id, { ...it, category: PassSearch.catJoin(next) });
       n++;
     }
+    if (currentMode === 'local') {
+      for (const nt of LocalStore.notesList() || []) {
+        const next = fn(PassFiles.tagsSplit(nt.tags));
+        if (next === null) continue;
+        await LocalStore.noteUpdate(nt.id, { title: nt.title, content: nt.content, tags: PassFiles.tagsJoin(next) });
+        n++;
+      }
+      for (const f of LocalStore.filesList() || []) {
+        const next = fn(PassFiles.tagsSplit(f.tags));
+        if (next === null) continue;
+        await LocalStore.fileUpdate(f.id, { name: f.name, tags: PassFiles.tagsJoin(next), note: f.note });
+        n++;
+      }
+    }
     return n;
+  };
+  const refreshAllViews = () => {
+    refreshSidebar();
+    refreshList();
+    if (currentMode === 'local') { refreshNotesList(); refreshFilesList(); }
   };
   document.querySelector('.cman-list').addEventListener('click', async (ev) => {
     const b = ev.target.closest('button[data-cman]');
@@ -1476,39 +1518,34 @@ async function openCatManageModal() {
         const nn = prompt(`把分类「${cat}」重命名为：`, cat);
         if (!nn || nn.trim() === cat) return;
         const t = nn.trim();
-        const conflict = (await allCatCounts()).has(t);
+        const conflict = counts.has(t); // v4.6.0：并集口径（含便签/文件标签）
         if (conflict && !confirm(`已存在分类「${t}」，重命名将把两者合并为「${t}」，继续？`)) return;
-        const n = await applyTo((it) => {
-          const arr = PassSearch.catSplit(it.category);
+        const n = await applyTo((arr) => {
           if (!arr.includes(cat)) return null;
-          const merged = arr.map((c) => (c === cat ? t : c));
-          return PassSearch.catJoin(merged);
+          return arr.map((c) => (c === cat ? t : c));
         });
-        toast(`已重命名「${cat}」→「${t}」（${n} 条）`);
+        toast(`已重命名「${cat}」→「${t}」（${n} 条记录同步）`);
       } else if (b.dataset.cman === 'merge') {
         if (!others.length) return toast('没有其他分类可合并', true);
         const target = prompt(`把分类「${cat}」合并到哪个分类？\n可选：${others.join('、')}`, others[0]);
         if (!target || !others.includes(target.trim())) return;
         const t = target.trim();
-        const n = await applyTo((it) => {
-          const arr = PassSearch.catSplit(it.category);
+        const n = await applyTo((arr) => {
           if (!arr.includes(cat)) return null;
-          return PassSearch.catJoin([...arr.filter((c) => c !== cat), t]);
+          return [...arr.filter((c) => c !== cat), t];
         });
-        toast(`已合并「${cat}」→「${t}」（${n} 条）`);
+        toast(`已合并「${cat}」→「${t}」（${n} 条记录同步）`);
       } else if (b.dataset.cman === 'del') {
         clearTimeout(Number(b.dataset.tm || 0));
         delete b.dataset.c1;
-        const n = await applyTo((it) => {
-          const arr = PassSearch.catSplit(it.category);
+        const n = await applyTo((arr) => {
           if (!arr.includes(cat)) return null;
-          return PassSearch.catJoin(arr.filter((c) => c !== cat));
+          return arr.filter((c) => c !== cat);
         });
-        toast(`已删除分类「${cat}」（${n} 条摘除标签）`);
+        toast(`已删除分类「${cat}」（${n} 条记录摘除）`);
       }
       close();
-      refreshSidebar();
-      await refreshList();
+      refreshAllViews();
     } catch (e) { toast(e.message, true); }
   });
 }
@@ -1713,21 +1750,36 @@ async function refreshSidebar() {
     _favCount = rf.items.length;
     rf.items.forEach((it) => { for (const k of PassSearch.catSplit(it.category)) _favCatCounts[k] = (_favCatCounts[k] || 0) + 1; });
   } catch { _favCount = 0; }
+  let passItems = [];
+  let notes = [], files = [];
   try {
     const ra = await store.list({});
     _allCount = (ra.total != null) ? ra.total : ra.items.length;
+    passItems = ra.items;
     for (const it of ra.items) for (const c of PassSearch.catSplit(it.category)) allCatMap.set(c, (allCatMap.get(c) || 0) + 1);
   } catch { /* 保留旧值 */ }
-  state.categories = [...allCatMap.keys()];
-  const cats = [...allCatMap.entries()].sort((a, b) => b[1] - a[1]);
+  // v4.6.0：跨类型分类池——并集密码分类 + 便签标签 + 文件标签（后两类仅本地模式）
+  if (currentMode === 'local') {
+    try { notes = LocalStore.notesList() || []; } catch { /* 忽略 */ }
+    try { files = LocalStore.filesList() || []; } catch { /* 忽略 */ }
+  }
+  const union = PassFiles.unionTagCounts([
+    { items: passItems, field: 'category', splitter: PassSearch.catSplit },
+    { items: notes, field: 'tags' },
+    { items: files, field: 'tags' },
+  ]);
+  const SRC_NAMES = ['密码', '便签', '文件'];
+  state.categories = Object.keys(union);
+  const cats = Object.entries(union).map(([c, v]) => [c, v.total, v.by]).sort((a, b) => b[1] - a[1]);
+  const catTip = (by) => by.map((n, i) => n ? SRC_NAMES[i] + ' ' + n : '').filter(Boolean).join(' · ') || '无记录';
   const box = $('#sidebar-nav');
   if (!box) return;
   const allActive = state.category === '' && !state.favOnly;
   box.innerHTML = `
     <button class="side-item ${allActive ? 'active' : ''}" data-side="all"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg><span>全部</span><em>${_allCount ?? ''}</em></button>
-    <button class="side-item ${state.favOnly ? 'active' : ''}" data-side="fav">${ICONS.starFill}<span>收藏</span><em>${_favCount || ''}</em></button>
+    ${state.view === 'pass' ? `<button class="side-item ${state.favOnly ? 'active' : ''}" data-side="fav">${ICONS.starFill}<span>收藏</span><em>${_favCount || ''}</em></button>` : ''}
     <div class="side-sep"></div>
-    ${cats.map(([c, n]) => `<button class="side-item ${state.category === c ? 'active' : ''}" data-side="cat" data-cat="${escapeHtml(c)}"><span class="side-dot" style="background:hsl(${avatarHue(c)} 60% 55%)"></span><span class="side-name" title="${escapeHtml(c)}">${escapeHtml(c)}</span><em>${state.favOnly ? (_favCatCounts[c] || 0) : n}</em></button>`).join('')}
+    ${cats.map(([c, n, by]) => `<button class="side-item ${state.category === c && !state.favOnly ? 'active' : ''}" data-side="cat" data-cat="${escapeHtml(c)}" title="${escapeHtml(catTip(by))}"><span class="side-dot" style="background:hsl(${avatarHue(c)} 60% 55%)"></span><span class="side-name" title="${escapeHtml(c)}">${escapeHtml(c)}</span><em>${n}</em></button>`).join('')}
     ${cats.length ? `<div class="side-sep"></div>
     <button class="side-item" data-side="manage" id="btn-cat-manage"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg><span>管理分类</span></button>` : ''}
   `;
@@ -1743,6 +1795,8 @@ $('#sidebar-nav')?.addEventListener('click', (e) => {
   else { state.category = item.dataset.cat || ''; /* v3.3.6：保持 favOnly——收藏模式下点分类=收藏∩分类（二级筛选） */ }
   refreshSidebar();
   refreshList();
+  // v4.6.0：分类为跨类型全局筛选——便签/文件列表同步过滤（仅本地模式有数据）
+  if (currentMode === 'local') { refreshNotesList(); refreshFilesList(); }
   closeSidebarDrawer(); // 手机端选择后收起抽屉
 });
 
@@ -1912,7 +1966,7 @@ $('#ms-remove-cat')?.addEventListener('click', () => openBatchCatModal('remove')
 $('#ms-del')?.addEventListener('click', batchDelete);
 $('#ms-exit')?.addEventListener('click', msExit);
 $('#btn-filter')?.addEventListener('click', openFilterPanel);
-$('#btn-cat-manage')?.addEventListener('click', openCatManageModal);
+
 $('#btn-sort')?.addEventListener('click', openSortPanel);
 // v3.4.3：⋯ 溢出菜单已随三排布局移除（按钮平铺，无需开关逻辑）
 $('#btn-manual-add').addEventListener('click', () => {
@@ -3872,10 +3926,9 @@ function setView(v) {
   document.querySelectorAll('#view-tabs .view-tab').forEach((b) => {
     b.classList.toggle('active', b.dataset.view === v);
   });
-  // 便签/文件页隐藏密码分类侧栏（只做外层显隐，不动密码页结构）
+  // v4.6.0：侧栏三页常驻——分类体系跨类型（密码/便签/文件同一套标签池与筛选）
   closeSidebarDrawer();
-  $('#sidebar')?.classList.toggle('hidden', v !== 'pass');
-  $('#side-mask')?.classList.add('hidden');
+  refreshSidebar();
   if (v === 'notes') refreshNotesList();
   if (v === 'files') refreshFilesList();
 }
@@ -3906,12 +3959,18 @@ async function refreshNotesList() {
   let notes = [];
   try { notes = LocalStore.notesList() || []; } catch (e) { toast('读取便签失败: ' + e.message, true); return; }
   let shown = notes;
+  // v4.6.0：跨类型分类筛选（侧栏选择作用于三页；大小写不敏感）
+  if (state.category) {
+    const k = state.category.toLowerCase();
+    shown = shown.filter((n) => PassFiles.tagsSplit(n.tags).some((t) => t.toLowerCase() === k));
+  }
   if (state.noteQ && window.PassNotes && window.PassSearch) {
     const res = PassNotes.searchNotes(notes, state.noteQ, PassSearch);
     if (res) shown = res.map((r) => r.note);
   }
   listEl.innerHTML = shown.map(renderNoteCard).join('');
-  countEl.textContent = state.noteQ ? `${shown.length}/${notes.length} 条` : `共 ${notes.length} 条`;
+  const catPre = state.category ? `「${state.category}」` : '';
+  countEl.textContent = state.noteQ ? `${shown.length}/${notes.length} 条` : `${catPre}共 ${shown.length} 条`;
   emptyEl.classList.toggle('hidden', shown.length > 0);
 }
 
@@ -4006,8 +4065,9 @@ function openNoteModal(note) {
     const title = $('#note-f-title').value.trim() || PassNotes.titleOf(content);
     const tags = $('#note-f-tags').value.trim();
     try {
-      if (isNew) await LocalStore.noteCreate({ title, content, tags, source: 'manual' });
-      else await LocalStore.noteUpdate(note.id, { title, content, tags });
+      const normTags = PassFiles.tagsJoin(tags);
+      if (isNew) await LocalStore.noteCreate({ title, content, tags: normTags, source: 'manual' });
+      else await LocalStore.noteUpdate(note.id, { title, content, tags: normTags });
       closeModal();
       toast(isNew ? '便签已保存' : '便签已更新');
       refreshNotesList();
@@ -4310,6 +4370,11 @@ async function refreshFilesList() {
   let files = [];
   try { files = LocalStore.filesList() || []; } catch (e) { toast('读取文件列表失败: ' + e.message, true); return; }
   let shown = files;
+  // v4.6.0：跨类型分类筛选
+  if (state.category) {
+    const k = state.category.toLowerCase();
+    shown = shown.filter((f) => PassFiles.tagsSplit(f.tags).some((t) => t.toLowerCase() === k));
+  }
   let contentInfo = {}; // v4.5.0：id → { contentHit, snippet }（内容命中徽标与片段）
   if (state.fileQ && window.PassFiles && window.PassSearch) {
     const res = PassFiles.searchFiles(files, state.fileQ, PassSearch);
@@ -4325,7 +4390,8 @@ async function refreshFilesList() {
     }
   }
   listEl.innerHTML = shown.map((f) => renderFileCard(f, contentInfo[f.id])).join('');
-  countEl.textContent = state.fileQ ? `${shown.length}/${files.length} 个` : `共 ${files.length} 个`;
+  const catPre = state.category ? `「${state.category}」` : '';
+  countEl.textContent = state.fileQ ? `${shown.length}/${files.length} 个` : `${catPre}共 ${shown.length} 个`;
   emptyEl.classList.toggle('hidden', shown.length > 0);
 }
 
@@ -4402,7 +4468,7 @@ function openFileEditModal(file) {
     try {
       await LocalStore.fileUpdate(file.id, {
         name: $('#file-f-name').value.trim() || file.name,
-        tags: $('#file-f-tags').value.trim(),
+        tags: PassFiles.tagsJoin($('#file-f-tags').value.trim()),
         note: $('#file-f-note').value,
       });
       closeModal();
@@ -4893,7 +4959,7 @@ function openGuideModal() {
     <div class="modal-body guide-body">
       ${guideSec('main.png', '① 界面总览：三标签页与强搜索', `
         <p>顶栏下方是页面级<b>三标签</b>：<b>密码 | 随手记 | 文件仓</b>，点选切换，停留页自动记忆。三个页面各有<b>独立的搜索框</b>，互不干扰——密码页用顶栏搜索，随手记/文件仓用各自工具栏内的搜索框。</p>
-        <p>密码页：左侧<b>分类侧栏</b>（手机端点左上角 ☰ 呼出）按「全部 / 收藏 / 各分类」切换；卡片左侧<b>星标</b> ☆ 收藏常用条目并自动置顶。顶部<b>搜索框</b>支持多词与操作符：关键词（命中 所属 / 账户 / 网址 / 备注 / 分类，打分排序+高亮）+ <code>分类：工作</code>、<code>有验证码</code>、<code>有收藏</code> 等过滤语法。</p>
+        <p>左侧<b>分类侧栏</b>三页通用（手机端点左上角 ☰ 呼出）：<b>分类是跨类型的</b>——同一分类下可同时有密码、便签和文件，选中「工作」后密码页、随手记页、文件仓页都只展示「工作」类，切换页面筛选保持；侧栏「管理分类」的重命名/合并/删除会同步三类记录。卡片左侧<b>星标</b> ☆ 收藏常用条目并自动置顶。顶部<b>搜索框</b>支持多词与操作符：关键词（命中 所属 / 账户 / 网址 / 备注 / 分类，打分排序+高亮）+ <code>分类：工作</code>、<code>有验证码</code>、<code>有收藏</code> 等过滤语法。</p>
         <p>每条记录默认打码，点 <b>眼睛</b> 看明文、<b>复制</b> 进剪贴板；<b>TOTP 动态码</b>实时显示 6 位验证码与倒计时（点一下即复制）；带 <b>📎 徽标</b> 的记录挂着附件。卡片左侧默认<b>首字头像</b>，设置里可开启<b>站点图标</b>。</p>`)}
       ${guideSec('notes.png', '② 随手记：碎片信息一键收集', `
         <p><b>手机快捷方式</b>：长按应用图标 →「随手记」，秒开小卡片预览剪贴板（前 80 字），点「收入」入队，下次打开应用自动入库并提示补了几条。</p>
