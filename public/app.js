@@ -2935,9 +2935,10 @@ function androidPickRawFile() {
 async function pickImportFileAny(acceptExt) {
   if (IS_TAURI && IS_ANDROID) {
     const picked = await androidPickRawFile();
+    if (!picked || !picked.tempPath) throw new Error('选取结果无效，请重试');
     const b64 = await tauriInvoke('read_file_bytes_b64', { path: picked.tempPath });
     try { await tauriInvoke('delete_file', { path: picked.tempPath }); } catch { /* 清理尽力而为 */ }
-    if (!b64) throw new Error('读取文件失败');
+    if (!b64) throw new Error('读取所选文件失败（临时副本已失效，多为上次选取结果残留——请再选一次）');
     return { name: picked.name, bytes: base64ToBytes(b64) };
   }
   if (IS_TAURI) {

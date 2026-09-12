@@ -161,6 +161,7 @@ try {
         // 密码本 v4.4.0：SAF 批量导入桥（配合 SafImportActivity，ACTION_OPEN_DOCUMENT 多选）
         @android.webkit.JavascriptInterface
         fun pick() {
+            SafImportActivity.lastResult = "pending" // v4.6.4：同款残留隐患
             val i = android.content.Intent(context, SafImportActivity::class.java)
             i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(i)
@@ -172,6 +173,7 @@ try {
         // 密码本 v4.6.1：通用单文件选取桥（配合 SafPickRawActivity，导入选文件用）
         @android.webkit.JavascriptInterface
         fun pickRaw() {
+            SafPickRawActivity.lastResult = "pending" // v4.6.4：启动前重置（静态残留教训）
             val i = android.content.Intent(context, SafPickRawActivity::class.java)
             i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(i)
