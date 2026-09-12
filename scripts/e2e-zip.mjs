@@ -95,6 +95,28 @@ log('文件卡片数: ' + await ev("document.querySelectorAll('.file-card').leng
 log('文件名: ' + await ev("(document.querySelector('.file-card .note-title')?.textContent||'')"));
 log('blob 落桶: ' + await ev("JSON.stringify(Object.keys(window.__BLOBS||{}))"));
 
+/* ---- 场景 2：判重语义验证（同 zip 二次导入 / 同名不同内容） ---- */
+async function tryImport(zipB64, label) {
+  await ev(`window.__ZIP_B64 = ${JSON.stringify(zipB64)}; 1`);
+  await ev('openImportModal && openImportModal()'); await sleep(300);
+  await ev("document.querySelector('.import-tabs [data-tab=zip]')?.click()"); await sleep(200);
+  await ev("document.querySelector('#zip-import-pick')?.click()"); await sleep(1800);
+  log(label + ' → info: ' + await ev("(document.querySelector('#zip-import-info')?.textContent||'').slice(0,100)"));
+  await ev('closeModal && closeModal()'); await sleep(200);
+}
+const mkZip = (contentTag) => {
+  const m2 = { ...manifest, files: manifest.files.map((f) => ({ ...f, sha256: contentTag.padEnd(64, '0').slice(0, 64), size: 6 })) };
+  return Buffer.from(PassFiles.buildZip([
+    { name: 'manifest.json', bytes: enc.encode(JSON.stringify(m2)) },
+    { name: 'blobs/' + contentTag.padEnd(64, '0').slice(0, 64), bytes: new Uint8Array([1, 2, 3, 4, 5, 6]) },
+  ])).toString('base64');
+};
+await ev("window.__BLOBS = {}"); // 模拟本体丢失（行在桶丢的脏状态）
+await tryImport(ZIP_B64, '同 zip 二次导入+本体丢失');
+log('本体自愈: ' + await ev("JSON.stringify(Object.keys(window.__BLOBS||{}))") + '（期望补写 1 个）');
+await tryImport(mkZip('bb'), '同名不同内容（sha 变）');
+log('累计卡片: ' + await ev("document.querySelectorAll('.file-card').length") + '（期望 2：首导 1 + 同名不同内容 1）');
+
 ws.close();
 for (const p of [edg, srv]) { try { p.kill(); } catch {} }
 try { (await import('node:child_process')).execSync(`taskkill /F /T /PID ${edg.pid} & taskkill /F /T /PID ${srv.pid}`, { shell: 'cmd.exe', stdio: 'ignore' }); } catch {}

@@ -2983,10 +2983,20 @@ async function importFilehubZip(bytes, name) {
     await LocalStore.fileKvSet('files_salt', manifest.files_salt);
   }
   const existing = LocalStore.filesList() || [];
-  let added = 0, dup = 0, blobMiss = 0;
+  let added = 0, dup = 0, blobMiss = 0, healed = 0;
   for (const row of manifest.files || []) {
     if (!row || !/^[0-9a-f]{64}$/.test(String(row.sha256 || ''))) continue;
-    if (existing.some((x) => x.sha256 === row.sha256 && x.name === row.name && x.size === row.size)) { dup++; continue; }
+    if (existing.some((x) => x.sha256 === row.sha256 && x.name === row.name && x.size === row.size)) {
+      // v4.6.5：判重跳过 = 内容字节级相同（同名同大小同指纹）；顺带体检本体——
+      // 行在桶丢（历史导入中断的脏状态）时自动补写加密本体，计为修复
+      const has = await tauriInvoke('store_blob_exists', { sha256: row.sha256 });
+      if (!has && blobs[row.sha256]) {
+        await tauriInvoke('store_blob_write_b64', { sha256: row.sha256, b64: bytesToBase64(blobs[row.sha256]) });
+        healed++;
+      }
+      dup++;
+      continue;
+    }
     const blobBytes = blobs[row.sha256];
     if (!blobBytes) { blobMiss++; continue; }
     const has = await tauriInvoke('store_blob_exists', { sha256: row.sha256 });
@@ -2994,7 +3004,7 @@ async function importFilehubZip(bytes, name) {
     await LocalStore.fileCreate(PassFiles.buildMetaRow(row));
     added++;
   }
-  return { added, dup, blobMiss };
+  return { added, dup, blobMiss, healed };
 }
 
 /* zip 导入 tab 事件 */
@@ -3008,9 +3018,12 @@ document.addEventListener('click', (e) => {
       const picked = await pickImportFileAny('.zip');
       if (!picked) { if (info) info.textContent = ''; return; }
       const r = await importFilehubZip(picked.bytes, picked.name);
-      if (info) info.textContent = `「${picked.name}」导入完成：新增 ${r.added} 个文件` +
-        (r.dup ? `（跳过重复 ${r.dup} 个）` : '') + (r.blobMiss ? `（${r.blobMiss} 个缺本体已跳过）` : '');
-      toast(`文件仓已导入 ${r.added} 个文件`);
+      if (info) {
+        if (r.added) info.textContent = `「${picked.name}」导入完成：新增 ${r.added} 个文件` + (r.blobMiss ? `（另有 ${r.blobMiss} 个缺本体已跳过）` : '');
+        else info.textContent = `文件仓已有 ${r.dup} 个内容完全相同的文件（同名同大小同指纹），无需重复导入` +
+          (r.healed ? `；已自动补写 ${r.healed} 个丢失的加密本体` : '') + `。当前文件仓共 ${(LocalStore.filesList() || []).length} 个文件，可在文件仓页查看`;
+      }
+      toast(r.added ? `文件仓已导入 ${r.added} 个文件` : (r.dup ? `已存在相同文件，跳过 ${r.dup} 个` : '没有可导入的文件'));
       refreshFilesList();
       refreshSidebar();
     } catch (err) {
