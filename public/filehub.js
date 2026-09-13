@@ -240,6 +240,98 @@
     return (start > 0 ? '…' : '') + s.slice(start, end).replace(/\s+/g, ' ') + (end < s.length ? '…' : '');
   }
 
+  /* ---------- v4.7.0 文件仓体检：行与桶/索引的失配判定（纯函数） ---------- */
+
+  /** 应有文本层的类型（ftext 抽取覆盖面：pdf/docx/xlsx/md/text 系/pptx） */
+  var TEXTY_EXTS = ['pdf', 'docx', 'xlsx', 'md', 'markdown', 'txt', 'log', 'csv', 'json', 'pptx'];
+
+  function extOf(name) {
+    var m = String(name || '').toLowerCase().match(/\.([a-z0-9]+)$/);
+    return m ? m[1] : '';
+  }
+
+  /**
+    * 体检计划：rows 为 files 全行（含 ftext/ftext_ok），blobShas 为 store_blob_list 结果。
+    * → { missingBlob:[sha…]（行引用但桶无，按 sha 去重）,
+    *     orphanBlob:[sha…]（桶有但无任何行引用）,
+    *     needIndex:[id…]（ftext_ok=0，未建索引）,
+    *     suspectIndex:[id…]（ftext_ok=1 且应有文本类型但 ftext 空——索引可疑） }
+    */
+  function healthPlan(rows, blobShas) {
+    var rowShas = {};
+    var blobSet = {};
+    var arr = rows || [];
+    var blobs = blobShas || [];
+    var missingBlob = [], orphanBlob = [], needIndex = [], suspectIndex = [];
+    var i, r, s;
+    for (i = 0; i < arr.length; i++) {
+      r = arr[i] || {};
+      s = String(r.sha256 || '').toLowerCase();
+      if (/^[0-9a-f]{64}$/.test(s)) rowShas[s] = (rowShas[s] || 0) + 1;
+      if (!r.ftext_ok) needIndex.push(r.id);
+      else if (!String(r.ftext || '').trim() && TEXTY_EXTS.indexOf(extOf(r.name)) >= 0) {
+        suspectIndex.push(r.id); // 已标索引却无文本：抽取疑似失败
+      }
+    }
+    for (i = 0; i < blobs.length; i++) {
+      s = String(blobs[i] || '').toLowerCase();
+      blobSet[s] = true;
+    }
+    var seenMiss = {};
+    for (i = 0; i < arr.length; i++) {
+      s = String((arr[i] || {}).sha256 || '').toLowerCase();
+      if (/^[0-9a-f]{64}$/.test(s) && !blobSet[s] && !seenMiss[s]) { seenMiss[s] = true; missingBlob.push(s); }
+    }
+    for (i = 0; i < blobs.length; i++) {
+      s = String(blobs[i] || '').toLowerCase();
+      if (!rowShas[s]) orphanBlob.push(s);
+    }
+    return { missingBlob: missingBlob, orphanBlob: orphanBlob, needIndex: needIndex, suspectIndex: suspectIndex };
+  }
+
+  /* ---------- v4.7.0 zip 导入密钥迁移判定（纯逻辑，derive/decrypt/prompt 全注入可测） ---------- */
+
+  /**
+    * 落桶前先验后写：判定 zip 本体与本机文件仓加密体系的关系。
+    * opts = {
+    *   sample,        首个本体密文字节（无本体传 null → 纯元数据 zip，跳过验解）
+    *   localKey,      本机密钥（CryptoKey，调用方预派生）
+    *   exporterSalt,  导出端 files_salt 字节（来自 manifest.files_salt）
+    *   fixedMaterial, 导出端未加密时使用的固定设备密钥材料（字符串）
+    *   derive(material, saltBytes) -> key,   注入的派生函数
+    *   decrypt(bytes, key) -> plain,         注入的解密函数（失败抛错）
+    *   prompt() -> Promise<keyText|null>,   注入的弹钥（用户取消返回 null）
+    * }
+    * 返回 { mode:'meta' } | { mode:'same' } | { mode:'migrate', exporterKey, via } | { mode:'abort', reason }
+    */
+  async function resolveZipKey(opts) {
+    var o = opts || {};
+    if (!o.sample) return { mode: 'meta' }; // 纯元数据 zip：跳过验解
+    // ① 本机密钥试解：成功 → 同体系，直接写
+    try { await o.decrypt(o.sample, o.localKey); return { mode: 'same' }; } catch (e) { /* 异体系，继续 */ }
+    // ② 导出端未加密（固定设备密钥）+ 本机加密：无钥可输，直接用固定材料按导出端 salt 派生试解
+    if (o.fixedMaterial) {
+      try {
+        var fk = await o.derive(o.fixedMaterial, o.exporterSalt);
+        await o.decrypt(o.sample, fk);
+        return { mode: 'migrate', exporterKey: fk, via: 'fixed' };
+      } catch (e) { /* 继续向用户要钥 */ }
+    }
+    // ③ 弹钥：用户输入导出端数据库加密密钥 → 「输入密钥 + manifest.files_salt」派生导出端密钥再试解
+    var text = o.prompt ? await o.prompt() : null;
+    if (!text) return { mode: 'abort', reason: '已取消导入（未输入导出端密钥）' };
+    try {
+      var ik = await o.derive(text, o.exporterSalt);
+      await o.decrypt(o.sample, ik);
+      return { mode: 'migrate', exporterKey: ik, via: 'input' };
+    } catch (e) {
+      return {
+        mode: 'abort',
+        reason: '密钥不正确，或导出端未启用加密——请让导出端先启用数据库加密再导出，或在本机关闭数据库加密后重试',
+      };
+    }
+  }
+
   /* ---------- 预览类型判定（纯函数：mime/扩展名 → 渲染通道） ---------- */
 
   /** ACTION_VIEW intent-filter 覆盖的文档 mime（manifest 与本表共用，测试断言一致） */
@@ -670,6 +762,9 @@
     mdToHtml: mdToHtml,
     parsePendingFiles: parsePendingFiles,
     reencryptTasks: reencryptTasks,
+    healthPlan: healthPlan,
+    TEXTY_EXTS: TEXTY_EXTS,
+    resolveZipKey: resolveZipKey,
     buildZip: buildZip,
     parseZip: parseZip,
     crc32: crc32,

@@ -179,3 +179,31 @@ test('parseZip：坏输入与截断报错', () => {
   const zip = P.buildZip([{ name: 'a', bytes: new Uint8Array([1]) }]);
   assert.equal(P.parseZip(zip.subarray(0, zip.length - 5)).ok, false); // 截掉 EOCD
 });
+
+/* ---------- v4.7.0 healthPlan 与预览矩阵一致性 ---------- */
+
+test('healthPlan：TEXTY_EXTS 与 previewKind 文本通道一致（应有文本的类型判定）', () => {
+  for (const ext of P.TEXTY_EXTS) {
+    const k = P.previewKind(P.mimeFromName('x.' + ext) || '', 'x.' + ext);
+    assert.ok(['inline-pdf', 'inline-md', 'inline-docx', 'inline-xlsx', 'text', 'system'].includes(k), ext);
+  }
+  // pptx 走 system 预览但正文抽取便宜（ftext 支持）→ 在 TEXTY_EXTS 内
+  assert.ok(P.TEXTY_EXTS.includes('pptx'));
+  // 无文本层类型不在 suspect 判定范围
+  for (const ext of ['png', 'jpg', 'doc', 'ppt', 'xls']) assert.ok(!P.TEXTY_EXTS.includes(ext), ext);
+});
+
+test('healthPlan：与 ftext 字段联动（ftext_ok=0 / 空 ftext 全分支）', () => {
+  const sha = (c) => (c + '0'.repeat(64)).slice(0, 64);
+  const rows = [
+    { id: 1, name: '未索引.txt', sha256: sha('a'), ftext_ok: 0, ftext: '' },
+    { id: 2, name: '已索引.txt', sha256: sha('b'), ftext_ok: 1, ftext: '有文本' },
+    { id: 3, name: '空索引.csv', sha256: sha('c'), ftext_ok: 1, ftext: '' },
+    { id: 4, name: '空文本可忽略.png', sha256: sha('d'), ftext_ok: 1, ftext: '' },
+  ];
+  const plan = P.healthPlan(rows, rows.map((r) => r.sha256));
+  assert.deepEqual(plan.needIndex, [1]);
+  assert.deepEqual(plan.suspectIndex, [3]);
+  assert.deepEqual(plan.missingBlob, []);
+  assert.deepEqual(plan.orphanBlob, []);
+});

@@ -42,6 +42,7 @@ const DEFAULT_SETTINGS = {
   backup: { enabled: true, keep: 5, intervalMin: 60 }, // 自动备份快照（v2.2.0）
   favicons: false, // 站点图标（v2.7.0）：联网经 DuckDuckGo 图标服务，默认关
   quickNoteShortcut: 'Ctrl+Alt+N', // v4.3.0：桌面随手记全局快捷键
+  agentFileContent: true, // v4.7.0：允许 AI 检索文件正文（关闭后 search_files 仅元数据命中）
 };
 
 function loadSettings() {
@@ -2964,6 +2965,8 @@ async function pickImportFileAny(acceptExt) {
 }
 
 /* ---------- v4.6.1：文件仓 zip 导入（导出的逆过程：manifest + 加密本体落桶） ---------- */
+/* v4.7.0 密钥迁移：落桶前先验后写——本机密钥试解首个本体；异体系弹钥派生导出端密钥，
+ * 成功则全量重加密迁移（解密→本机密钥加密→落桶），失败明确报错并中止（不落半套数据） */
 async function importFilehubZip(bytes, name) {
   if (currentMode !== 'local') throw new Error('文件仓仅本地存储模式支持');
   if (!IS_TAURI) throw new Error('文件仓导入需在桌面/手机应用内使用');
@@ -2982,16 +2985,46 @@ async function importFilehubZip(bytes, name) {
   if (!LocalStore.fileKvGet('files_salt') && manifest.files_salt) {
     await LocalStore.fileKvSet('files_salt', manifest.files_salt);
   }
+  const fc = await vaultEnsureCrypto();
+  const localSalt = base64ToBytes(fc.saltB64);
+  // 验解样本：manifest 里首个在 zip 中带本体的 sha（本体非 PBENC1 密文视为明文遗留包，免验解直写）
+  const sampleSha = ((manifest.files || []).map((x) => String(x && x.sha256 || '').toLowerCase())
+    .find((s) => /^[0-9a-f]{64}$/.test(s) && blobs[s])) || null;
+  const sampleRaw = sampleSha ? blobs[sampleSha] : null;
+  const keyRes = await PassFiles.resolveZipKey({
+    sample: (sampleRaw && DbCrypto.isEncrypted(sampleRaw)) ? sampleRaw : null,
+    localKey: fc.key,
+    exporterSalt: base64ToBytes(manifest.files_salt || fc.saltB64),
+    fixedMaterial: FILE_FIXED_MATERIAL,
+    derive: (mat, salt) => DbCrypto.deriveKey(mat, salt),
+    decrypt: DbCrypto.decryptBytes,
+    prompt: () => promptKeyInput('', '文件仓加密体系与导出端不同，请输入导出端的数据库加密密钥'),
+  });
+  if (keyRes.mode === 'abort') throw new Error(keyRes.reason);
+  // 落桶统一入口：migrate 模式先重加密（解密→本机密钥加密）再写
+  let migrated = 0;
+  const migratedShas = new Set();
+  const writeBlob = async (sha, raw) => {
+    const has = await tauriInvoke('store_blob_exists', { sha256: sha });
+    if (has) return;
+    let out = raw;
+    if (keyRes.mode === 'migrate') {
+      const plain = await DbCrypto.decryptBytes(raw, keyRes.exporterKey);
+      out = await DbCrypto.encryptBytes(plain, fc.key, localSalt);
+      if (!migratedShas.has(sha)) { migratedShas.add(sha); migrated++; }
+    }
+    await tauriInvoke('store_blob_write_b64', { sha256: sha, b64: bytesToBase64(out) });
+  };
   const existing = LocalStore.filesList() || [];
   let added = 0, dup = 0, blobMiss = 0, healed = 0;
   for (const row of manifest.files || []) {
     if (!row || !/^[0-9a-f]{64}$/.test(String(row.sha256 || ''))) continue;
     if (existing.some((x) => x.sha256 === row.sha256 && x.name === row.name && x.size === row.size)) {
       // v4.6.5：判重跳过 = 内容字节级相同（同名同大小同指纹）；顺带体检本体——
-      // 行在桶丢（历史导入中断的脏状态）时自动补写加密本体，计为修复
+      // 行在桶丢（历史导入中断的脏状态）时自动补写加密本体（v4.7.0 起补桶同走迁移重加密），计为修复
       const has = await tauriInvoke('store_blob_exists', { sha256: row.sha256 });
       if (!has && blobs[row.sha256]) {
-        await tauriInvoke('store_blob_write_b64', { sha256: row.sha256, b64: bytesToBase64(blobs[row.sha256]) });
+        await writeBlob(row.sha256, blobs[row.sha256]);
         healed++;
       }
       dup++;
@@ -2999,12 +3032,19 @@ async function importFilehubZip(bytes, name) {
     }
     const blobBytes = blobs[row.sha256];
     if (!blobBytes) { blobMiss++; continue; }
-    const has = await tauriInvoke('store_blob_exists', { sha256: row.sha256 });
-    if (!has) await tauriInvoke('store_blob_write_b64', { sha256: row.sha256, b64: bytesToBase64(blobBytes) });
+    await writeBlob(row.sha256, blobBytes);
     await LocalStore.fileCreate(PassFiles.buildMetaRow(row));
     added++;
   }
-  return { added, dup, blobMiss, healed };
+  // 索引补建：迁移后的文件正文沿用现有 ftext 抽取管线
+  if (added) {
+    const fresh = LocalStore.filesList() || [];
+    for (const row of manifest.files || []) {
+      const f = fresh.find((x) => x.sha256 === row.sha256 && !x.ftext_ok);
+      if (f) queueFtext(f.id);
+    }
+  }
+  return { added, dup, blobMiss, healed, migrated };
 }
 
 /* zip 导入 tab 事件 */
@@ -3019,11 +3059,16 @@ document.addEventListener('click', (e) => {
       if (!picked) { if (info) info.textContent = ''; return; }
       const r = await importFilehubZip(picked.bytes, picked.name);
       if (info) {
-        if (r.added) info.textContent = `「${picked.name}」导入完成：新增 ${r.added} 个文件` + (r.blobMiss ? `（另有 ${r.blobMiss} 个缺本体已跳过）` : '');
+        if (r.added) info.textContent = `「${picked.name}」导入完成：新增 ${r.added} 个文件` +
+          (r.migrated ? `（检测到导出端加密体系不同，已重加密迁移 ${r.migrated} 个文件到本机加密体系）` : '') +
+          (r.blobMiss ? `（另有 ${r.blobMiss} 个缺本体已跳过）` : '');
         else info.textContent = `文件仓已有 ${r.dup} 个内容完全相同的文件（同名同大小同指纹），无需重复导入` +
-          (r.healed ? `；已自动补写 ${r.healed} 个丢失的加密本体` : '') + `。当前文件仓共 ${(LocalStore.filesList() || []).length} 个文件，可在文件仓页查看`;
+          (r.healed ? `；已自动补写 ${r.healed} 个丢失的加密本体` : '') +
+          (r.migrated ? `；补桶时重加密迁移 ${r.migrated} 个文件到本机加密体系` : '') +
+          `。当前文件仓共 ${(LocalStore.filesList() || []).length} 个文件，可在文件仓页查看`;
       }
-      toast(r.added ? `文件仓已导入 ${r.added} 个文件` : (r.dup ? `已存在相同文件，跳过 ${r.dup} 个` : '没有可导入的文件'));
+      if (r.migrated) toast(`已迁移 ${r.migrated} 个文件到本机加密体系`);
+      else toast(r.added ? `文件仓已导入 ${r.added} 个文件` : (r.dup ? `已存在相同文件，跳过 ${r.dup} 个` : '没有可导入的文件'));
       refreshFilesList();
       refreshSidebar();
     } catch (err) {
@@ -3186,7 +3231,12 @@ function openSettingsModal() {
       <div class="field"><span>API Key（本地保存）</span>
         <input id="set-agent-key" type="password" placeholder="sk-…" value="${escapeHtml(agent.apiKey)}" autocomplete="off" />
       </div>
-      <p class="hint">任何 OpenAI 兼容渠道均可（DeepSeek / OpenAI / 通义 / 本地 Ollama…）。配置后即可在右上角 AI 助理面板聊天存/查密码。</p>`;
+      <div class="field"><span>允许 AI 检索文件正文</span>
+        <div class="chk-group" style="padding-top:2px">
+          <label><input type="checkbox" id="set-agent-ftext" ${s.agentFileContent !== false ? 'checked' : ''} /> 开启后 AI 可搜索文件内容（仅把命中的片段摘要发送给模型渠道，不发送全文）；关闭后 AI 只能搜到文件名/备注/标签命中</label>
+        </div>
+      </div>
+      <p class="hint">任何 OpenAI 兼容渠道均可（DeepSeek / OpenAI / 通义 / 本地 Ollama…）。配置后即可在右上角 AI 助理面板聊天存/查密码、记便签、搜文件仓。</p>`;
   const encField = currentMode === 'local' ? `
       <div class="field"><span>数据库加密（防止 .db 文件被拷走后明文泄露）</span>
         <div class="lock-toggle"><span class="lock-state" id="enc-state">检测中…</span><button class="hint-btn" type="button" data-hint="enc" title="数据库加密说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></div>
@@ -3411,6 +3461,8 @@ function openSettingsModal() {
     }
     ns.bioUnlock = !!bioEnabled && !!ns.pinHash; // 生物识别依赖启动锁（v2.6.0）
     ns.favicons = !!$('#set-favicons')?.checked; // 站点图标（v2.7.0）
+    const agFtEl = $('#set-agent-ftext'); // v4.7.0：允许 AI 检索文件正文（默认开）
+    if (agFtEl) ns.agentFileContent = agFtEl.checked;
     const qnEl = $('#set-quicknote-key'); // v4.3.0：随手记全局快捷键（桌面）
     if (qnEl && qnEl.value.trim()) {
       ns.quickNoteShortcut = qnEl.value.trim();
@@ -3855,15 +3907,155 @@ async function agentFetchStream(url, opts = {}, onChunk) {
 
 /** 提供给大模型的能力与执行器（核心逻辑在 agent-core.js，便于 Node 测试）
  * store 在 boot() 阶段才初始化，故执行器延迟创建
- * onDisplay：查询/存/改的真实结果（含明文）只进应用卡片，不回传 AI 渠道 */
+ * onDisplay：查询/存/改的真实结果（含明文/全文）只进应用卡片，不回传 AI 渠道 */
 function getAgentExec() {
-  return AgentCore.createExecutor(store, PassGen, () => { refreshChips(); refreshList(); }, agentDisplay);
+  return AgentCore.createExecutor(store, PassGen, () => { refreshChips(); refreshList(); }, agentDisplay, getAgentHub());
 }
 
-/** AI 工具真实结果卡片：明文密码 + 显示/隐藏 + 一键复制（与主页体验一致） */
+/** v4.7.0 保险箱 hub：便签/文件仓能力包（app.js 组装，agent-core 保持零依赖可测）
+ * 服务器模式统一返回「仅本地模式支持」；本地模式走 LocalStore + PassNotes/PassFiles 检索 */
+function getAgentHub() {
+  if (currentMode !== 'local') {
+    const err = () => ({ error: '随手记/文件仓仅本地模式支持' });
+    return { searchNotes: err, searchFiles: err, createNote: err, tagItems: err };
+  }
+  const matchRows = (rows, t, idField) => {
+    if (t.id != null && t.id !== '') {
+      const id = Number(t.id);
+      return rows.filter((x) => Number(x[idField]) === id);
+    }
+    return null; // 走 query 检索
+  };
+  return {
+    async searchNotes(keyword) {
+      const notes = LocalStore.notesList() || [];
+      const res = window.PassNotes && window.PassSearch ? PassNotes.searchNotes(notes, String(keyword || ''), PassSearch) : null;
+      const items = (res ? res.map((r) => r.note) : notes).slice(0, 20);
+      return { items, total: items.length };
+    },
+    async searchFiles(keyword) {
+      const files = LocalStore.filesList() || [];
+      const allowContent = loadSettings().agentFileContent !== false; // v4.7.0 隐私开关（默认开）
+      const res = window.PassFiles && window.PassSearch
+        ? PassFiles.searchFiles(files, String(keyword || ''), PassSearch, { content: allowContent })
+        : null;
+      const items = res ? res.map((r) => ({ file: r.file, contentHit: r.contentHit })) : [];
+      return { items, contentSearch: allowContent };
+    },
+    async createNote({ content, title, tags }) {
+      const id = await LocalStore.noteCreate({
+        title: title || PassNotes.titleOf(content),
+        content,
+        tags: PassFiles.tagsJoin(tags || ''),
+        source: 'manual', // AI 记的便签按手动来源入账
+      });
+      refreshNotesList(); refreshSidebar();
+      const note = (LocalStore.notesList() || []).find((n) => n.id === id) || { id, title, content, tags };
+      return { id, title: note.title, note };
+    },
+    async tagItems(tag, targets) {
+      const results = [];
+      for (const t of (Array.isArray(targets) ? targets : [])) {
+        const type = String((t && t.type) || '').toLowerCase();
+        try {
+          if (type === 'passwords') {
+            const { items } = await store.list(t.id != null && t.id !== '' ? {} : { q: String(t.query || '') });
+            const hits = (t.id != null && t.id !== '')
+              ? items.filter((x) => Number(x.id) === Number(t.id))
+              : items;
+            if (!hits.length) { results.push({ type, name: String(t.query ?? t.id ?? ''), ok: false, error: '未找到' }); continue; }
+            for (const it of hits.slice(0, 20)) {
+              const cats = PassSearch.catSplit(it.category);
+              if (!cats.includes(tag)) await store.update(it.id, { category: PassSearch.catJoin([...cats, tag]) });
+              results.push({ type, id: it.id, name: `${it.owner || ''}${it.account ? ' / ' + it.account : ''}`, ok: true });
+            }
+          } else if (type === 'notes') {
+            const notes = LocalStore.notesList() || [];
+            let hits = matchRows(notes, t, 'id');
+            if (!hits && t.query) {
+              const res = window.PassNotes && window.PassSearch ? PassNotes.searchNotes(notes, String(t.query), PassSearch) : null;
+              hits = res ? res.map((r) => r.note) : [];
+            }
+            hits = hits || [];
+            if (!hits.length) { results.push({ type, name: String(t.query ?? t.id ?? ''), ok: false, error: '未找到' }); continue; }
+            for (const nt of hits.slice(0, 20)) {
+              const tags2 = PassFiles.tagsSplit(nt.tags);
+              if (!tags2.includes(tag)) await LocalStore.noteUpdate(nt.id, { title: nt.title, content: nt.content, tags: PassFiles.tagsJoin([...tags2, tag]) });
+              results.push({ type, id: nt.id, name: nt.title || PassNotes.titleOf(nt.content), ok: true });
+            }
+          } else if (type === 'files') {
+            const files = LocalStore.filesList() || [];
+            let hits = matchRows(files, t, 'id');
+            if (!hits && t.query) {
+              const res = window.PassFiles && window.PassSearch ? PassFiles.searchFiles(files, String(t.query), PassSearch, { content: false }) : null;
+              hits = res ? res.map((r) => r.file) : [];
+            }
+            hits = hits || [];
+            if (!hits.length) { results.push({ type, name: String(t.query ?? t.id ?? ''), ok: false, error: '未找到' }); continue; }
+            for (const f of hits.slice(0, 20)) {
+              const tags2 = PassFiles.tagsSplit(f.tags);
+              if (!tags2.includes(tag)) await LocalStore.fileUpdate(f.id, { name: f.name, tags: PassFiles.tagsJoin([...tags2, tag]), note: f.note });
+              results.push({ type, id: f.id, name: f.name, ok: true });
+            }
+          } else {
+            results.push({ type, ok: false, error: 'type 须为 passwords / notes / files' });
+          }
+        } catch (e) {
+          results.push({ type, ok: false, error: e.message });
+        }
+      }
+      refreshNotesList(); refreshFilesList(); refreshSidebar();
+      return { ok: results.some((x) => x.ok), results };
+    },
+  };
+}
+
+/** AI 工具真实结果卡片：明文密码 + 显示/隐藏 + 一键复制（与主页体验一致）
+ *  v4.7.0：payload.kind='notes'/'files' 时渲染便签/文件卡片（全文与详情只进应用内卡片） */
 function agentDisplay(payload) {
   const box = $('#agent-messages');
   if (!box || !payload || !Array.isArray(payload.items) || !payload.items.length) return;
+  if (payload.kind === 'notes') {
+    const wrap = document.createElement('div');
+    wrap.className = 'agent-display';
+    wrap.innerHTML = payload.items.map((n) => `
+      <div class="ad-row" data-k="note" data-i="${n.id}" style="cursor:pointer">
+        <div class="ad-main">
+          <div class="ad-owner">${escapeHtml(n.title || PassNotes.titleOf(n.content))}</div>
+          <div class="ad-note">${escapeHtml(PassNotes.previewText(n.content, 120))}</div>
+        </div>
+        <div class="ad-acc">${NOTE_SOURCE_LABEL[n.source] || '手动'} · 点击查看全文</div>
+      </div>`).join('');
+    wrap.addEventListener('click', (e) => {
+      const row = e.target.closest('.ad-row[data-k="note"]');
+      if (!row) return;
+      const note = (LocalStore.notesList() || []).find((n) => n.id === Number(row.dataset.i)) || payload.items.find((n) => n.id === Number(row.dataset.i));
+      if (note) openNoteDetail(note);
+    });
+    box.appendChild(wrap);
+    box.scrollTop = box.scrollHeight;
+    return;
+  }
+  if (payload.kind === 'files') {
+    const wrap = document.createElement('div');
+    wrap.className = 'agent-display';
+    wrap.innerHTML = payload.items.map((f) => `
+      <div class="ad-row" data-k="file" data-i="${f.id}" style="cursor:pointer">
+        <div class="ad-main">
+          <div class="ad-owner">${fileIcon(f.mime, f.name)} ${escapeHtml(f.name || '')}</div>
+          <div class="ad-note">${escapeHtml(PassFiles.formatSize(f.size))} · ${escapeHtml(FILE_SOURCE_LABEL[f.source] || '其他')} · 点击查看文件</div>
+        </div>
+      </div>`).join('');
+    wrap.addEventListener('click', (e) => {
+      const row = e.target.closest('.ad-row[data-k="file"]');
+      if (!row) return;
+      const file = (LocalStore.filesList() || []).find((x) => x.id === Number(row.dataset.i));
+      if (file) openFileDetail(file);
+    });
+    box.appendChild(wrap);
+    box.scrollTop = box.scrollHeight;
+    return;
+  }
   const wrap = document.createElement('div');
   wrap.className = 'agent-display';
   wrap.innerHTML = payload.items.map((x, i) => `
@@ -4880,6 +5072,81 @@ $('#btn-files-index')?.addEventListener('click', async () => {
   for (const r of rows) queueFtext(r.id);
 });
 
+/* ---------- v4.7.0 文件仓体检：行↔桶/索引失配核对 + 清理孤儿桶 / 重建索引 ---------- */
+async function runFilesHealth() {
+  if (currentMode !== 'local' || !IS_TAURI) return toast('文件仓体检需在桌面/手机应用内本地模式使用', true);
+  let blobShas = [];
+  try { blobShas = await tauriInvoke('store_blob_list') || []; } catch (e) { return toast('读取加密本体列表失败：' + e.message, true); }
+  const rows = LocalStore.filesList() || [];
+  const plan = PassFiles.healthPlan(rows, blobShas);
+  const namesOf = (sha) => rows.filter((x) => x.sha256 === sha).map((x) => x.name);
+  const rowOf = (id) => rows.find((x) => x.id === id);
+  const detail = (arr, nameFn, cap = 20) => arr.length
+    ? `<div style="margin-top:6px;font-size:12.5px;color:var(--muted,#889);max-height:18vh;overflow-y:auto">${arr.slice(0, cap).map((x) => `· ${escapeHtml(nameFn(x))}`).join('<br/>')}${arr.length > cap ? `<br/>… 等共 ${arr.length} 项` : ''}</div>`
+    : '';
+  const issues = plan.missingBlob.length + plan.orphanBlob.length + plan.needIndex.length + plan.suspectIndex.length;
+  openModal(`
+    <div class="modal-head">
+      <h3>文件仓体检报告</h3>
+      <button class="modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <p class="hint">共 ${rows.length} 条文件记录、${blobShas.length} 个加密本体。${issues ? '发现以下问题：' : '✅ 一切正常：记录与加密本体、内容索引全部配对一致。'}</p>
+      <div class="field"><span>① 记录在、本体丢失（missing）：${plan.missingBlob.length} 个</span>
+        ${detail(plan.missingBlob, (s) => namesOf(s).join('、') || s)}
+        ${plan.missingBlob.length ? '<p class="hint">这些文件将无法打开预览。可用当初的 zip 备份重新导入自动修复（判重只补本体），或手动删除这些记录。</p>' : ''}
+      </div>
+      <div class="field"><span>② 孤儿加密本体（无任何记录引用）：${plan.orphanBlob.length} 个</span>
+        ${detail(plan.orphanBlob, (s) => s.slice(0, 16) + '…')}
+      </div>
+      <div class="field"><span>③ 未建内容索引：${plan.needIndex.length} 个</span>
+        ${detail(plan.needIndex, (id) => (rowOf(id) || {}).name || id)}
+      </div>
+      <div class="field"><span>④ 索引可疑（标记已索引但正文为空）：${plan.suspectIndex.length} 个</span>
+        ${detail(plan.suspectIndex, (id) => (rowOf(id) || {}).name || id)}
+      </div>
+    </div>
+    <div class="modal-foot foot-wrap">
+      <button class="btn" id="btn-fh-close">关闭</button>
+      ${plan.orphanBlob.length ? '<button class="btn danger" id="btn-fh-clean">清理孤儿桶 ' + plan.orphanBlob.length + ' 个</button>' : ''}
+      ${(plan.needIndex.length + plan.suspectIndex.length) ? '<button class="btn primary" id="btn-fh-reindex">重建索引 ' + (plan.needIndex.length + plan.suspectIndex.length) + ' 个</button>' : ''}
+    </div>
+  `, true);
+  $('#btn-fh-close').addEventListener('click', closeModal);
+  const cleanBtn = $('#btn-fh-clean');
+  if (cleanBtn) cleanBtn.addEventListener('click', async () => {
+    cleanBtn.disabled = true; cleanBtn.textContent = '清理中…';
+    let freed = 0, done = 0;
+    try {
+      for (const sha of plan.orphanBlob) {
+        try {
+          const b64 = await tauriInvoke('store_blob_read_b64', { sha256: sha });
+          if (b64) freed += Math.floor(b64.length * 3 / 4);
+          await tauriInvoke('store_blob_delete', { sha256: sha });
+          done++;
+        } catch (e) { console.warn('[passbook] 孤儿桶清理失败', sha, e); }
+      }
+      toast(`已清理 ${done} 个孤儿桶，回收 ${PassFiles.formatSize(freed)}`);
+      closeModal();
+      runFilesHealth(); // 重新体检刷新报告
+    } catch (e) { toast('清理失败：' + e.message, true); cleanBtn.disabled = false; }
+  });
+  const reBtn = $('#btn-fh-reindex');
+  if (reBtn) reBtn.addEventListener('click', async () => {
+    reBtn.disabled = true;
+    try {
+      for (const id of plan.needIndex) queueFtext(id); // 未索引：直接并入现有抽取管线
+      for (const id of plan.suspectIndex) { // 可疑：先重置标记再重抽
+        await LocalStore.fileSetFtext(id, '', 0);
+        queueFtext(id);
+      }
+      toast(`已开始重建 ${plan.needIndex.length + plan.suspectIndex.length} 个文件的内容索引`);
+      closeModal();
+    } catch (e) { toast('重建失败：' + e.message, true); reBtn.disabled = false; }
+  });
+}
+$('#btn-files-health')?.addEventListener('click', runFilesHealth);
+
 /* ---------- 四通道导入 ---------- */
 async function filesImportClick() {
   if (currentMode !== 'local') return toast('文件仓仅本地存储模式支持', true);
@@ -5159,7 +5426,8 @@ function openGuideModal() {
            · <b>桌面拖拽</b>：把文件拖进文件仓页的虚线框即导入。</p>
         <p><b>同内容自动去重</b>：按内容 sha256 共用一份加密存储，删除时最后一份引用才会物理清除。</p>
         <p><b>文档预览（全离线本地渲染）</b>：PDF / docx / xlsx / Markdown / txt / 图片直接应用内预览；旧版 doc/ppt/xls 与 pptx 不做内置渲染，提供「系统打开」（临时解密到缓存目录调用系统应用）。桌面与手机同一套渲染。</p>
-        <p>文件页搜索框多词模糊匹配<b>名称 / 备注 / 标签 / 来源 / 正文内容</b>（顶栏搜索依旧只管密码页）。<b>内容检索</b>：PDF / Word / Excel / PPT / Markdown / 文本文件的正文在导入时自动抽取建索引（本地完成、不上传），命中正文的结果带「内容命中」徽标与上下文片段；点工具栏「内容索引」可为存量/失败的文件补建。旧 doc/ppt/xls 二进制与图片没有文本层，只检索名称等元数据。</p>`)}
+        <p>文件页搜索框多词模糊匹配<b>名称 / 备注 / 标签 / 来源 / 正文内容</b>（顶栏搜索依旧只管密码页）。<b>内容检索</b>：PDF / Word / Excel / PPT / Markdown / 文本文件的正文在导入时自动抽取建索引（本地完成、不上传），命中正文的结果带「内容命中」徽标与上下文片段；点工具栏「内容索引」可为存量/失败的文件补建。旧 doc/ppt/xls 二进制与图片没有文本层，只检索名称等元数据。</p>
+         <p><b>体检</b>（v4.7.0）：点工具栏「体检」核对记录与加密本体、内容索引的配对情况，报告四类问题——记录在但本体丢失（可从 zip 备份重导自愈或手动删行）、孤儿加密本体（一键清理并回收空间）、未建索引 / 索引可疑（一键并入内容索引管线重建）。</p>`)}
       ${guideSec('manual.png', '④ 存一条密码（手动录入）', `
         <p>点工具栏 <b>「＋ 手动录入」</b>，填写<b>所属</b>（应用/网站）、<b>账户</b>、<b>密码</b>三项必填。</p>
         <p>还可选填 <b>TOTP 密钥</b>（base32 或直接粘贴 otpauth:// 链接自动提取）、<b>分类</b>、<b>网址</b>、<b>备注</b>；编辑已有记录时能上传<b>附件</b>（每张 ≤2MB，随数据库加密存储）。</p>
@@ -5170,20 +5438,20 @@ function openGuideModal() {
       ${guideSec('phrase.png', '⑥ 生成密码短语（好记型）', `
         <p>切到 <b>「密码短语」</b> 标签：用<b>中文词表</b>（或 English words）随机组词，自选词数（推荐 6+）、分隔符，可附加两位数字。</p>
         <p>例如「灯塔-枫叶-晨曦-海豚-麦浪-松柏-47」，比随机字符串好记得多，6 词约 54 bits、8 词约 72 bits，配合数字更高。</p>`)}
-      ${guideSec('agent.png', '⑦ AI 助理：聊天存 / 查 / 改密码', `
+      ${guideSec('agent.png', '⑦ AI 助理：聊天管理整个保险箱（密码 / 便签 / 文件）', `
         <p>点右上角 <b>星形图标</b> 打开侧边对话面板，直接说人话：</p>
         <p>· 「帮我存一下：GitHub，账户 tom@example.com，密码 Abc!2345，备注工作主力号」<br/>
-           · 「我 GitHub 的密码是什么？」<br/>
-           · 「把 GitHub 的密码改成 Xk9#New2025」<br/>
-           · 「生成一个 20 位不含符号的密码」</p>
-        <p><b>隐私保护</b>：查询结果里的密码已打码，真实密码只在应用内卡片展示（可点眼睛/一键复制，与主页一致），不会发送给 AI 渠道；存、改密码时你提供的内容会发送给你配置的模型渠道。</p>
+           · 「我 GitHub 的密码是什么？」「上周记的快递单号帮我找一下」<br/>
+           · 「帮我记一条便签：周三交房租」「体检报告放哪了？」<br/>
+           · 「把 GitHub 密码和体检报告都打上 工作 标签」「生成一个 20 位不含符号的密码」</p>
+        <p><b>隐私保护</b>：查询结果里的密码已打码，便签/文件只给 ≤80 字摘要或命中片段，真实密码、便签全文与文件详情只在应用内卡片展示（可查看复制），不会发送给 AI 渠道；存、改密码与记便签时你提供的内容会发送给你配置的模型渠道。设置 → AI 助理可关「允许 AI 检索文件正文」（关闭后 AI 只能搜到文件名/备注/标签命中）；随手记与文件仓能力仅本地模式支持。</p>
         <p>面板右上角可<b>清空对话</b>；生成过程中可点<b>停止</b>按钮随时中断。</p>`)}
       ${guideSec('sync.png', '⑧ 设置：加密 / 备份 / 锁定', `
         <p>点右上角<b>齿轮</b>打开设置：</p>
         <p>· <b>自动备份快照</b>：每小时自动把数据库整份快照存入 <code>backups/</code>，滚动保留最近 3~20 份；可随时<b>立即备份</b>，列表里每份可一键<b>恢复</b>或删除。</p>
         <p>· <b>数据库加密</b>：AES-256 全库加密（含导出的 .db）；<b>文件仓本体同样始终加密</b>（密钥从数据库密钥派生，未启用整库加密时用本机固定密钥），开启/关闭加密或更换密钥时文件本体自动重加密。<b>请务必备份密钥</b>（设置 → 数据库加密 → 备份密钥）。</p>
         <p>· <b>存储模式 / 数据库位置</b>：桌面版默认本地文件，可指向网盘文件夹多机共用。随手记与文件仓为本地模式功能。</p>
-        <p>· <b>AI 助理</b>：填接口地址 / 模型名 / API Key（OpenAI 兼容渠道均可）；<b>随手记快捷键</b>（默认 Ctrl+Alt+N）。</p>
+        <p>· <b>AI 助理</b>：填接口地址 / 模型名 / API Key（OpenAI 兼容渠道均可）；「允许 AI 检索文件正文」开关（默认开，仅发送命中片段摘要）；<b>随手记快捷键</b>（默认 Ctrl+Alt+N）。</p>
         <p>· <b>启动锁 PIN</b> 与 <b>自动锁定</b>：闲置可锁定（默认 5 分钟），复制密码后剪贴板自动清除；深色主题跟随系统或手动固定。电脑（Windows Hello）与手机（指纹/面容）可开启<b>生物识别解锁</b>。</p>`)}
       ${guideSec('', '⑨ 多端同步（手机 ↔ 电脑）', `
         <p>每台设备各存一份完整数据库（桌面是本地 <b>.db</b> 文件，手机是应用内存储），通过<b>导出 .db → 网盘/Syncthing → 另一端导入</b>合并；导入时选<b>「合并（跳过重复）」</b>即可汇总。导出的 .db 不含文件仓本体——文件仓单独用「导出 → 文件仓导出（zip：加密本体+清单）」。</p>
@@ -5191,7 +5459,7 @@ function openGuideModal() {
       ${guideSec('import.png', '⑩ 批量导入 / 导出备份', `
         <p>「导入」支持三种方式：<b>粘贴文本</b>（每行一条：<code>所属,账户,密码[,网址][,备注]</code>）、上传 <b>CSV / JSON / TXT</b>、以及直接导入别的设备的 <b>.db</b> 文件（加密的 .db 会提示输入密钥文本解锁后导入）。手机端也可从别的应用「分享 / 用其他应用打开」把数据送进来（随手记与文件仓）。</p>
         <p>「导出」可导出 .db 数据库（用于同步，已启用加密时导出副本同样为密文）、JSON 备份（用于留存），以及<b>文件仓 zip</b>（加密本体 + 清单）。</p>
-        <p>导入加密 .db 时会提示输入密钥文本（设置 → 数据库加密 → 备份密钥）解锁后合并；「文件仓 zip」tab 导入另一端导出的文件仓包（同内容自动去重；两端需同一密钥体系才能打开预览）。</p>`)}
+        <p>导入加密 .db 时会提示输入密钥文本（设置 → 数据库加密 → 备份密钥）解锁后合并；「文件仓 zip」tab 导入另一端导出的文件仓包（同内容自动去重）；两端加密体系不同时会弹窗要求输入<b>导出端的数据库加密密钥</b>，验证通过后自动把全部文件重加密迁移到本机加密体系（v4.7.0），密钥不对则中止导入不留半套数据。</p>`)}
       <p class="hint">提示：请保管好数据库文件，建议开启数据库加密（自动密钥，请备份密钥文本）与启动锁 PIN；配合自动备份快照更安心。</p>
     </div>
     <div class="modal-foot">

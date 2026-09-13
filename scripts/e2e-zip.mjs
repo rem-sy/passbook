@@ -65,6 +65,9 @@ await send('Page.addScriptToEvaluateOnNewDocument', { source: `
     if (cmd === 'read_file_bytes_b64') { if (!window.__ZIP_B64) throw new Error('mock: zip 未注入'); return window.__ZIP_B64; }
     if (cmd === 'store_blob_exists') return !!(window.__BLOBS || {})[args.sha256];
     if (cmd === 'store_blob_write_b64') { window.__BLOBS = window.__BLOBS || {}; window.__BLOBS[args.sha256] = args.b64; return null; }
+    if (cmd === 'store_blob_read_b64') return (window.__BLOBS || {})[args.sha256] || null;
+    if (cmd === 'store_blob_list') return Object.keys(window.__BLOBS || {});
+    if (cmd === 'store_blob_delete') { if (window.__BLOBS) delete window.__BLOBS[args.sha256]; return null; }
     if (cmd === 'delete_file') return null;
     throw new Error('mock 未实现命令: ' + cmd);
   } } };
@@ -116,6 +119,46 @@ await tryImport(ZIP_B64, '同 zip 二次导入+本体丢失');
 log('本体自愈: ' + await ev("JSON.stringify(Object.keys(window.__BLOBS||{}))") + '（期望补写 1 个）');
 await tryImport(mkZip('bb'), '同名不同内容（sha 变）');
 log('累计卡片: ' + await ev("document.querySelectorAll('.file-card').length") + '（期望 2：首导 1 + 同名不同内容 1）');
+
+/* ---- 场景 3（v4.7.0）：异密钥导出的 zip → 弹钥 → 填钥 → 重加密迁移落桶 ---- */
+// Node 侧用「另一把密钥」加密本体，模拟导出端启用过加密、材料与本机不同
+(0, eval)(fsx.readFileSync(new URL('../public/db-crypto.js', import.meta.url), 'utf8'));
+const DbCrypto = globalThis.window.DbCrypto;
+const SALT = Buffer.from('QUJDRA==', 'base64'); // 与 manifest.files_salt 一致
+const exporterKey = await DbCrypto.deriveKey('导出端密钥e2e', SALT);
+const plain = new Uint8Array([1, 2, 3, 4, 5, 6]);
+const encBlob = await DbCrypto.encryptBytes(plain, exporterKey, SALT);
+const shaX = 'cc'.padEnd(64, '0');
+const manifestX = {
+  ...manifest,
+  files: [{ name: '异密钥导出.docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: plain.length, sha256: shaX, source: 'saf', tags: '迁移', note: '异密钥场景', created_at: new Date().toISOString() }],
+};
+const zipX = Buffer.from(PassFiles.buildZip([
+  { name: 'manifest.json', bytes: enc.encode(JSON.stringify(manifestX)) },
+  { name: 'blobs/' + shaX, bytes: encBlob },
+])).toString('base64');
+await ev(`window.__ZIP_B64 = ${JSON.stringify(zipX)}; 1`);
+await ev('openImportModal && openImportModal()'); await sleep(300);
+await ev("document.querySelector('.import-tabs [data-tab=zip]')?.click()"); await sleep(200);
+await ev("document.querySelector('#zip-import-pick')?.click()");
+await sleep(1500);
+// 断言：弹出了 z660 密钥输入框（promptKeyInput），文案指向导出端密钥
+const keyVisible = await ev("(function(){var m=[].slice.call(document.querySelectorAll('.modal-mask')).filter(function(x){return (x.style.zIndex||'')==='660'});return {n:m.length,hint:(m[0]&&m[0].querySelector('.hint')||{}).textContent||''}})()");
+log('密钥弹窗: ' + JSON.stringify(keyVisible));
+const keyInput = await ev("(function(){var m=[].slice.call(document.querySelectorAll('.modal-mask')).filter(function(x){return (x.style.zIndex||'')==='660'})[0];if(!m)return false;m.querySelector('input').value='导出端密钥e2e';m.querySelector('[data-x=ok]').click();return true})()");
+log('已填钥确认: ' + keyInput);
+await sleep(2500);
+const blobX = await ev(`(window.__BLOBS||{})['${shaX}'] || ''`);
+log('落桶迁移: ' + (blobX ? '已写入 ' + blobX.length + 'B（原文 ' + Buffer.from(encBlob).toString('base64').length + 'B）' : '未落桶'));
+log('落桶内容已重加密(≠导出端密文): ' + (blobX && blobX !== Buffer.from(encBlob).toString('base64')));
+log('info 文案: ' + await ev("(document.querySelector('#zip-import-info')?.textContent||'').slice(0,140)"));
+// 用本机密钥解回：vaultReadBytes 走本机 vaultEnsureCrypto 派生密钥
+const roundTrip = await ev(`(async function(){try{var b=await vaultReadBytes('${shaX}');return Array.from(b).join(',')}catch(e){return 'ERR:'+e.message}})()`);
+log('本机密钥解回: ' + roundTrip + '（期望 1,2,3,4,5,6）');
+await ev('closeModal && closeModal()'); await sleep(200);
+await ev('setView && setView("files")'); await sleep(600);
+log('累计卡片: ' + await ev("document.querySelectorAll('.file-card').length") + '（期望 3）');
+log('迁移文件卡片: ' + await ev("[].slice.call(document.querySelectorAll('.file-card .note-title')).map(function(x){return x.textContent}).join(' | ')"));
 
 ws.close();
 for (const p of [edg, srv]) { try { p.kill(); } catch {} }

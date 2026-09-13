@@ -302,3 +302,131 @@ test('mimeFromName / formatSize：扩展名推导与人类可读大小', () => {
   assert.equal(P.formatSize(2048), '2.0 KB');
   assert.equal(P.formatSize(5 * 1024 * 1024), '5.0 MB');
 });
+
+/* ---------- v4.7.0 healthPlan：文件仓体检全分支 ---------- */
+
+const row = (id, name, sha, extra = {}) => ({
+  id, name, sha256: sha, ftext_ok: 1, ftext: '正文文本', ...extra,
+});
+
+test('healthPlan：全部健康时四个数组为空', () => {
+  const plan = P.healthPlan(
+    [row(1, 'a.pdf', SHA_A), row(2, 'b.docx', SHA_B)],
+    [SHA_A, SHA_B],
+  );
+  assert.deepEqual(plan, { missingBlob: [], orphanBlob: [], needIndex: [], suspectIndex: [] });
+});
+
+test('healthPlan：行引用但桶丢 → missingBlob（按 sha 去重，多行同 sha 只报一次）', () => {
+  const plan = P.healthPlan(
+    [row(1, 'a.pdf', SHA_A), row(2, 'a 副本.pdf', SHA_A), row(3, 'b.docx', SHA_B)],
+    [SHA_B],
+  );
+  assert.deepEqual(plan.missingBlob, [SHA_A]);
+  assert.deepEqual(plan.orphanBlob, []);
+});
+
+test('healthPlan：桶有但无行引用 → orphanBlob', () => {
+  const plan = P.healthPlan(
+    [row(1, 'a.pdf', SHA_A)],
+    [SHA_A, SHA_B, SHA_C],
+  );
+  assert.deepEqual(plan.orphanBlob, [SHA_B, SHA_C]);
+  assert.deepEqual(plan.missingBlob, []);
+});
+
+test('healthPlan：ftext_ok=0 → needIndex；已索引但应有文本类型而正文空 → suspectIndex', () => {
+  const plan = P.healthPlan(
+    [
+      row(1, '新文件.pdf', SHA_A, { ftext_ok: 0, ftext: '' }),          // 未索引
+      row(2, '坏索引.docx', SHA_B, { ftext_ok: 1, ftext: '' }),         // 可疑：docx 应有文本
+      row(3, '坏索引2.md', SHA_C, { ftext_ok: 1, ftext: '   ' }),       // 可疑：md 应有文本（纯空白同空）
+      row(4, '图.png', 'aa'.padEnd(64, '0'), { ftext_ok: 1, ftext: '' }), // 图片无文本层：正常
+      row(5, '旧.doc', 'bb'.padEnd(64, '0'), { ftext_ok: 1, ftext: '' }), // 旧二进制无文本层：正常
+    ],
+    [SHA_A, SHA_B, SHA_C, 'aa'.padEnd(64, '0'), 'bb'.padEnd(64, '0')],
+  );
+  assert.deepEqual(plan.needIndex, [1]);
+  assert.deepEqual(plan.suspectIndex, [2, 3]);
+  assert.deepEqual(plan.missingBlob, []);
+  assert.deepEqual(plan.orphanBlob, []);
+});
+
+test('healthPlan：脏 sha 行不参与桶比对（不误报 missing/orphan）', () => {
+  const plan = P.healthPlan(
+    [{ id: 9, name: '脏行', sha256: 'bad', ftext_ok: 1, ftext: 'x' }],
+    [SHA_A],
+  );
+  assert.deepEqual(plan.missingBlob, []);
+  assert.deepEqual(plan.orphanBlob, [SHA_A]);
+});
+
+/* ---------- v4.7.0 resolveZipKey：zip 导入密钥迁移判定（注入 derive/decrypt/prompt） ---------- */
+
+/** 构造注入件：keys 为「材料 → 密钥」映射；ciphertexts 为「密钥 → 能解开的密文集合」 */
+function mockCrypto(goodPairs) {
+  // goodPairs: [{ material, sample }] —— material 派生的密钥能解对应 sample
+  const deriveCalls = [];
+  const derive = async (mat) => 'key:' + mat;
+  const decrypt = async (sample, key) => {
+    for (const p of goodPairs) {
+      if (p.sample === sample && 'key:' + p.material === key) return new Uint8Array([1]);
+    }
+    throw new Error('解密失败：密钥错误或文件损坏');
+  };
+  return { derive, decrypt, deriveCalls };
+}
+
+test('resolveZipKey：纯元数据 zip（无本体）跳过验解', async () => {
+  const c = mockCrypto([]);
+  const r = await P.resolveZipKey({ sample: null, localKey: 'key:A', exporterSalt: new Uint8Array(16), fixedMaterial: 'FIXED', derive: c.derive, decrypt: c.decrypt, prompt: async () => { throw new Error('不应弹窗'); } });
+  assert.equal(r.mode, 'meta');
+});
+
+test('resolveZipKey：本机密钥可解 → same（同体系直接写）', async () => {
+  const sample = new Uint8Array([9, 9]);
+  const c = mockCrypto([{ material: '本机材料', sample }]);
+  const r = await P.resolveZipKey({ sample, localKey: 'key:本机材料', exporterSalt: new Uint8Array(16), fixedMaterial: 'FIXED', derive: c.derive, decrypt: c.decrypt, prompt: async () => { throw new Error('不应弹窗'); } });
+  assert.equal(r.mode, 'same');
+});
+
+test('resolveZipKey：导出端未加密（固定材料）→ 免输入直接 migrate(via fixed)', async () => {
+  const sample = new Uint8Array([7, 7]);
+  const c = mockCrypto([{ material: 'PASSBOOK-DEVICE-KEY', sample }]);
+  const r = await P.resolveZipKey({ sample, localKey: 'key:别的', exporterSalt: new Uint8Array(16), fixedMaterial: 'PASSBOOK-DEVICE-KEY', derive: c.derive, decrypt: c.decrypt, prompt: async () => { throw new Error('不应弹窗'); } });
+  assert.equal(r.mode, 'migrate');
+  assert.equal(r.via, 'fixed');
+  assert.equal(r.exporterKey, 'key:PASSBOOK-DEVICE-KEY');
+});
+
+test('resolveZipKey：异体系 → 弹钥派生导出端密钥成功 → migrate(via input)', async () => {
+  const sample = new Uint8Array([5, 5]);
+  const c = mockCrypto([{ material: '导出端密钥文本', sample }]);
+  let prompted = 0;
+  const r = await P.resolveZipKey({
+    sample, localKey: 'key:本机', exporterSalt: new Uint8Array(16), fixedMaterial: 'FIXED',
+    derive: c.derive, decrypt: c.decrypt,
+    prompt: async () => { prompted++; return '导出端密钥文本'; },
+  });
+  assert.equal(r.mode, 'migrate');
+  assert.equal(r.via, 'input');
+  assert.equal(prompted, 1);
+});
+
+test('resolveZipKey：密钥不正确 → abort 且不落任何数据；取消输入同样 abort', async () => {
+  const sample = new Uint8Array([5, 5]);
+  const c = mockCrypto([]);
+  const bad = await P.resolveZipKey({
+    sample, localKey: 'key:本机', exporterSalt: new Uint8Array(16), fixedMaterial: 'FIXED',
+    derive: c.derive, decrypt: c.decrypt, prompt: async () => '错的钥',
+  });
+  assert.equal(bad.mode, 'abort');
+  assert.ok(bad.reason.includes('密钥不正确'));
+  assert.ok(bad.reason.includes('先启用数据库加密'));
+  const cancel = await P.resolveZipKey({
+    sample, localKey: 'key:本机', exporterSalt: new Uint8Array(16), fixedMaterial: 'FIXED',
+    derive: c.derive, decrypt: c.decrypt, prompt: async () => null,
+  });
+  assert.equal(cancel.mode, 'abort');
+  assert.ok(cancel.reason.includes('取消'));
+});

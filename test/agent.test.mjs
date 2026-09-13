@@ -40,9 +40,12 @@ const fakeGen = {
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
 
-test('工具清单含五个能力且 schema 合法', () => {
+test('工具清单含九个能力且 schema 合法', () => {
   const names = TOOLS.map((t) => t.function.name);
-  assert.deepEqual(names, ['search_passwords', 'save_password', 'list_recent_passwords', 'update_password', 'generate_password']);
+  assert.deepEqual(names, [
+    'search_passwords', 'save_password', 'list_recent_passwords', 'update_password',
+    'search_notes', 'search_files', 'create_note', 'tag_items', 'generate_password',
+  ]);
   for (const t of TOOLS) {
     assert.equal(t.type, 'function');
     assert.equal(typeof t.function.description, 'string');
@@ -160,6 +163,138 @@ test('未知工具返回 error', async () => {
   const exec = createExecutor(mockStore(), fakeGen);
   const r = await exec('nope', {});
   assert.ok(r.error.includes('未知工具'));
+});
+/* ---------- v4.7.0 保险箱四工具（mock hub） ---------- */
+
+function mockHub(over = {}) {
+  const calls = { created: [], tagged: [], searched: [] };
+  const hub = {
+    calls,
+    async searchNotes(keyword) {
+      calls.searched.push(['notes', keyword]);
+      const all = [
+        { id: 1, title: '快递单号', content: '顺丰 SF1234567890，上周三到的，放在丰巢柜 03 号格口', tags: '生活', source: 'clipboard', updated_at: '2025-01-01' },
+        { id: 2, title: '会议要点', content: '周一同步会：v4.7.0 发布计划 ' + '长正文'.repeat(60), tags: '工作', source: 'manual', updated_at: '2025-01-02' },
+      ];
+      const kw = String(keyword || '').toLowerCase();
+      const items = kw ? all.filter((n) => (n.title + n.content + n.tags).toLowerCase().includes(kw)) : all;
+      return { items, total: items.length };
+    },
+    async searchFiles(keyword) {
+      calls.searched.push(['files', keyword]);
+      const all = [
+        { file: { id: 11, name: '体检报告.pdf', size: 2048, tags: '健康', source: 'saf', created_at: '2025-01-03', ftext: '血常规各项指标正常，体检结论为未见明显异常' }, contentHit: false },
+        { file: { id: 12, name: '合同.docx', size: 4096, tags: '工作', source: 'drag', created_at: '2025-01-04', ftext: '劳动合同期限三年，自 2025 年 1 月 1 日起' }, contentHit: true },
+      ];
+      return { items: all, contentSearch: true };
+    },
+    async createNote({ content, title, tags }) {
+      calls.created.push({ content, title, tags });
+      return { id: 99, title: title || '首行', note: { id: 99, title: title || '首行', content, tags, source: 'manual' } };
+    },
+    async tagItems(tag, targets) {
+      calls.tagged.push({ tag, targets });
+      return { ok: true, results: targets.map((t) => ({ type: t.type, name: t.query || t.id, ok: true })) };
+    },
+    ...over,
+  };
+  return hub;
+}
+
+test('search_notes：返回≤80字摘要，全文只走 onDisplay（打码双通道）', async () => {
+  const displays = [];
+  const exec = createExecutor(mockStore(), fakeGen, null, (d) => displays.push(d), mockHub());
+  const r = await exec('search_notes', { keyword: '快递' });
+  assert.equal(r.matched, 1);
+  assert.equal(r.items[0].title, '快递单号');
+  assert.ok(r.items[0].preview.length <= 81); // 80字+省略号
+  assert.ok(!r.items[0].content); // 不回传正文全文
+  assert.equal(displays.length, 1);
+  assert.equal(displays[0].kind, 'notes');
+  assert.ok(displays[0].items[0].content.includes('SF1234567890')); // 应用侧拿全文
+});
+
+test('search_files：matched_meta/matched_content 双计数 + snippet 片段 + 不回传 ftext 全文', async () => {
+  const displays = [];
+  const exec = createExecutor(mockStore(), fakeGen, null, (d) => displays.push(d), mockHub());
+  const r = await exec('search_files', { keyword: '体检 合同' });
+  assert.equal(r.matched, 2);
+  assert.equal(r.matched_meta, 1);
+  assert.equal(r.matched_content, 1);
+  const meta = r.items.find((x) => x.name === '体检报告.pdf');
+  const cont = r.items.find((x) => x.name === '合同.docx');
+  assert.equal(meta.snippet, null); // 元数据命中无片段
+  assert.ok(cont.snippet && cont.snippet.includes('劳动合同')); // 正文命中给片段
+  assert.ok(!JSON.stringify(r).includes('血常规各项指标正常，体检结论为未见明显异常')); // ftext 全文不外发
+  assert.equal(r.content_search, true);
+  assert.equal(displays[0].kind, 'files');
+});
+
+test('search_files：正文检索关闭时注明仅元数据', async () => {
+  const exec = createExecutor(mockStore(), fakeGen, null, null, mockHub({
+    async searchFiles() { return { items: [], contentSearch: false }; },
+  }));
+  const r = await exec('search_files', { keyword: 'x' });
+  assert.equal(r.content_search, false);
+  assert.ok(r.hint.includes('关闭'));
+});
+
+test('create_note：经 hub 落库并触发 onChange/onDisplay', async () => {
+  const hub = mockHub();
+  let changed = 0;
+  const displays = [];
+  const exec = createExecutor(mockStore(), fakeGen, () => changed++, (d) => displays.push(d), hub);
+  const r = await exec('create_note', { content: '周三交房租', tags: '生活, 提醒' });
+  assert.equal(r.ok, true);
+  assert.equal(r.id, 99);
+  assert.equal(hub.calls.created[0].content, '周三交房租');
+  assert.equal(changed, 1);
+  assert.equal(displays[0].kind, 'notes');
+  // 空正文拒收
+  const r2 = await exec('create_note', { content: '  ' });
+  assert.ok(r2.error);
+});
+
+test('tag_items：校验后转交 hub，三类型 targets 透传', async () => {
+  const hub = mockHub();
+  const exec = createExecutor(mockStore(), fakeGen, null, null, hub);
+  const r = await exec('tag_items', {
+    tag: '工作',
+    targets: [
+      { type: 'passwords', id: 3 },
+      { type: 'notes', query: '快递' },
+      { type: 'files', query: '体检报告' },
+    ],
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.results.length, 3);
+  assert.deepEqual(hub.calls.tagged[0].targets.map((t) => t.type), ['passwords', 'notes', 'files']);
+  // 缺 tag / 缺 targets 拒收
+  assert.ok((await exec('tag_items', { targets: [{ type: 'notes' }] })).error);
+  assert.ok((await exec('tag_items', { tag: 'x' })).error);
+});
+
+test('服务器模式：hub 返回仅本地模式支持，原样透传给模型', async () => {
+  const err = () => ({ error: '随手记/文件仓仅本地模式支持' });
+  const exec = createExecutor(mockStore(), fakeGen, null, null, { searchNotes: err, searchFiles: err, createNote: err, tagItems: err });
+  for (const [name, args] of [
+    ['search_notes', { keyword: 'x' }], ['search_files', { keyword: 'x' }],
+    ['create_note', { content: 'x' }], ['tag_items', { tag: 'x', targets: [{ type: 'notes' }] }],
+  ]) {
+    const r = await exec(name, args);
+    assert.equal(r.error, '随手记/文件仓仅本地模式支持', name);
+  }
+});
+
+test('hub 缺失时四工具各自报能力不可用', async () => {
+  const exec = createExecutor(mockStore(), fakeGen);
+  for (const [name, args] of [
+    ['search_notes', { keyword: 'x' }], ['search_files', { keyword: 'x' }],
+    ['create_note', { content: 'x' }], ['tag_items', { tag: 'x', targets: [{ type: 'notes' }] }],
+  ]) {
+    const r = await exec(name, args);
+    assert.ok(r.error.includes('不可用'), name);
+  }
 });
 
 // ---------- 对话循环：脚本化假渠道 ----------

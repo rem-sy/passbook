@@ -70,6 +70,73 @@
     {
       type: 'function',
       function: {
+        name: 'search_notes',
+        description: '搜索随手记便签（标题/正文/标签多词匹配）。用户问"上周记的XX""我记过什么"时用这个。结果只含≤80字摘要，全文由应用卡片展示。',
+        parameters: {
+          type: 'object',
+          properties: { keyword: { type: 'string', description: '搜索关键词，尽量用用户原话里的词（如：快递单号、体检报告）' } },
+          required: ['keyword'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'search_files',
+        description: '搜索文件仓文件：匹配文件名/备注/标签（元数据），可选匹配已抽取的正文内容（返回命中片段摘要）。用户问"XX文件放哪了"时用这个。',
+        parameters: {
+          type: 'object',
+          properties: { keyword: { type: 'string', description: '搜索关键词（文件名或文件内容里的词）' } },
+          required: ['keyword'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'create_note',
+        description: '把一段文字存为便签（随手记）。用户说"帮我记一下XX"时用这个；必须调用本工具落库才算存好。',
+        parameters: {
+          type: 'object',
+          properties: {
+            content: { type: 'string', description: '便签正文（用户要记的完整内容）' },
+            title: { type: 'string', description: '标题（可选，留空自动取正文首行）' },
+            tags: { type: 'string', description: '标签（可选，逗号分隔，如：工作, 快递）' },
+          },
+          required: ['content'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'tag_items',
+        description: '给密码/便签/文件打标签（跨类型）。targets 数组逐项定位：type 为 passwords|notes|files，用 id 精确定位或 query 关键词搜索定位（命中多个则全部打标）。',
+        parameters: {
+          type: 'object',
+          properties: {
+            tag: { type: 'string', description: '要追加的标签名，如：工作' },
+            targets: {
+              type: 'array',
+              description: '打标对象列表',
+              items: {
+                type: 'object',
+                properties: {
+                  type: { type: 'string', description: 'passwords | notes | files' },
+                  id: { type: 'number', description: '记录 id（精确）' },
+                  query: { type: 'string', description: '关键词（搜索定位，与 id 二选一）' },
+                },
+                required: ['type'],
+              },
+            },
+          },
+          required: ['tag', 'targets'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'generate_password',
         description: '用密码本内置的强密码生成器生成密码。用户要新密码时用；生成后若用户给了所属和账户，可再调用 save_password 保存。',
         parameters: {
@@ -88,14 +155,16 @@
     },
   ];
 
-  const SYSTEM_PROMPT = `你是"密码本"应用的内置 AI 助理，帮用户用自然语言管理本地密码库。规则：
-1. 用户要存密码 → 必须调用 save_password 工具落库（尽量把用户提到的额外信息放进 note 备注作为记忆关键词）。禁止不调用工具就口头宣称"已保存"——只有工具返回 ok:true 才算存好。回复中不要复述密码明文。
-2. 用户问密码 → 必须调用 search_passwords 查询。工具结果里的 password 字段已打码，真实密码由应用直接展示给用户（含一键复制），你只需说明找到了哪些 所属/账户，让用户在应用展示的卡片里查看复制。带 has_totp:true 的条目还配有两步验证（TOTP），应用卡片会实时显示 6 位动态验证码（可一键复制）——提示用户在卡片里查看即可，禁止编造或推算验证码。禁止编造、猜测或要求用户提供密码内容。
-3. 用户要改密码 → 调用 update_password；若返回多条匹配，向用户确认是哪个账户后重试。
-4. 用户要新密码 → 必须调用 generate_password；若同时给了所属和账户，生成后接着调 save_password 存好。
-5. 回复用简体中文，简洁友好。
-6. 数据只存在用户本机，不要输出与密码管理无关的推广或说教。
-7. 涉及存、查、改、列、生成密码的意图，一律先调工具再回答；纯闲聊才直接回复。`;
+  const SYSTEM_PROMPT = `你是"密码本"应用的内置 AI 助理——一个本地优先的个人数据保险箱助手，帮用户用自然语言管理三样东西：密码库、随手记便签、文件仓。规则：
+1.【密码】用户要存密码 → 必须调用 save_password 工具落库（额外信息放进 note 备注作记忆关键词）。禁止不调用工具就口头宣称"已保存"——只有工具返回 ok:true 才算存好。回复中不要复述密码明文。
+2.【密码】用户问密码 → 必须调用 search_passwords 查询。工具结果里的 password 字段已打码，真实密码由应用直接展示给用户（含一键复制），你只需说明找到了哪些 所属/账户，让用户在应用展示的卡片里查看复制。带 has_totp:true 的条目还配有两步验证（TOTP），应用卡片会实时显示 6 位动态验证码——提示用户在卡片里查看即可，禁止编造或推算验证码。禁止编造、猜测或要求用户提供密码内容。
+3.【密码】用户要改密码 → 调用 update_password；若返回多条匹配，向用户确认是哪个账户后重试。要新密码 → 必须调用 generate_password；若同时给了所属和账户，生成后接着调 save_password 存好。
+4.【便签】用户要记一条便签 → 必须调用 create_note 落库才算存好，禁止口头宣称"记下了"。用户问"我记过什么/上周记的XX" → 调用 search_notes 查询；工具结果只含≤80字摘要，让用户在应用展示的卡片里看全文，禁止编造、补全或臆测便签正文内容。
+5.【文件】用户问"XX文件/报告放哪了" → 调用 search_files 查询（元数据+可选正文检索）；结果里的 snippet 只是命中片段摘要，让用户在应用卡片里查看文件，禁止编造文件内容。
+6.【标签】用户要给某条密码/便签/文件打标签（可跨类型多项）→ 调用 tag_items，逐项返回结果如实汇报（未找到的要说明）。
+7. 服务器存储模式下随手记/文件仓不可用（工具会返回"仅本地模式支持"），如实转述即可。
+8. 回复用简体中文，简洁友好。数据只存在用户本机，不要输出与管理无关的推广或说教。
+9. 涉及存、查、改、列、记、打标签的意图，一律先调工具再回答；纯闲聊才直接回复。`;
 
   const TOOL_LABELS = {
     search_passwords: (a) => `搜索「${a.keyword || ''}」`,
@@ -103,17 +172,49 @@
     list_recent_passwords: () => '列出最近条目',
     update_password: (a) => `修改 ${a.owner || ''}${a.account ? ' / ' + a.account : ''} 的密码`,
     generate_password: (a) => `生成密码（${a.length || 16} 位）`,
+    search_notes: (a) => `搜便签「${a.keyword || ''}」`,
+    search_files: (a) => `搜文件「${a.keyword || ''}」`,
+    create_note: (a) => `记便签「${(a.title || a.content || '').slice(0, 16)}」`,
+    tag_items: (a) => `打标签「${a.tag || ''}」× ${(a.targets || []).length} 项`,
   };
+
+  /** 便签正文摘要：压平空白 + 截 n 字（隐私红线：给模型的永远只是摘要） */
+  function previewOf(content, n) {
+    const cap = n || 80;
+    const s = String(content == null ? '' : content).replace(/\s+/g, ' ').trim();
+    return s.length > cap ? s.slice(0, cap) + '…' : s;
+  }
+
+  /** 正文命中片段（半径 36）：与 PassFiles.snippetOf 同语义的零依赖实现 */
+  function snippetLocal(text, terms) {
+    const s = String(text == null ? '' : text);
+    const lower = s.toLowerCase();
+    let pos = -1, hit = '';
+    for (const t of (terms || [])) {
+      const tt = String(t).toLowerCase();
+      if (!tt) continue;
+      const p = lower.indexOf(tt);
+      if (p >= 0 && (pos < 0 || p < pos)) { pos = p; hit = tt; }
+    }
+    if (pos < 0) return null;
+    const r = 36;
+    const start = Math.max(0, pos - r);
+    const end = Math.min(s.length, pos + hit.length + r);
+    return (start > 0 ? '…' : '') + s.slice(start, end).replace(/\s+/g, ' ') + (end < s.length ? '…' : '');
+  }
 
   /**
    * 创建工具执行器
    * @param store 密码库适配器（需提供 list/create/update）
    * @param passGen 生成器（需提供 generate/strength）
    * @param onChange 库变更回调（存入后刷新界面用）
-   * @param onDisplay 真实结果展示回调：({name, items}) —— 明文密码只走这条链路（应用内展示），
-   *                  绝不进入返回给模型的工具结果，避免明文发给 AI 渠道
+   * @param onDisplay 真实结果展示回调：({name, kind?, items}) —— 明文密码/便签全文/文件详情只走这条链路
+   *                  （应用内卡片），绝不进入返回给模型的工具结果，避免明文发给 AI 渠道
+   * @param hub 保险箱能力包（v4.7.0，app.js 组装，本模块保持零依赖）：
+   *   { searchNotes(kw)->{items, total, error?}, searchFiles(kw)->{items:[{file, contentHit}], contentSearch, error?},
+   *     createNote({content,title,tags})->{id, title, note, error?}, tagItems(tag, targets)->{ok, results, error?} }
    */
-  function createExecutor(store, passGen, onChange, onDisplay) {
+  function createExecutor(store, passGen, onChange, onDisplay, hub) {
     const MASK = '🔒已打码';
     return async function exec(name, args) {
       if (name === 'search_passwords') {
@@ -189,6 +290,74 @@
         if (onChange) onChange();
         if (onDisplay) onDisplay({ name, items: [updated] });
         return { ok: true, updated: { owner: cur.owner, account: cur.account } }; // 不回传明文
+      }
+      /* ---------- v4.7.0 保险箱跨类型四工具（hub 注入，本模块零依赖） ---------- */
+      if (name === 'search_notes') {
+        if (!hub || typeof hub.searchNotes !== 'function') return { error: '便签检索能力不可用' };
+        const r = await hub.searchNotes(String(args.keyword || ''));
+        if (r && r.error) return r;
+        const notes = (Array.isArray(r.items) ? r.items : []).slice(0, 10);
+        if (onDisplay && notes.length) onDisplay({ name, kind: 'notes', items: notes });
+        return {
+          matched: (r && typeof r.total === 'number') ? r.total : notes.length,
+          items: notes.map((n) => ({
+            id: n.id, title: n.title || '',
+            preview: previewOf(n.content, 80), // 隐私红线：≤80字摘要，全文走应用卡片
+            tags: n.tags || '', source: n.source || '', updated_at: n.updated_at || '',
+          })),
+          hint: 'preview 只是≤80字摘要；全文已由应用卡片展示给用户，请让用户在卡片查看，禁止编造或补全便签内容',
+        };
+      }
+      if (name === 'search_files') {
+        if (!hub || typeof hub.searchFiles !== 'function') return { error: '文件检索能力不可用' };
+        const r = await hub.searchFiles(String(args.keyword || ''));
+        if (r && r.error) return r;
+        const hits = Array.isArray(r.items) ? r.items : [];
+        const shown = hits.slice(0, 10);
+        if (onDisplay && shown.length) onDisplay({ name, kind: 'files', items: shown.map((h) => h.file || h) });
+        const terms = String(args.keyword || '').toLowerCase().split(/[\s,，、]+/).filter(Boolean);
+        return {
+          matched: hits.length,
+          matched_meta: hits.filter((h) => !h.contentHit).length,
+          matched_content: hits.filter((h) => h.contentHit).length,
+          content_search: !(r && r.contentSearch === false),
+          items: shown.map((h) => {
+            const f = (h && h.file) || h || {};
+            return {
+              id: f.id, name: f.name || '', size: f.size || 0,
+              tags: f.tags || '', source: f.source || '', created_at: f.created_at || '',
+              snippet: h.contentHit ? snippetLocal(f.ftext || '', terms) : null, // 正文只回传命中片段摘要
+            };
+          }),
+          hint: (r && r.contentSearch === false)
+            ? '文件正文检索已被用户关闭：本次仅匹配文件名/备注/标签（元数据），未搜索文件内容'
+            : 'snippet 只是正文命中片段摘要；完整文件请让用户在应用卡片中查看，禁止编造文件内容',
+        };
+      }
+      if (name === 'create_note') {
+        if (!hub || typeof hub.createNote !== 'function') return { error: '便签能力不可用' };
+        const content = String(args.content || '').trim();
+        if (!content) return { error: '便签正文(content)不能为空' };
+        const r = await hub.createNote({
+          content,
+          title: String(args.title || '').trim(),
+          tags: String(args.tags || '').trim(),
+        });
+        if (r && r.error) return r;
+        if (onChange) onChange();
+        if (onDisplay && r && r.note) onDisplay({ name, kind: 'notes', items: [r.note] });
+        return { ok: true, id: r && r.id, title: (r && r.title) || previewOf(content, 30) };
+      }
+      if (name === 'tag_items') {
+        if (!hub || typeof hub.tagItems !== 'function') return { error: '打标签能力不可用' };
+        const tag = String(args.tag || '').trim();
+        if (!tag) return { error: '标签(tag)不能为空' };
+        const targets = Array.isArray(args.targets) ? args.targets : [];
+        if (!targets.length) return { error: 'targets 不能为空：[{type: passwords|notes|files, id 或 query}]' };
+        const r = await hub.tagItems(tag, targets);
+        if (r && r.error) return r;
+        if (onChange) onChange();
+        return r;
       }
       if (name === 'generate_password') {
         const pw = passGen.generate({
