@@ -11,11 +11,11 @@
 - token：`$env:TEMP\gh-token.txt`；curl 用 `$env:SystemRoot\System32\curl.exe`
 
 ## 当前状态（交接时点）
-- HEAD = tag **v4.6.5**；Release 停在 v4.1.0（后续版本待用户整体确认后择机发）
-- 版本演进：v4.3 随手记+三标签页 → v4.4.0 文件仓（四通道收件/加密分桶/预览矩阵/zip 导出）→ v4.5.0 内容检索（ftext 抽取索引）→ v4.6.0 跨类型分类（侧栏三页通用/统一管理）→ v4.6.1~v4.6.5 导入导出修复链（.bin 文件名 / Android pickRaw 选文件桥 / 密钥弹窗 z-index / TOTP 收藏保真 / zip 静态残留 / 判重提示与本体自愈）
+- HEAD = tag **v4.7.0**（保险箱一体化：AI 四工具跨类型化 + 文件仓体检 + zip 导入密钥迁移）；Release 停在 v4.1.0（后续版本待用户整体确认后择机发）
+- 版本演进：v4.3 随手记+三标签页 → v4.4.0 文件仓（四通道收件/加密分桶/预览矩阵/zip 导出）→ v4.5.0 内容检索（ftext 抽取索引）→ v4.6.0 跨类型分类（侧栏三页通用/统一管理）→ v4.6.1~v4.6.5 导入导出修复链 → v4.7.0 保险箱一体化（agent-core hub 架构/healthPlan/resolveZipKey 先验后写迁移）
 - 测试：20 套单测 + channel-live；e2e：scripts/e2e-import.mjs（加密 .db 导入全链路）、scripts/e2e-zip.mjs（zip 导出导入+判重+自愈+同名不同内容）
 - 惯例脏文件：RustWebView.kt（带补丁的正确状态）/ tauri.settings.gradle；Cargo.lock 随版本提交
-- 下一版：**v4.7.0 保险箱一体化**（AI 跨类型 + 文件仓体检 + zip 密钥迁移），规格见 ROADMAP，开工提示词见 NEXT-TASK.md
+- 下一版：v4.7.0 已实现待用户真机验收（清单见 ROADMAP v4.7.0 节）；后续排期看 ROADMAP P1
 
 ## 近期重要教训（新会话必看，DEVELOPGUIDE §8 有完整版）
 - 自建弹窗层 z-index 一律 **660**（promptKeyInput 曾沉在导入弹窗背后 → 用户"看不到密钥输入"）

@@ -1,7 +1,7 @@
 # 密码本 Roadmap（v4.7+ 一体化时代）
 
 > 维护约定：每完成一个版本更新此文件并归档旧版到 docs/archive/。
-> 当前已发布：**v4.6.5**（v4.3 随手记 → v4.4 文件仓 → v4.5 内容检索 → v4.6 跨类型分类与导入导出修复链）。
+> 当前已发布：**v4.7.0**（v4.3 随手记 → v4.4 文件仓 → v4.5 内容检索 → v4.6 跨类型分类与导入导出修复链 → v4.7 保险箱一体化）。
 > 本版调研：[RESEARCH-v4.7-p0.md](RESEARCH-v4.7-p0.md)；开工提示词：[NEXT-TASK.md](NEXT-TASK.md)。
 
 ## 版本规范
@@ -9,7 +9,7 @@
 - 版本 4 处同步：package.json / src-tauri/tauri.conf.json / src-tauri/Cargo.toml / gen/android/app/tauri.properties（versionCode = M×10000+m×100+p；**versionName 也在该文件**，两行都要改）
 - sw.js CACHE_NAME 每版 +1；产物 ASCII 命名；-preset 预置版仅本地永不上传
 
-## v4.7.0（下一版）：保险箱一体化（P0 三项）
+## v4.7.0（已完成，待用户验收）：保险箱一体化（P0 三项）
 
 **目标：AI 助手从「密码助理」长成「保险箱助理」；文件仓数据自体检；跨设备迁移密钥免折腾。**
 
