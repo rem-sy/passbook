@@ -1,57 +1,54 @@
-# 密码本 Roadmap（v4.3+ 存储扩展时代）
+# 密码本 Roadmap（v4.7+ 一体化时代）
 
 > 维护约定：每完成一个版本更新此文件并归档旧版到 docs/archive/。
-> 当前已发布：**v4.5.0**（v4.3.x 随手记 / v4.4.x 文件仓 / v4.5.0 文件内容检索已交付；Release 停在 v4.1.0，后续版本待用户真机确认后择机发）。
-> 立项调研：[RESEARCH-v5-storage.md](RESEARCH-v5-storage.md)（随手记/文件仓/三标签页全案）。
+> 当前已发布：**v4.6.5**（v4.3 随手记 → v4.4 文件仓 → v4.5 内容检索 → v4.6 跨类型分类与导入导出修复链）。
+> 本版调研：[RESEARCH-v4.7-p0.md](RESEARCH-v4.7-p0.md)；开工提示词：[NEXT-TASK.md](NEXT-TASK.md)。
 
 ## 版本规范
 - 功能 +0.1.0，补丁 +0.0.1；里程碑经用户确认 → GitHub Release
-- 版本 4 处同步：package.json / src-tauri/tauri.conf.json / src-tauri/Cargo.toml / gen/android/app/tauri.properties（versionCode = M×10000+m×100+p）
+- 版本 4 处同步：package.json / src-tauri/tauri.conf.json / src-tauri/Cargo.toml / gen/android/app/tauri.properties（versionCode = M×10000+m×100+p；**versionName 也在该文件**，两行都要改）
 - sw.js CACHE_NAME 每版 +1；产物 ASCII 命名；-preset 预置版仅本地永不上传
 
-## v4.3.0（下一版）：随手记 + 三标签页框架
-**目标：从「密码管理器」长成「个人保险箱」的第一步。**
-- 数据层：`notes` 表（title/content/tags/source/created_at/updated_at，source ∈ manual|clipboard|share），进 SQLite 迁移链，随 .db 整库加密
-- UI：顶栏下页面级三标签 `密码 | 随手记 | 文件仓`（state.view + localStorage 记忆）；密码页现有交互零改动；文件仓 tab 占位（v4.4 解锁）
-- 便签页：列表 + 新建/编辑（标题、正文、标签、来源徽标）+ 删除；搜索框在便签页检索便签（复用 PassSearch 多词管线）
-- **手机快捷方式（对标微信扫一扫）**：
-  - 静态 App Shortcuts（res/xml/shortcuts.xml + manifest meta-data），长按图标直达
-  - `QuickNoteActivity`（透明、noHistory）：onResume 读剪贴板（Android 10+ 仅焦点应用可读，此为合规通道）→ 原生确认框预览 → 确认写入 pending 队列文件（JSON 追加，纯原生零依赖秒开）→ Toast → finish
-  - 应用启动时前端消费 pending 队列入 notes 表（source=clipboard），Toast 提示补了 N 条
-- 文本分享接收：`ACTION_SEND text/plain` → ShareTextActivity → 同一 pending 队列（source=share）
-- 桌面对齐：Tauri global-shortcut 全局快捷键 + clipboard-manager 读剪贴板 → 直接入 notes 表（桌面无队列必要）
-- 测试：test/notes.test.mjs（纯函数：队列消费去重、便签检索命中、迁移幂等）
+## v4.7.0（下一版）：保险箱一体化（P0 三项）
 
-## v4.4.0（已交付）：文件仓
-**目标：微信/QQ/任意来源的文档统一收纳 + 统一检索。**（实现要点：files 元数据表 + files-store/<sha256前2位>/<sha256> AES-GCM 加密分桶；四通道=ACTION_SEND */*（ShareFileActivity）+ ACTION_VIEW 文档 mime（OpenFileActivity 双动作）+ SAF 批量（SafImportActivity 桥）+ 桌面拖拽/pick_files；预览矩阵 pdf.js/docx-preview/SheetJS/md 自写/txt/img 本地打包离线渲染，doc/ppt/xls/pptx 走系统打开；删除按 sha256 引用计数；换密钥/开关加密同步重加密本体；zip 导出；test/filehub.test.mjs 15 项）
-- 数据层：`files` 表（name/mime/size/sha256/source/tags/note/created_at）；文件本体按 sha256 分桶存应用私有目录，AES-GCM 加密落盘（密钥从数据库密钥派生）；**不进 SQLite**
-- 收文件三通道：
-  1. 分享接收（主通道）：微信/QQ 文件长按 → 分享 → 密码本（ACTION_SEND */*），ShareFileActivity 流式拷贝 content:// URI（Android 11+ scoped storage 下唯一官方授权通道）→ 确认入库
-  2. SAF 批量导入：ACTION_OPEN_DOCUMENT 多选
-  3. 桌面：拖拽 + 系统对话框（pick_files 泛化）
-- UI：文件仓页列表 + 类型/来源/标签/时间过滤 + 预览（图片/PDF 经解密 blob 在 WebView 预览；其他 FileProvider + ACTION_VIEW 系统打开）+ sha256 去重提示
-- 统一检索：顶栏搜索跨 密码/便签/文件 分组返回
-- 加密一致性：换密钥/关加密向导同步重加密文件本体
-- 测试：test/filehub.test.mjs（元数据纯函数、去重键、检索命中、桶路径）
+**目标：AI 助手从「密码助理」长成「保险箱助理」；文件仓数据自体检；跨设备迁移密钥免折腾。**
 
-## v4.5.0（已交付）：文件仓内容检索
-**正文抽取全离线本地完成（不上传）**：txt/md/csv/json 直读；docx/footnotes/endnotes 与 pptx slides 用 JSZip 解 XML 抽正文（xmlToText 纯函数）；xlsx 用 SheetJS 转 CSV；PDF 用 pdf.js getTextContent（前 500 页、256KB 截断）；图片与旧 doc/ppt/xls 二进制无文本层不参与（OCR 评估结论：tesseract.js + 中文语料约 20MB、秒级/张，性价比低不做）。抽取文本存 files.ftext（迁移链幂等补列），导入后异步串行队列建索引（不阻塞入库），工具栏「内容索引」补建存量；searchFiles 元数据命中 + 正文 ALL 词命中合并，卡片「内容命中」徽标 + 上下文片段。test/ftext.test.mjs 7 项。
+### 1. AI 助手跨类型化
+- 新工具：`search_notes`（PassNotes.searchNotes，标题/正文/标签多词）、`search_files`（元数据 + ftext 正文检索，返回 snippetOf 片段）、`create_note`（source=manual）、`tag_items`（跨类型打标签：passwords/notes/files 各走对应 update 管线）
+- 架构：agent-core.js 保持零依赖——createExecutor 注入 `hub` 参数包（app.js 组装 LocalStore 侧能力）；TOOLS/SYSTEM_PROMPT 扩写为「个人数据保险箱助理」
+- 隐私红线：便签/正文只回传**摘要片段（≤80 字）**，全文走 onDisplay 应用内卡片；设置 → AI 助理加「允许 AI 检索文件正文」开关（默认开，文案注明会发送片段摘要）
+- 服务器模式：notes/files 工具返回「仅本地模式支持」提示语
 
-## v5.0.0（已规划）：统一入口收尾
-- 三 tab 视觉统一打磨；便签贴图/富文本支持；桌面托盘快捷入口（文件内容检索已于 v4.5.0 落地，FTS5 如需再评估）
-- Release 里程碑候选（发版前用户确认）
+### 2. 文件仓体检
+- 纯函数 `PassFiles.healthPlan(rows, blobShas)` → { missingBlob / orphanBlob / needIndex / suspectIndex }
+- 入口：文件仓工具栏「体检」按钮；报告弹窗（四段计数+明细前 20 条）+「清理孤儿桶 N 个」「重建索引 N 个」
+- Rust 无新命令（store_blob_list/exists/delete 已齐）；重建索引用现有 queueFtext 管线
 
-## 远期（方向已评估，未排期）
-- Passkey 阶段 1（原 v4.2 规划顺延）：credentialId/rpId/userHandle/私钥结构化存储 + Bitwarden JSON 导入，只存不用
-- Passkey 阶段 2/3：Android Credential Manager / WebView2 WebAuthn 桥 / 桌面浏览器扩展配对（架构级）
-- KDF 参数可调 + 存量库重新加密向导
-- 体检条目卡片「已泄露 N 次」徽标；Android「复制并打开目标 App」快填
+### 3. zip 导入密钥迁移（对齐 .db 导入体验）
+- importFilehubZip 落桶前**试解**首个本体（本机文件密钥）：同体系直接写；异体系弹 promptKeyInput（z660）→ 「原密钥 + manifest.files_salt」派生导出端密钥再试解
+- 试解成功 → 全量**重加密迁移**（解密→本机密钥加密→落桶），toast 报迁移数；再失败 → 明确报错并**中止导入**（不落半套数据）
+- 特例：纯元数据 zip 跳过验解；导出端未加密（固定设备密钥）且本机加密时提示「导出端先启用加密再导出」
+- v4.6.5 的跳过判重自愈补桶同样走迁移路径
+
+**测试**：agent.test 扩四工具执行器用例（mock hub：打码/截断/落库）；ftext/filehub.test 补 healthPlan 全分支；e2e-zip 加「异密钥 zip → 弹钥 → 迁移后可解」场景。全套 22 套不回归。
+
+**验收（真机）**：AI 问「体检报告在哪/上周快递单号」出文件/便签卡片；让 AI 记便签；跨类型打标签；体检报告与清理；异密钥 zip 迁移后可打开预览；关正文检索开关后 AI 只搜文件名。
+
+## P1（v4.8+/v5.0 候选，按需排期）
+- 便签贴图：复用文件仓图片管线（便签附件=files 表引用+关联字段，零新存储）
+- 备份容灾：自动快照可选附带 files-store 本体（或每日增量 zip）
+- 全局命令面板（桌面 Ctrl+K）：跨三页搜名称/正文/账号，回车跳转；三框交互基线不动
+- 桌面托盘（记一条/锁屏/打开）+ Android 小组件一键随手记
+- 三页视觉统一打磨（v5.0 原有项）
+
+## P2（远期/评估后缓行）
+- Passkey 阶段 1：credentialId/rpId/userHandle 结构化存储 + Bitwarden JSON 导入（只存不用）
+- FTS5 全文索引（个人量级 LIKE 毫秒级，不急）
+- 云同步（违背本地优先；最多做启动时检测同步目录变更提示合并）
+- OCR（20MB 语料+秒级/张，性价比低不做）；旧 doc/ppt 内置渲染（依赖重不做）
 
 ## 明确不做
-- 多用户/组织共享（单人自用定位）
-- 云托管同步（本地优先；自建远程模式已覆盖）
-- 后台常驻监听剪贴板（Android 10+ 不允许且违背「需要确认」的产品原则）
-- 直接读取微信/QQ 私有目录（scoped storage 禁止；只走分享/SAF 官方通道）
+- 多用户/组织共享；云托管同步；后台常驻监听剪贴板；直读微信/QQ 私有目录
 
-## 竞品对标（2026 调研存量结论）
-对标 Keyguard、KeePassXC（持续加导入器）、KeePassDX。本项目差异点转为**个人数据统一保险箱**（密码+便签+文件一体加密收纳），头部密码管理器均未覆盖此组合。
+## 竞品对标存量结论
+头部密码管理器（Keyguard/KeePassXC/KeePassDX）均未覆盖「密码+便签+文件一体加密收纳+AI 助理」组合——本项目差异点已从密码管理器转为个人数据统一保险箱。

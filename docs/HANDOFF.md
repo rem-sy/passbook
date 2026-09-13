@@ -1,34 +1,29 @@
-# 密码本 Handoff 交接文档（2026，v4.1.2 之后）
+# 密码本 Handoff 交接文档（2026，v4.6.5 之后）
 
-> 新会话开工前必读。配套：[ROADMAP.md](ROADMAP.md)（版本规划）· [DEVELOPGUIDE.md](DEVELOPGUIDE.md)（架构/管线/规范）· [RESEARCH-v5-storage.md](RESEARCH-v5-storage.md)（v4.3+ 调研）。
+> 新会话开工前必读。配套：[ROADMAP.md](ROADMAP.md)（v4.7.0 定稿规格）· [DEVELOPGUIDE.md](DEVELOPGUIDE.md)（架构/管线/规范/坑）· [RESEARCH-v4.7-p0.md](RESEARCH-v4.7-p0.md)（P0 三项设计）· [NEXT-TASK.md](NEXT-TASK.md)（v4.7.0 开工提示词）。
 > 历史文档已归档至 [archive/](archive/)。
 
 ## 项目定位与环境
-- 单人自用的本地优先**个人数据保险箱**（v4.3 起由纯密码管理器扩展）：Tauri v2（Rust lib.rs）+ WebView 前端（public/ 单页）+ SQLite（加密 .db）
+- 单人自用的本地优先**个人数据保险箱**：密码 + 随手记 + 文件仓一体加密收纳，跨类型分类体系，内置 AI 助理
+- Tauri v2（Rust lib.rs）+ WebView 前端（public/ 单页）+ SQLite（整库加密）+ files-store 分桶密文本体
 - 仓库：github.com/rem-sy/passbook（私有，main）；本地 `D:\hobby\源码\密码本`；产物 `D:\hobby\产物\密码本\`
-- 环境：Windows + PowerShell 5.1；Node 测试；Android SDK/JDK 在 `D:\hobby\.android-dev\`；代理 `http://127.0.0.1:7890`（GitHub 必须走）
+- 环境：Windows + PowerShell 5.1；Node 测试；Android SDK/JDK 在 `D:\hobby\.android-dev\`；代理 `http://127.0.0.1:7890`（GitHub 必须走；**代理进程可能没起，失败改直连**：`git -c http.https://github.com.proxy= -c http.proxy= push`）
 - token：`$env:TEMP\gh-token.txt`；curl 用 `$env:SystemRoot\System32\curl.exe`
 
 ## 当前状态（交接时点）
-- HEAD = tag v4.1.2 = `0e4a9e7`；Release 停在 v4.1.0（383628895，正式 3 产物）；4.1.1/4.1.2 为修复小版本未发 Release
-- v4.1.0 浏览器一键导入（Edge 实测通过）；v4.1.1 base64 IPC + 多选三修；v4.1.2 手机端 TOTP 断行修复（实测通过）
-- v4.3.0 随手记 + 三标签页；v4.3.1 便签独立搜索/卡片详情/快捷方式剪贴板重试四修；**v4.4.x 文件仓 + v4.5.0 内容检索已交付（待用户真机验收）**；v4.5.0：files 表补 ftext/ftext_ok 列（迁移幂等），正文抽取管线（pdfjs getTextContent / JSZip 解 OOXML / SheetJS CSV，cap 256KB），导入后异步队列 + 工具栏内容索引按钮，searchFiles 内容命中合并（test/ftext.test.mjs 7 项）：files 表 + files-store 加密分桶（密钥从库密钥派生，未加密库用固定设备密钥，换密钥走 vaultReencryptAll 唯一重加密路径）；四通道收件（分享 ShareFileActivity / 其他应用打开 OpenFileActivity 双动作 / SAF 批量 SafImportActivity + __passbook_saf.pick 桥 / 桌面拖拽 + pick_files）；预览矩阵本地打包（public/lib：pdfjs / docx-preview + jszip / xlsx.full）；zip 导出（store-only 自写 buildZip）；test/filehub.test.mjs 15 项
-- 工作树干净（惯例脏文件除外：RustWebView.kt / tauri.settings.gradle / Cargo.lock）
-- 下一版：待用户对 v4.4.0 真机验收后定（候选：v4.4.x 文件仓补丁或 v5.0 收尾，见 ROADMAP）
+- HEAD = tag **v4.6.5**；Release 停在 v4.1.0（后续版本待用户整体确认后择机发）
+- 版本演进：v4.3 随手记+三标签页 → v4.4.0 文件仓（四通道收件/加密分桶/预览矩阵/zip 导出）→ v4.5.0 内容检索（ftext 抽取索引）→ v4.6.0 跨类型分类（侧栏三页通用/统一管理）→ v4.6.1~v4.6.5 导入导出修复链（.bin 文件名 / Android pickRaw 选文件桥 / 密钥弹窗 z-index / TOTP 收藏保真 / zip 静态残留 / 判重提示与本体自愈）
+- 测试：20 套单测 + channel-live；e2e：scripts/e2e-import.mjs（加密 .db 导入全链路）、scripts/e2e-zip.mjs（zip 导出导入+判重+自愈+同名不同内容）
+- 惯例脏文件：RustWebView.kt（带补丁的正确状态）/ tauri.settings.gradle；Cargo.lock 随版本提交
+- 下一版：**v4.7.0 保险箱一体化**（AI 跨类型 + 文件仓体检 + zip 密钥迁移），规格见 ROADMAP，开工提示词见 NEXT-TASK.md
 
-## 近三期版本要点（新会话快速进入）
-- v4.1.0：`public/importer.js` 浏览器 CSV 导入纯函数；导入弹窗第 4 tab（document 委托模式）
-- v4.1.1：数据库读写一律 base64 IPC（`write/read_db_file_b64`、pick_import_db 返 b64）——**新增数据通道必须沿用 b64 模式**；多选 visibleIds 全选语义
-- v4.1.2：卡片内关键数字 nowrap + 容器 wrap 兜底
-
-## 下一步（v4.3.0）关键决策（调研已定，见 RESEARCH-v5-storage.md）
-- 手机快捷方式 = 静态 App Shortcuts + 透明 QuickNoteActivity 读剪贴板（Android 10+ 仅焦点应用可读，合规）
-- 快捷入库走 **pending 队列文件**（纯原生 JSON 追加，不加载 WebView），应用启动前端消费入 notes 表
-- AndroidManifest/Activity/res-xml 均为仓库提交物，直接改；RustWebView 桥补丁模式不动
-- 桌面对齐：global-shortcut + clipboard-manager（需加 tauri 插件依赖）
+## 近期重要教训（新会话必看，DEVELOPGUIDE §8 有完整版）
+- 自建弹窗层 z-index 一律 **660**（promptKeyInput 曾沉在导入弹窗背后 → 用户"看不到密钥输入"）
+- 原生桥静态 lastResult **启动 Activity 前必须置 pending**（残留旧 JSON → zip 导入"读取文件失败"）
+- Android tauri dialog 返回 content:// **不可用**——选文件一律 pickRaw 桥
+- 导入解析必须**取全字段**（totp_secret/fav 曾被 6 字段 SELECT 截断）
+- ps1 **恰好单 BOM**（双 BOM → param() 失效 → -Preset 静默变正式版覆盖产物）
+- headless Edge 测试：去 --disable-gpu、挑 type=page、僵尸端口守卫、清 SW+HTTP 缓存——四坑全踩过，scripts/ 里现成写法照抄
 
 ## 发布与构建速查
-详见 DEVELOPGUIDE §3/§4。口诀：测试 → 版本 4 处 + sw +1（无 BOM 写法）→ 中文 commit（点名 add）→ 6 产物 → aapt2/apksigner（cc06eb3e）→ tag + push（代理）→ Release 等用户明示。
-
-## 坑速查（完整版在 DEVELOPGUIDE §8）
-PS5.1 BOM / -replace 全局 / .NET 绝对路径；失败构建后 RustWebView.kt 无补丁勿提交；IPC 大数据禁 JSON 数组走 b64；动态弹窗 document 委托；tab 新增加分支；file-drop display:block；构建串行勿并发。
+详见 DEVELOPGUIDE §3/§4。口诀：测试 → 版本 4 处（tauri.properties 有 versionCode/versionName 两行）+ sw +1 → 中文 commit（点名 add）→ 6 产物（串行）→ aapt2/apksigner（cc06eb3e）+ 解包 grep → tag + push（代理或直连）→ Release 等用户明示。

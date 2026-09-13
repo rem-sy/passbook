@@ -1,27 +1,24 @@
-# 下一任务提示词（新窗口直接粘贴）
+# 下一任务提示词（新窗口直接粘贴 · v4.7.0）
 
 ---
 
-密码本项目（D:\hobby\源码\密码本，私有仓 rem-sy/passbook，main 分支）。开工前先读 docs/HANDOFF.md（环境/现状/坑）、docs/DEVELOPGUIDE.md（架构/管线/规范）和 docs/ROADMAP.md（本版规格），v4.3+ 全案调研在 docs/RESEARCH-v5-storage.md。
+密码本项目（D:\hobby\源码\密码本，私有仓 rem-sy/passbook，main 分支）。开工前先读 docs/HANDOFF.md（环境/现状）、docs/DEVELOPGUIDE.md（架构/管线/规范/坑速查）和 docs/ROADMAP.md（v4.7.0 定稿规格），三项优化设计细节在 docs/RESEARCH-v4.7-p0.md。
 
-任务：实现 v4.3.0「随手记 + 三标签页框架」（规格在 ROADMAP.md 已定稿，要点重述）：
+任务：实现 v4.7.0「保险箱一体化」（规格在 ROADMAP.md 已定稿，要点重述）：
 
-1. **数据层**：notes 表（id/title/content/tags/source/created_at/updated_at，source ∈ manual|clipboard|share）进 LocalStore.init() 迁移链（CREATE IF NOT EXISTS 幂等），随 .db 整库加密；store 适配器补 notes CRUD
-2. **三标签页框架**：顶栏下页面级 tab「密码 | 随手记 | 文件仓」，state.view + localStorage 记忆停留页；密码页现有交互（多选/漏斗/体检/扫码）零改动，文件仓 tab 本版占位（v4.4 解锁）
-3. **便签页**：列表 + 新建/编辑（标题、正文、标签、来源徽标）+ 删除；搜索框在便签页检索便签（复用 PassSearch 多词管线）
-4. **手机快捷方式（对标微信扫一扫）**：
-   - res/xml/shortcuts.xml 静态 App Shortcuts + 主 Activity manifest 挂 meta-data（这些是仓库提交物，直接改）
-   - QuickNoteActivity（透明主题、noHistory、不加载 WebView）：onResume 读剪贴板 → 原生确认框预览前 80 字 → 确认后追加写 pending 队列文件（JSON 行，filesDir 下）→ Toast → finish；空剪贴板直接 toast 退出
-   - 应用启动时前端经 Rust 命令读 pending 队列消费入 notes 表（source=clipboard），Toast 报「已收入 N 条随手记」；队列文件读完清空
-5. **文本分享接收**：manifest 加 ACTION_SEND text/plain intent-filter → ShareTextActivity（透明）拿 EXTRA_TEXT 走同一 pending 队列（source=share）
-6. **桌面对齐**：tauri global-shortcut + clipboard-manager 插件，全局快捷键（默认 Ctrl+Alt+N，设置里可改）读剪贴板 → 应用内确认框 → 直接入 notes 表
-7. **测试**：新增 test/notes.test.mjs 纯函数（pending 队列消费与去重、便签检索命中、迁移幂等）；队列 JSON 行解析容错（空行/截断行）
+1. **AI 助手跨类型化**：agent-core.js 新增四工具——`search_notes`（PassNotes.searchNotes 多词匹配，返回标题+previewText 截断预览）、`search_files`（元数据 PassFiles.searchFiles + ftext 正文检索，返回 snippetOf 片段，matched_meta/matched_content 双计数）、`create_note`（LocalStore.noteCreate，source=manual）、`tag_items`（跨类型打标签，targets={type:passwords|notes|files, id或query}，各走 catJoin/tagsJoin 规范追加）。架构：createExecutor 增 hub 参数包（app.js 组装，agent-core 保持零依赖）；SYSTEM_PROMPT 改写为「个人数据保险箱助理」（存便签必须落库才算、查文件/便签先调工具、正文只给摘要让用户看卡片、禁止编造内容）。**隐私红线**：便签/正文只回传 ≤80 字摘要，全文走 onDisplay 应用内卡片；设置 → AI 助理加「允许 AI 检索文件正文」开关（默认开，settings key 建议 agentFileContent），关闭时 search_files 仅元数据；服务器模式 hub 返回「仅本地模式支持」提示语。
 
-管线（DEVELOPGUIDE §4 有完整版）：node --check + 全部 17+1 套测试 → 版本 4 处升 4.3.0（versionCode 40300，用 .NET WriteAllText 无 BOM 绝对路径）+ sw.js CACHE_NAME +1（ASSETS 加新文件）→ commit（中文信息、无英文双引号、点名 git add 勿 -u）→ build-android.ps1 → -Preset → build-desktop.ps1 共 6 产物（串行）→ 验收：aapt2 versionName=4.3.0 + apksigner cc06eb3e + 解包 grep（notes 表/quicknote 关键词/shortcuts.xml 在包，用 aapt2 dump xmltree 查 manifest shortcuts meta-data）→ tag v4.3.0 + push（代理 http://127.0.0.1:7890，TLS 抖动重试）。不发 Release，完成后报告等我测试。
+2. **文件仓体检**：filehub.js 纯函数 `healthPlan(rows, blobShas)` → { missingBlob / orphanBlob / needIndex / suspectIndex }（suspect=ftext_ok=1 且应有文本类型但 ftext 空）；UI：文件仓工具栏「体检」按钮 → 报告弹窗（四段计数+明细前 20 条+文件名）→ 动作：「清理孤儿桶 N 个」（store_blob_delete，报回收字节数）、「重建索引 N 个」（并入现有 queueFtext 管线）、missingBlob 提示从 zip 备份导入可自愈或手动删行（不自动删）。Rust 无新命令。
 
-真机验收清单（报告里列出请用户测）：长按图标出现「随手记」快捷方式；复制文本 → 点快捷方式 → 确认框 → Toast；打开应用便签已入库；微信里长按一段文字分享给密码本；桌面 Ctrl+Alt+N；三标签页切换与记忆。
+3. **zip 导入密钥迁移**：importFilehubZip 改为**先验后写**——落桶前用本机文件密钥（vaultEnsureCrypto）试解 zip 首个本体；失败弹 promptKeyInput（z660，文案「文件仓加密体系与导出端不同，请输入导出端的数据库加密密钥」）→ 用「输入密钥+manifest.files_salt」派生导出端密钥再试解：成功则全量重加密迁移（解密→本机密钥加密→落桶，toast 报迁移数，抽成可注入 keyFn 的纯函数便于测试）；失败则明确报错并**中止导入不落半套数据**。纯元数据 zip 跳过验解；v4.6.5 判重跳过时的自愈补桶同走迁移函数。边界：导出端未加密+本机加密时无钥可输，提示「导出端先启用加密再导出或本机关闭加密」。
 
-关键坑提醒：新 Activity 文件放 gen/android/app/src/main/java/com/passbook/app/（与 BioBridgeActivity 同目录）；QuickNoteActivity 绝不初始化 WebView/Tauri（秒开是产品核心）；manifest 是提交物但构建后照例核对是否被 gradle 动过；动态弹窗按钮 document 委托；tab 切换 handler 记得加 view 分支；IPC 传数据一律 base64 模式；PS 5.1 写文件勿用 -Encoding UTF8。
+测试：agent.test.mjs 扩四工具执行器用例（mock hub：打码/截断/落库调用/tag_items 三类型）；filehub/ftext.test 补 healthPlan 全分支与迁移判定纯函数；e2e-zip.mjs 加异密钥场景（Node 构造另一把钥加密的 zip → 断言弹钥 → 填钥 → mock store 断言重加密落桶）；全套 20 套不得回归，node --check 全过。
+
+管线（DEVELOPGUIDE §4）：测试 → 版本 4 处升 4.7.0（versionCode 40700；tauri.properties 有 versionCode/versionName 两行；PS 写文件 .NET WriteAllText 无 BOM 绝对路径）+ sw.js CACHE_NAME +1 → commit（中文信息、无英文双引号、点名 git add 勿 -u）→ build-android.ps1 → -Preset → build-desktop.ps1 共 6 产物（串行；gradle daemon 被内存压力杀掉就重跑）→ 验收：aapt2 versionName=4.7.0 + apksigner cc06eb3e + 解包 grep（search_notes/search_files/healthPlan/密钥迁移关键词在 assets）→ 使用说明 AI 助理节与文件仓节更新 + 文件仓页截图重拍（新按钮）→ tag v4.7.0 + push（代理 http://127.0.0.1:7890；代理没起先探测，失败走 git -c http.https://github.com.proxy= -c http.proxy= 直连）。不发 Release，完成后报告等我测试。
+
+真机验收清单（报告里列出请用户测）：AI 问「体检报告放哪了」→ 出文件卡片（含正文命中片段）；AI 问「上周记的快递单号」→ 出便签卡片；让 AI 记一条便签并打标签；tag_items 跨类型打「工作」后三页侧栏计数变化；文件仓「体检」出报告（可先删库文件造孤儿桶验证清理）；异密钥导出的 zip 在另一台导入 → 弹密钥框 → 输钥 → 文件可打开预览；关「允许 AI 检索文件正文」后 AI 只搜到文件名命中；密码/便签既有 AI 功能无回归。
+
+关键坑提醒（DEVELOPGUIDE §8 有完整版）：自建弹窗层 z-index 一律 660（promptKeyInput 已修过一次，别再犯）；静态桥 lastResult 启动 Activity 前必须置 pending；Android 选文件走 pickRaw 桥（tauri dialog 返回 content:// 不可用）；headless Edge 测试须 Network.setCacheDisabled + 清 SW + 僵尸端口守卫（双特征精准杀，勿按映像名杀 Edge）；导入解析取全字段（totp/fav 教训）；ps1 恰好单 BOM；heredoc 写 JS 文件注意 \n 转义会被吃（用 chr(10) 或写临时文件）。
 
 ---
 

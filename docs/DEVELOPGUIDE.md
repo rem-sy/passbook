@@ -1,95 +1,108 @@
-# 密码本 开发指南（DEVELOPGUIDE）
+# 密码本 开发指南（DEVELOPGUIDE · v4.6.5 现状版）
 
 > 面向实现者的一页通：架构、代码地图、数据层、构建、发布、测试、UI 规范、坑。
-> 环境与当前状态见 [HANDOFF.md](HANDOFF.md)；版本规划见 [ROADMAP.md](ROADMAP.md)。
+> 环境与当前状态见 [HANDOFF.md](HANDOFF.md)；版本规划见 [ROADMAP.md](ROADMAP.md)；历史版指南在 archive/。
 
 ## 1. 总架构
 
-- **Tauri v2**（Rust `src-tauri/src/lib.rs`）+ **WebView 前端**（`public/` 单页，无框架，IIFE）
-- 数据：**SQLite**（前端 sql.js 内存库 + 整库落盘持久化；Android/桌面写应用私有文件，浏览器写 IndexedDB）；可选远程服务端模式（/api）
+- **Tauri v2**（Rust `src-tauri/src/lib.rs`）+ **WebView 前端**（`public/` 单页，无框架，IIFE，UMD 模块）
+- 数据：**SQLite**（前端 sql.js 内存库 + 整库落盘；Android/桌面写应用私有文件，浏览器写 IndexedDB）+ **文件仓本体**（files-store/ 分桶密文，绝不进 SQLite）；可选远程服务端模式（/api，仅密码条目）
 - 三平台一份前端：桌面（WebView2）/ Android（RustWebView + 原生桥）/ 浏览器 PWA（Service Worker 离线）
-- 原生能力以两种方式接入：
-  1. **Rust 命令**（favicon_fetch / SAF / 加解密 / agent_http 等，`tauriInvoke` 调用）
-  2. **原生 Activity + JS 桥**（生物识别 BioBridgeActivity、SAF 另存 SafSaveActivity —— RustWebView.kt 里注入 `@JavascriptInterface` 内部类，前端轮询 result()）
+- 原生能力两条路：
+  1. **Rust 命令**（tauriInvoke；字节 IPC 一律 base64）
+  2. **原生 Activity + JS 桥**（RustWebView.kt 注入 `@JavascriptInterface`；manifest 与 Activity 是仓库提交物，RustWebView.kt 每次构建由 build.rs 重新生成、**由 build-android.ps1 按锚点幂等补丁**）
 
 ## 2. 代码地图
 
-### public/（前端，全部零依赖 UMD 或 IIFE）
+### public/（前端）
 | 文件 | 职责 |
 |---|---|
-| app.js | 主逻辑 ~4200 行 IIFE：state/store/列表渲染/弹窗/导入导出/多选/设置 |
+| app.js | 主逻辑 IIFE：state/store/三页渲染/弹窗/导入导出/多选/设置/加密钩子/AI 面板装配；`__PB_DEBUG` 只读调试出口（e2e 用） |
 | index.html / style.css | 单页壳与全部样式（z-index 阶梯见 §7） |
-| search.js | PassSearch：多词 AND 模糊、操作符、高亮、sortEntries、分类集合 |
-| watchtower.js | 体检 + HIBP k-匿名 |
-| qr.js + lib/ | 扫码五级解析、jsQR、qrcode-generator |
-| importer.js | 浏览器 CSV 一键导入（表头识别/容错/判重纯函数，v4.1.0） |
-| presets.js / generator.js / passphrase.js / totp.js / biometric.js / autolock.js / theme.js / backup.js / db-crypto.js / agent-core.js | 预置库/密码生成/口令句/TOTP/生物识别/自动锁/主题/备份/加密/AI 渠道 |
+| search.js | PassSearch：多词 AND 模糊、操作符（分类：/有验证码/有收藏）、catSplit/catJoin、sortEntries |
+| notes.js | PassNotes：notes 表 schema、pending 队列解析消费、便签检索 |
+| filehub.js | PassFiles：files/file_kv schema、sha256 分桶路径、引用计数、previewKind 矩阵+VIEW_MIMES、mdToHtml、parsePendingFiles、buildZip/**parseZip**、ftext 处理（xmlToText/snippetOf/capText）、tagsSplit/Join/unionTagCounts（跨类型分类） |
+| agent-core.js | AI 工具定义（OpenAI function calling）+ 对话循环 + 打码双通道（onDisplay） |
+| importer.js / qr.js / watchtower.js / generator.js / passphrase.js / totp.js / biometric.js / autolock.js / theme.js / backup.js / db-crypto.js / agent-core.js | 其余功能模块 |
+| lib/ | 本地打包第三方库：sql-wasm、jsQR、qrcode-generator、**pdfjs/**、docx-preview、jszip、xlsx（绝不走 CDN） |
+| guide/ guide-mobile/ | 使用说明截图（桌面/手机两套，进 sw ASSETS） |
 
 ### src-tauri/src/lib.rs（Rust 命令层）
-文件读写（read/write_db_file 与 **_b64 base64 版本**——v4.1.1 起数据库 IPC 一律走 b64，JSON 数字数组随体积线性变慢）、pick_import_db、export_db/export_json/export_bytes、SAF 临时写、favicon_fetch、agent_http(_stream)、生物识别桥。
+- 数据库：read/write_db_file(_b64)、pick_import_db（**Android 返回 content:// 不可用**，前端走 pickRaw 桥）
+- 文件仓：store_blob_write/read/exists/delete/list(_b64)、get_files_store_dir、pick_files（多选）、read_file_bytes_b64、filehub_temp_write_b64、shell_open、export_bytes_b64
+- 随手记：read_pending_notes / read_pending_files、set_quicknote_shortcut
+- 其他：saf_temp_write、favicon_fetch、agent_http(_stream)、bio_available/prompt
+
+### Android 原生（gen/android/app/src/main/java/com/passbook/app/）
+| 文件 | 职责 |
+|---|---|
+| FileHub.kt | 收件公共管线：stage 流式拷贝(8KB)+sha256、来源识别、pending 队列、明文库 dupCount |
+| QuickNoteActivity / ShareTextActivity | 快捷方式读剪贴板 / 文本分享（pending 队列） |
+| ShareFileActivity / OpenFileActivity | 文件分享（ACTION_SEND */*）/ 其他应用打开（ACTION_VIEW，先拷贝再弹框双动作） |
+| SafImportActivity / SafPickRawActivity | SAF 多选批量导入 / 通用单文件选取（导入选 .db/.json/.zip 用） |
+| RustWebView.kt（生成+补丁） | JsBio/JsSaf 桥（result/save/open/pick/pickRaw 系列） |
+
+### scripts/
+build-android.ps1（含 RustWebView 幂等补丁链 a1~a5）/ build-desktop.ps1 / shot-cdp.mjs（CDP 截图，含僵尸端口守卫）/ take-guide-shots.ps1（GDI 备用）/ **e2e-import.mjs / e2e-zip.mjs**（headless Edge 端到端回归，mock Tauri 可跑应用级逻辑）
 
 ### 前端数据层（app.js 内）
-- `LocalStore`（sql.js）：`init()` 迁移链（ALTER/CREATE IF NOT EXISTS 幂等）→ `persist()` 导出整库 → 可选 DbCrypto 加密 → b64 IPC 写盘
-- `ServerStore`：远程模式 fetch /api
-- `store` 适配器按 currentMode 分发；统一接口 list/create/update/remove/importItems/…
+- `LocalStore`（sql.js）：init() 迁移链（entries/attachments/notes/files/file_kv 全 IF NOT EXISTS + 老库 ALTER 补列幂等）→ persist()（可选 DbCrypto 整库加密）→ b64 IPC 写盘；files CRUD + fileSetFtext + fileKv
+- `ServerStore`：仅密码条目；notes/files 同口径「仅本地模式支持」提示
+- 文件仓密钥：`vaultEnsureCrypto`（file_kv 存 salt/材料指纹）；换密钥唯一路径 `vaultReencryptAll`（挂 enable/disable/migrateToAutoKey 三钩子）
+- 跨类型分类：`state.category` 全局筛选三页；侧栏并集计数（unionTagCounts）；管理分类弹窗同步三类记录
 
 ## 3. 构建管线（Android bypass）
 
-`scripts/build-android.ps1`：cargo aarch64 交叉编译 → .so 入 jniLibs → public/ 入 assets → gradle 打包（跳过 tauri-cli）。`-Preset` 出预置版（含 gitignore 的 agent-config.local.js，正式构建临时移出后恢复）。
-- **RustWebView.kt 幂等锚点补丁**：tauri build.rs 每次构建重生成该文件，脚本按锚点重新打上 viewport / JsBio / JsSaf / PbCamGrant 补丁
-- **AndroidManifest.xml 与自建 Activity（BioBridge/SafSave）是仓库提交物**，不受 build.rs 重生成影响——新增 Activity/快捷方式/分享过滤器走这条路
-- 桌面：`scripts/build-desktop.ps1`（setup + portable × 正式/preset）
+`build-android.ps1`：cargo aarch64 交叉编译 → .so 入 jniLibs → public/ 入 assets → gradle 打包（--no-daemon）。`-Preset` 出预置版（含 gitignore 的 agent-config.local.js）。
+- **RustWebView.kt 幂等锚点补丁**：a1 viewport / a2 JsBio+JsSaf / a4 相机权限 / a5 文件仓桥（open/pick/pickRaw，**启动 Activity 前先重置对应 lastResult**）
+- 桌面：build-desktop.ps1（setup + portable × 正式/preset）
 - 签名：`D:\hobby\产物\密码本\signing\passbook-release.jks`，alias passbook；验收 SHA-256 前缀 **cc06eb3e**
 
 ## 4. 标准发布流水线（每版照此）
 
-1. 功能 + 测试（新功能配 `test/X.test.mjs` 纯函数测试）+ `node --check public/*.js`
-2. 跑全部测试套件（`test/*.test.mjs`，channel-live 为外部探测不计）
-3. 版本 4 处 + sw.js CACHE_NAME +1（**改版本文件用 .NET WriteAllText + UTF8Encoding($false) + 绝对路径**，见 §8 坑）
-4. commit（中文信息、不含英文双引号；只 add 明确文件，勿 `git add -u` 一把梭）
-5. build-android.ps1 → build-android.ps1 -Preset → build-desktop.ps1（共 6 产物，顺序执行勿并发——agent-config.local.js 移出恢复互斥）
-6. 验收：aapt2 dump badging（versionName/versionCode）+ apksigner verify（cc06eb3e，需 JAVA_HOME=D:\hobby\.android-dev\jdk）+ 解包 grep 新功能关键词
-7. tag vX.Y.Z + `git push origin main vX.Y.Z`（代理 127.0.0.1:7890；TLS 偶发抖动重试即可）
-8. GitHub Release 仅在用户明确说发时：curl POST releases（token 在 `$env:TEMP\gh-token.txt`，走代理，用 System32 curl）→ 上传正式 3 件（APK/setup/portable）
+1. 功能 + 测试（新功能配 `test/X.test.mjs` 纯函数测试；涉及导入/zip 的加 e2e 场景）+ `node --check public/*.js`
+2. 跑全部测试套件（`test/*.test.mjs`，channel-live 为外部探测不计；当前 20 套）
+3. 版本 4 处 + sw.js CACHE_NAME +1（改版本文件用 .NET WriteAllText + UTF8Encoding($false) + 绝对路径；tauri.properties 有 versionCode/versionName 两行）
+4. commit（中文信息、不含英文双引号；只 add 明确文件，勿 `git add -u`）
+5. build-android.ps1 → -Preset → build-desktop.ps1（共 6 产物，**串行勿并发**；gradle daemon 偶发被内存压力杀掉，重跑即可）
+6. 验收：aapt2 dump badging（versionName/versionCode）+ apksigner verify（cc06eb3e，JAVA_HOME=D:\hobby\.android-dev\jdk）+ 解包 grep 新功能关键词（unzip -p assets/...）
+7. tag vX.Y.Z + `git push origin main vX.Y.Z`（代理 127.0.0.1:7890；代理进程可能没起——先探测，失败改 `-c http.https://github.com.proxy= -c http.proxy=` 直连）
+8. GitHub Release 仅在用户明示：正式 3 件（APK/setup/portable）
 
 ## 5. 测试规范
 
-- `node:test` + `node:assert/strict`；`node --disable-warning=ExperimentalWarning test/X.test.mjs`
-- UMD 模块在 Node 装载惯例：`globalThis.window = globalThis` + `(0, eval)(src)` 取 `window.PassXxx`（见 test/qr.test.mjs / test/importer.test.mjs）
-- 新功能必须有纯函数测试；UI 交互不强行 mock，靠真机验收清单
-- 当前套件：api/generator/agent/db-crypto/watchtower/totp/autolock/theme/search/backup/passphrase/biometric/presets/categories/sort/qr/importer（17）+ channel-live（外部探测，非单测）
+- `node:test` + `node:assert/strict`；UMD 装载惯例：`globalThis.window = globalThis` + `(0, eval)(src)`
+- **e2e**（e2e-import/e2e-zip）：headless Edge + 服务器 + `Network.setCacheDisabled` + **启动前清 SW 缓存 + 僵尸端口守卫**（见 §8）
+- 套件清单：api/generator/agent/autolock/backup/biometric/categories/db-crypto/filehub/ftext/generator/importer/notes/passphrase/presets/qr/search/sort/theme/totp/watchtower（20）+ channel-live（外部）
 
-## 6. 数据层规范（v4.3 起新表照此）
+## 6. 数据层规范
 
-- 新表进 `LocalStore.init()` 迁移链：`CREATE TABLE IF NOT EXISTS`，字段加默认值，**幂等可重入**
-- 大二进制不进 SQLite（附件 BLOB ≤2MB 上限的教训）；文件仓本体走文件系统 sha256 分桶 + 元数据入表
-- 加密：整库落盘前 DbCrypto（AES-GCM + 密钥派生）；新数据类型优先整库加密覆盖，单独文件加密需从同密钥派生并在换密钥向导中处理
+- 新表进 `LocalStore.init()` 迁移链：CREATE IF NOT EXISTS + 老库 PRAGMA table_info 检查补列，幂等可重入
+- 大二进制不进 SQLite；文件仓本体走 sha256 分桶密文
+- 导入字段保真教训（v4.6.3）：跨端导入解析必须取全字段（totp_secret/fav/history）
+- 判重语义：文件仓 zip 导入按 sha256+name+size 三重一致才跳过
 
 ## 7. UI 规范（血泪沉淀）
 
-- z-index 阶梯：sidebar 60 / modal 500 / ms-bar 550 / 建议 600 / hint 650 / lock 800 / toast 900
-- **动态弹窗内按钮绑定用 document 事件委托**（`e.target.closest('#id')`），change/dragover/drop 同理（v4.0.2/v4.1.0 教训）
-- tab 切换 handler 新增 tab 必须加分支（v4.0.3 scan 分支遗漏教训）
-- `label.file-drop` 必须 `display:block`（label 是 inline，width:100% 不生效）
-- 移动端卡片右列（时间+操作钮）会挤压左主体：关键数字内容加 `white-space:nowrap; flex:none`，容器 `flex-wrap:wrap` 兜底（v4.1.2 TOTP 断行教训）
-- WebView 内 fetch 外部域被拦 → favicon 走 Rust reqwest；HIBP 前端 fetch 正常
+- z-index 阶梯：sidebar 60 / modal 500 / 联想 600~650 / **自建弹窗层一律 660** / 锁页 800 / toast 900
+- 动态弹窗按钮 document 委托；tab 切换 handler 加分支；`label.file-drop` display:block
+- 移动端工具栏按钮多时允许换行（tb-line wrap）；文件详情四按钮 2×2（foot-wrap）
+- 三页三搜索框互不干扰（顶栏只搜密码）；侧栏三页通用（跨类型分类）
+- 便签/文件标签串读取用 tagsSplit（容错逗号/顿号/空格），保存用 tagsJoin 规范
 
-## 8. 已知坑（勿重蹈）
+## 8. 已知坑（勿重蹈；含 v4.6 系列新坑）
 
-- **自建弹窗层的 z-index 统一 660**：`promptKeyInput`/`showKeyBackup` 等手工 `document.createElement('div.modal-mask')` 的层曾用 320——业务弹窗（openModal）是 500，叠在导入/设置弹窗上打开时会被压在下面看不见（加密 .db 导入的密钥框"没弹出来"即此因）。新增自建层一律 660（联想 650 之上、锁页 800 之下）
-- **ps1 文件必须恰好单 BOM**：对已有 BOM 的脚本再用 utf-8-sig 写一遍会产生双 BOM，第二个 BOM 使 `param()` 不在首语句 → `-Preset` 开关静默失效（预置版按正式版构建并覆盖产物）。改 ps1 用 `io.open(p,'rb')` 剥干净再写单 BOM
-
-- **PS 5.1**：`-Encoding UTF8` 带 BOM（曾致 tauri.conf.json 解析失败）；`-replace` 是全局正则（v3.4.4 曾打断 dark 作用域）；.NET File API 用**绝对路径**（进程 cwd 可能是 D:\hobby）
-- **失败构建后 RustWebView.kt 处于无补丁重生成状态**，勿误提交；构建后它与 tauri.settings.gradle 是惯例脏文件
-- **Cargo.lock 随版本号变动**：版本 bump 后首次 cargo 构建会改它，随功能一起提交即可
-- 缓存目录 API 返回 Result 要 unwrap；`agent-config.local.js` 丢失从 TEMP\v342 备份还原
-- 子代理可能因模型波动中断：派活先盘点现场；接管先查 git log/status
-- 分支操作前 `git checkout -- src-tauri/gen/android/tauri.settings.gradle`
-- Tauri IPC 传大数据禁用 JSON 数字数组（曾致兆级库删除近 10 秒）：一律 base64（write/read_db_file_b64 模式）
+- **PS 5.1**：`-Encoding UTF8` 带 BOM；.NET File API 用绝对路径；**ps1 文件必须恰好单 BOM**（对已有 BOM 文件再写 utf-8-sig 会双 BOM → param() 失效 → -Preset 静默变正式版）
+- **自建弹窗层 z-index 660**：promptKeyInput/showKeyBackup 曾用 320 沉在业务弹窗背后（加密 .db 导入"没有密钥输入"即此因）
+- **静态桥结果残留**：Activity companion lastResult 静态字段——桥方法启动 Activity **前必须置回 "pending"**，否则轮询读到上次 JSON 拿已删临时路径（zip 导入"读取文件失败"）
+- **Android tauri dialog 不可用**：返回 content://（Rust 读不了）——选文件一律走 pickRaw 桥
+- **headless Edge 测试三坑**：①`--disable-gpu` 会令新版 headless 完全不出帧（去掉）；②`/json` 多目标必须挑 `type==='page'`；③**调试端口被残留僵尸占用时新实例绑不上、CDP 连旧实例旧数据**——脚本启动前用 PowerShell 按 `remote-debugging-port+headless` 双特征精准清理（绝不按映像名杀 Edge），退出 finally 同步 taskkill /T，每轮独立 profile
+- **SW/HTTP 缓存吃旧代码**：测试页连应用前先 unregister SW + caches.delete + Network.setCacheDisabled，否则跑到旧版 app.js 全部断言失真
+- 其余旧坑：RustWebView.kt 构建后处于无补丁状态勿提交（惯例脏文件）；Cargo.lock 随版本提交；Tauri IPC 大数据禁 JSON 数字数组（一律 b64）；`-replace` 全局；缓存目录 API unwrap；分支操作前 checkout tauri.settings.gradle
 
 ## 9. 版本纪律
 
 - 功能 +0.1.0，补丁 +0.0.1；等用户测试确认再进下一版
-- GitHub Release 只在用户确认的稳定里程碑（已发：3.0.0/3.2.0/3.3.9/3.4.4/4.0.3/4.1.0）
-- 预置版永不外传；上边栏 AI/指南/分类/设置四按钮不轻易动
-- tag 已推送后发现补丁：私有单人仓可移动 tag 强推（需核验 ls-remote），或独立 patch 版
+- Release 只在用户确认的里程碑（已发：3.0.0/3.2.0/3.3.9/3.4.4/4.0.3/4.1.0）
+- 预置版永不外传；上边栏四按钮不轻易动
+- tag 已推送后发现补丁：独立 patch 版（私有单人仓也可移 tag 强推，需核验 ls-remote）
