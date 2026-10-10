@@ -3913,11 +3913,25 @@ function getAgentExec() {
 }
 
 /** v4.7.0 保险箱 hub：便签/文件仓能力包（app.js 组装，agent-core 保持零依赖可测）
- * 服务器模式统一返回「仅本地模式支持」；本地模式走 LocalStore + PassNotes/PassFiles 检索 */
+ * v4.8.0 扩为全库 hub：+盘点 listItems/vaultOverview、详情 getNote/getFile、
+ *   改便签 updateNote、摘标签 removeTag、重命名 renameTag（删除走确认卡，不经 hub）
+ * 服务器模式统一返回「仅本地模式支持」（list_items 的 passwords 类型除外）；本地走 LocalStore */
 function getAgentHub() {
   if (currentMode !== 'local') {
     const err = () => ({ error: '随手记/文件仓仅本地模式支持' });
-    return { searchNotes: err, searchFiles: err, createNote: err, tagItems: err };
+    return {
+      searchNotes: err, searchFiles: err, createNote: err, tagItems: err,
+      vaultOverview: err, getNote: err, getFile: err, updateNote: err, removeTag: err, renameTag: err,
+      listItems: async ({ type, limit, tag }) => {
+        if (String(type).toLowerCase() !== 'passwords') return err();
+        const { items } = await store.list({});
+        const kw = String(tag || '').toLowerCase();
+        const hits = kw
+          ? items.filter((x) => PassSearch.catSplit(x.category).some((c) => c.toLowerCase() === kw))
+          : items;
+        return { items: hits.slice(0, Math.min(Math.max(Number(limit) || 10, 1), 20)), total: hits.length };
+      },
+    };
   }
   const matchRows = (rows, t, idField) => {
     if (t.id != null && t.id !== '') {
@@ -3925,6 +3939,35 @@ function getAgentHub() {
       return rows.filter((x) => Number(x[idField]) === id);
     }
     return null; // 走 query 检索
+  };
+  // v4.8.0：id 精确 / query 模糊的单对象定位（get/update/delete 共用；0 条报错、多条返回 multi 不动）
+  const locateNote = (t) => {
+    const notes = LocalStore.notesList() || [];
+    const hits = matchRows(notes, t, 'id');
+    if (hits) {
+      if (!hits.length) return { error: '未找到该便签' };
+      return hits.length > 1 ? { multi: hits } : { note: hits[0] };
+    }
+    const q = String(t.query || '').trim();
+    if (!q) return { error: '需要 id 或 query 定位便签' };
+    const res = window.PassNotes && window.PassSearch ? PassNotes.searchNotes(notes, q, PassSearch) : null;
+    const found = res ? res.map((r) => r.note) : [];
+    if (!found.length) return { error: '未找到匹配的便签' };
+    return found.length > 1 ? { multi: found } : { note: found[0] };
+  };
+  const locateFile = (t) => {
+    const files = LocalStore.filesList() || [];
+    const hits = matchRows(files, t, 'id');
+    if (hits) {
+      if (!hits.length) return { error: '未找到该文件' };
+      return hits.length > 1 ? { multi: hits } : { file: hits[0] };
+    }
+    const q = String(t.query || '').trim();
+    if (!q) return { error: '需要 id 或 query 定位文件' };
+    const res = window.PassFiles && window.PassSearch ? PassFiles.searchFiles(files, q, PassSearch, { content: false }) : null;
+    const found = res ? res.map((r) => r.file) : [];
+    if (!found.length) return { error: '未找到匹配的文件' };
+    return found.length > 1 ? { multi: found } : { file: found[0] };
   };
   return {
     async searchNotes(keyword) {
@@ -4007,6 +4050,167 @@ function getAgentHub() {
       refreshNotesList(); refreshFilesList(); refreshSidebar();
       return { ok: results.some((x) => x.ok), results };
     },
+    /* ---------- v4.8.0 全库化 ---------- */
+    async listItems({ type, limit, tag }) {
+      const cap = Math.min(Math.max(Number(limit) || 10, 1), 20);
+      const kw = String(tag || '').toLowerCase();
+      if (type === 'passwords') {
+        const { items } = await store.list({});
+        const hits = kw
+          ? items.filter((x) => PassSearch.catSplit(x.category).some((c) => c.toLowerCase() === kw))
+          : items;
+        return { items: hits.slice(0, cap), total: hits.length };
+      }
+      if (type === 'notes') {
+        let notes = LocalStore.notesList() || [];
+        if (kw) notes = notes.filter((n) => PassFiles.tagsSplit(n.tags).some((t2) => t2.toLowerCase() === kw));
+        return { items: notes.slice(0, cap), total: notes.length };
+      }
+      if (type === 'files') {
+        let files = LocalStore.filesList() || [];
+        if (kw) files = files.filter((f) => PassFiles.tagsSplit(f.tags).some((t2) => t2.toLowerCase() === kw));
+        return { items: files.slice(0, cap), total: files.length };
+      }
+      return { error: 'type 须为 passwords / notes / files' };
+    },
+    async vaultOverview() {
+      const { items: entries } = await store.list({});
+      const notes = LocalStore.notesList() || [];
+      const files = LocalStore.filesList() || [];
+      const totalSize = files.reduce((s, f) => s + (f.size || 0), 0);
+      const texty = files.filter((f) => PassFiles.TEXTY_EXTS.indexOf(
+        ((String(f.name).toLowerCase().match(/\.([a-z0-9]+)$/) || [])[1] || '')) >= 0);
+      const indexed = texty.filter((f) => f.ftext_ok).length;
+      const union = PassFiles.unionTagCounts([
+        { items: entries, field: 'category', splitter: PassSearch.catSplit },
+        { items: notes, field: 'tags' },
+        { items: files, field: 'tags' },
+      ]);
+      const topTags = Object.entries(union)
+        .sort((a, b) => b[1].total - a[1].total).slice(0, 8)
+        .map(([tag, v]) => ({ tag, total: v.total }));
+      return {
+        passwords: entries.length, notes: notes.length, files: files.length,
+        files_store_size: totalSize,
+        files_store_size_fmt: PassFiles.formatSize(totalSize),
+        index_coverage: `${indexed}/${texty.length}`,
+        top_tags: topTags,
+        latest: {
+          password: entries[0] ? entries[0].updated_at : '',
+          note: notes[0] ? notes[0].updated_at : '',
+          file: files[0] ? files[0].created_at : '',
+        },
+      };
+    },
+    async getNote(t) { return locateNote(t); },
+    async getFile(t) {
+      const r = locateFile(t);
+      if (r && r.file) r.contentAllowed = loadSettings().agentFileContent !== false; // 正文摘要受设置开关控制
+      return r;
+    },
+    async updateNote(t) {
+      const r = locateNote(t);
+      if (r && r.error) return r;
+      if (r.multi) return r;
+      const cur = r.note;
+      const next = {
+        title: t.title !== undefined ? String(t.title).trim() || PassNotes.titleOf(t.content !== undefined ? String(t.content) : cur.content) : cur.title,
+        content: t.content !== undefined ? String(t.content) : cur.content,
+        tags: t.tags !== undefined ? PassFiles.tagsJoin(String(t.tags)) : cur.tags,
+      };
+      await LocalStore.noteUpdate(cur.id, next);
+      refreshNotesList(); refreshSidebar();
+      const note = (LocalStore.notesList() || []).find((n) => n.id === cur.id) || { id: cur.id, ...next, source: cur.source, updated_at: new Date().toISOString() };
+      return { note };
+    },
+    async removeTag(tag, targets) {
+      const results = [];
+      for (const t of (Array.isArray(targets) ? targets : [])) {
+        const type = String((t && t.type) || '').toLowerCase();
+        try {
+          if (type === 'passwords') {
+            const { items } = await store.list({});
+            const hits = (t.id != null && t.id !== '')
+              ? items.filter((x) => Number(x.id) === Number(t.id))
+              : items.filter((x) => String(t.query || '') === '' || [x.owner, x.account, x.note].some((f) => String(f || '').toLowerCase().includes(String(t.query).toLowerCase())));
+            if (!hits.length) { results.push({ type, name: String(t.query ?? t.id ?? ''), ok: false, error: '未找到' }); continue; }
+            let n = 0;
+            for (const it of hits.slice(0, 20)) {
+              const cats = PassSearch.catSplit(it.category);
+              if (!cats.includes(tag)) { results.push({ type, id: it.id, name: `${it.owner || ''}${it.account ? ' / ' + it.account : ''}`, ok: true, skipped: true }); continue; }
+              await store.update(it.id, { category: PassSearch.catJoin(cats.filter((c) => c !== tag)) });
+              n++;
+              results.push({ type, id: it.id, name: `${it.owner || ''}${it.account ? ' / ' + it.account : ''}`, ok: true });
+            }
+            if (!n && hits.length) results[results.length - 1] = { ...results[results.length - 1], note: '均未挂该标签，无变化' };
+          } else if (type === 'notes') {
+            const notes = LocalStore.notesList() || [];
+            let hits = matchRows(notes, t, 'id');
+            if (!hits && t.query) {
+              const res = window.PassNotes && window.PassSearch ? PassNotes.searchNotes(notes, String(t.query), PassSearch) : null;
+              hits = res ? res.map((r2) => r2.note) : [];
+            }
+            hits = hits || [];
+            if (!hits.length) { results.push({ type, name: String(t.query ?? t.id ?? ''), ok: false, error: '未找到' }); continue; }
+            for (const nt of hits.slice(0, 20)) {
+              const nt2 = PassFiles.removeTagInTags(nt.tags, tag);
+              if (nt2 == null) { results.push({ type, id: nt.id, name: nt.title || '', ok: true, skipped: true }); continue; }
+              await LocalStore.noteUpdate(nt.id, { title: nt.title, content: nt.content, tags: nt2 });
+              results.push({ type, id: nt.id, name: nt.title || '', ok: true });
+            }
+          } else if (type === 'files') {
+            const files = LocalStore.filesList() || [];
+            let hits = matchRows(files, t, 'id');
+            if (!hits && t.query) {
+              const res = window.PassFiles && window.PassSearch ? PassFiles.searchFiles(files, String(t.query), PassSearch, { content: false }) : null;
+              hits = res ? res.map((r2) => r2.file) : [];
+            }
+            hits = hits || [];
+            if (!hits.length) { results.push({ type, name: String(t.query ?? t.id ?? ''), ok: false, error: '未找到' }); continue; }
+            for (const f of hits.slice(0, 20)) {
+              const ft = PassFiles.removeTagInTags(f.tags, tag);
+              if (ft == null) { results.push({ type, id: f.id, name: f.name, ok: true, skipped: true }); continue; }
+              await LocalStore.fileUpdate(f.id, { name: f.name, tags: ft, note: f.note });
+              results.push({ type, id: f.id, name: f.name, ok: true });
+            }
+          } else {
+            results.push({ type, ok: false, error: 'type 须为 passwords / notes / files' });
+          }
+        } catch (e) {
+          results.push({ type, ok: false, error: e.message });
+        }
+      }
+      refreshNotesList(); refreshFilesList(); refreshSidebar();
+      return { ok: results.some((x) => x.ok && !x.skipped), results };
+    },
+    async renameTag(from, to) {
+      const f = String(from).trim(), t2 = String(to).trim();
+      const counts = { passwords: 0, notes: 0, files: 0 };
+      const { items } = await store.list({});
+      for (const it of items) {
+        const cats = PassSearch.catSplit(it.category);
+        if (!cats.some((c) => c.toLowerCase() === f.toLowerCase())) continue;
+        await store.update(it.id, { category: PassSearch.catJoin(cats.map((c) => c.toLowerCase() === f.toLowerCase() ? t2 : c)) });
+        counts.passwords++;
+      }
+      for (const n of LocalStore.notesList() || []) {
+        const nt = PassFiles.renameTagInTags(n.tags, f, t2);
+        if (nt == null) continue;
+        await LocalStore.noteUpdate(n.id, { title: n.title, content: n.content, tags: nt });
+        counts.notes++;
+      }
+      for (const fl of LocalStore.filesList() || []) {
+        const ft = PassFiles.renameTagInTags(fl.tags, f, t2);
+        if (ft == null) continue;
+        await LocalStore.fileUpdate(fl.id, { name: fl.name, tags: ft, note: fl.note });
+        counts.files++;
+      }
+      refreshNotesList(); refreshFilesList(); refreshSidebar();
+      const total = counts.passwords + counts.notes + counts.files;
+      return total
+        ? { ok: true, renamed: total, by_type: counts }
+        : { ok: false, renamed: 0, by_type: counts, error: `没有名为「${f}」的标签` };
+    },
   };
 }
 
@@ -4015,6 +4219,52 @@ function getAgentHub() {
 function agentDisplay(payload) {
   const box = $('#agent-messages');
   if (!box || !payload || !Array.isArray(payload.items) || !payload.items.length) return;
+  if (payload.kind === 'confirm_delete') {
+    // v4.8.0 确认卡：AI 只能发起删除，用户点「确认删除」才真删（5 分钟内有效）
+    const it = payload.items[0];
+    const wrap = document.createElement('div');
+    wrap.className = 'agent-display agent-confirm-del';
+    wrap.innerHTML = `
+      <div class="ad-row" style="display:block">
+        <div class="ad-owner" style="color:var(--danger)">🗑 待删除${it.type === 'notes' ? '便签' : '文件'}：${escapeHtml(it.title || '')}</div>
+        <div class="ad-note">AI 发起了删除请求，等待你确认。超时（5 分钟）未确认不会删除。</div>
+        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+          <button class="btn danger small" data-act="ok">确认删除</button>
+          <button class="btn small" data-act="cancel">取消</button>
+        </div>
+      </div>`;
+    const settle = (html) => { wrap.innerHTML = `<div class="ad-row" style="display:block"><div class="ad-note">${html}</div></div>`; };
+    wrap.addEventListener('click', async (e) => {
+      const btn = e.target.closest('button[data-act]');
+      if (!btn || btn.disabled) return;
+      if (btn.dataset.act === 'cancel') return settle('已取消删除「' + escapeHtml(it.title || '') + '」');
+      if (Date.now() - (it.ts || 0) > 5 * 60 * 1000) {
+        return settle('<span style="color:var(--danger)">确认已超时，未删除。如仍要删除请让 AI 重新发起。</span>');
+      }
+      btn.disabled = true;
+      btn.textContent = '删除中…';
+      try {
+        if (it.type === 'notes') {
+          await LocalStore.noteRemove(it.id);
+          refreshNotesList(); refreshSidebar();
+          settle('✅ 已删除便签「' + escapeHtml(it.title || '') + '」');
+        } else {
+          const rows = LocalStore.filesList() || [];
+          const row = rows.find((x) => x.id === it.id);
+          if (!row) throw new Error('文件记录不存在（可能已被删除）');
+          const lastRef = rows.filter((x) => x.sha256 === row.sha256).length <= 1;
+          await vaultRemove(it.id);
+          refreshFilesList(); refreshSidebar();
+          settle('✅ 已删除文件「' + escapeHtml(it.title || '') + '」' + (lastRef ? '（最后一份引用，加密本体已一并清理）' : '（该内容还有其他引用，本体保留）'));
+        }
+      } catch (e2) {
+        settle('<span style="color:var(--danger)">删除失败：' + escapeHtml(e2.message) + '</span>');
+      }
+    });
+    box.appendChild(wrap);
+    box.scrollTop = box.scrollHeight;
+    return;
+  }
   if (payload.kind === 'notes') {
     const wrap = document.createElement('div');
     wrap.className = 'agent-display';
@@ -5442,9 +5692,10 @@ function openGuideModal() {
         <p>点右上角 <b>星形图标</b> 打开侧边对话面板，直接说人话：</p>
         <p>· 「帮我存一下：GitHub，账户 tom@example.com，密码 Abc!2345，备注工作主力号」<br/>
            · 「我 GitHub 的密码是什么？」「上周记的快递单号帮我找一下」<br/>
-           · 「帮我记一条便签：周三交房租」「体检报告放哪了？」<br/>
-           · 「把 GitHub 密码和体检报告都打上 工作 标签」「生成一个 20 位不含符号的密码」</p>
-        <p><b>隐私保护</b>：查询结果里的密码已打码，便签/文件只给 ≤80 字摘要或命中片段，真实密码、便签全文与文件详情只在应用内卡片展示（可查看复制），不会发送给 AI 渠道；存、改密码与记便签时你提供的内容会发送给你配置的模型渠道。设置 → AI 助理可关「允许 AI 检索文件正文」（关闭后 AI 只能搜到文件名/备注/标签命中）；随手记与文件仓能力仅本地模式支持。</p>
+           · 「帮我记一条便签：周三交房租」「体检报告放哪了？它讲了什么？」<br/>
+             「文件仓里都有什么文件？」「保险箱总览」「把 工作 标签改成 职场」<br/>
+           · 「删掉快递单号那条便签」「生成一个 20 位不含符号的密码」</p>
+        <p><b>隐私保护</b>：查询结果里的密码已打码，便签只给 ≤80 字摘要、文件只给前 200 字摘要或命中片段，真实密码、便签全文与文件详情只在应用内卡片展示（可查看复制），不会发送给 AI 渠道；存、改密码与记便签时你提供的内容会发送给你配置的模型渠道。<b>删除保护</b>：AI 只能发起删除（便签/文件），应用内会弹确认卡片，你点「确认删除」才会真删（5 分钟内有效）。设置 → AI 助理可关「允许 AI 检索文件正文」（关闭后 AI 只能搜到文件名/备注/标签命中，get_file 也只给元数据）；随手记与文件仓能力仅本地模式支持。</p>
         <p>面板右上角可<b>清空对话</b>；生成过程中可点<b>停止</b>按钮随时中断。</p>`)}
       ${guideSec('sync.png', '⑧ 设置：加密 / 备份 / 锁定', `
         <p>点右上角<b>齿轮</b>打开设置：</p>

@@ -40,11 +40,14 @@ const fakeGen = {
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
 
-test('工具清单含九个能力且 schema 合法', () => {
+test('工具清单含十八个能力且 schema 合法', () => {
   const names = TOOLS.map((t) => t.function.name);
   assert.deepEqual(names, [
     'search_passwords', 'save_password', 'list_recent_passwords', 'update_password',
-    'search_notes', 'search_files', 'create_note', 'tag_items', 'generate_password',
+    'search_notes', 'search_files', 'create_note', 'tag_items',
+    'list_items', 'vault_overview', 'get_note', 'get_file',
+    'update_note', 'remove_tag', 'rename_tag', 'delete_note', 'delete_file',
+    'generate_password',
   ]);
   for (const t of TOOLS) {
     assert.equal(t.type, 'function');
@@ -196,6 +199,70 @@ function mockHub(over = {}) {
       calls.tagged.push({ tag, targets });
       return { ok: true, results: targets.map((t) => ({ type: t.type, name: t.query || t.id, ok: true })) };
     },
+    /* v4.8.0 全库化默认实现（单测可用 over 覆盖） */
+    async listItems({ type, limit = 10 }) {
+      calls.searched.push(['list', type]);
+      if (type === 'passwords') {
+        return { items: [
+          { id: 1, owner: 'GitHub', account: 'tom', password: 'p1', totp_secret: '', category: '工作', updated_at: '2025-01-05' },
+        ], total: 1 };
+      }
+      if (type === 'notes') {
+        return { items: [
+          { id: 1, title: '快递单号', content: '顺丰 SF1234567890 放在丰巢', tags: '生活', source: 'manual', updated_at: '2025-01-01' },
+        ], total: 1 };
+      }
+      if (type === 'files') {
+        return { items: [
+          { id: 11, name: '体检报告.pdf', size: 2048, tags: '健康', source: 'saf', created_at: '2025-01-03' },
+        ], total: 1 };
+      }
+      return { error: 'type 须为 passwords / notes / files' };
+    },
+    async vaultOverview() {
+      return {
+        passwords: 5, notes: 2, files: 3,
+        files_store_size: 8192, files_store_size_fmt: '8.2 KB',
+        index_coverage: '3/3', top_tags: [{ tag: '工作', total: 4 }],
+        latest: { password: '2025-01-05', note: '2025-01-02', file: '2025-01-03' },
+      };
+    },
+    async getNote(t) {
+      if (String(t.query || '').includes('多')) {
+        return { multi: [
+          { id: 1, title: '快递单号A', content: '内容甲' },
+          { id: 2, title: '快递单号B', content: '内容乙' },
+        ] };
+      }
+      if (t.id === 404) return { error: '未找到该便签' };
+      return { note: { id: 1, title: '快递单号', content: '顺丰 SF1234567890 放在丰巢 03 号格口，上周三到', tags: '生活', source: 'manual', updated_at: '2025-01-01' } };
+    },
+    async getFile(t) {
+      if (t.id === 404) return { error: '未找到该文件' };
+      return {
+        file: { id: 11, name: '体检报告.pdf', size: 2048, tags: '健康', source: 'saf', created_at: '2025-01-03', ftext_ok: 1, ftext: '血常规各项指标正常。' + '后续详述'.repeat(120) },
+        contentAllowed: true,
+      };
+    },
+    async updateNote(t) {
+      calls.updated = calls.updated || [];
+      calls.updated.push(t);
+      if (String(t.query || '').includes('多')) {
+        return { multi: [
+          { id: 1, title: '快递单号A', content: '内容甲' },
+          { id: 2, title: '快递单号B', content: '内容乙' },
+        ] };
+      }
+      return { note: { id: t.id != null ? t.id : 1, title: t.title || '新标题', content: t.content || '新正文', tags: t.tags || '', source: 'manual', updated_at: '2025-01-06' } };
+    },
+    async removeTag(tag, targets) {
+      calls.removed = [{ tag, targets }];
+      return { ok: true, results: targets.map((t) => ({ type: t.type, ok: true })) };
+    },
+    async renameTag(from, to) {
+      calls.renamed = [{ from, to }];
+      return { ok: true, renamed: 3, by_type: { passwords: 1, notes: 1, files: 1 } };
+    },
     ...over,
   };
   return hub;
@@ -295,6 +362,144 @@ test('hub 缺失时四工具各自报能力不可用', async () => {
     const r = await exec(name, args);
     assert.ok(r.error.includes('不可用'), name);
   }
+});
+
+/* ---------- v4.8.0 全库化：盘点 / 详情 / 改便签 / 标签管理 / 确认删除 ---------- */
+
+test('list_items：无关键词盘点三类型（密码打码 / 便签摘要 / 文件元数据）', async () => {
+  const displays = [];
+  const exec = createExecutor(mockStore(), fakeGen, null, (d) => displays.push(d), mockHub());
+  const pw = await exec('list_items', { type: 'passwords' });
+  assert.equal(pw.total, 1);
+  assert.equal(pw.items[0].password, '🔒已打码'); // 盘点同样打码
+  const nt = await exec('list_items', { type: 'notes' });
+  assert.ok(nt.items[0].preview.length <= 81);
+  assert.ok(!nt.items[0].content);
+  const fl = await exec('list_items', { type: 'files' });
+  assert.equal(fl.items[0].name, '体检报告.pdf');
+  // 三类各出对应 onDisplay 卡片（密码走默认 kind）
+  assert.deepEqual(displays.map((d) => d.kind), [undefined, 'notes', 'files']);
+  // 非法 type 拒收
+  assert.ok((await exec('list_items', { type: 'xxx' })).error);
+});
+
+test('vault_overview：总览原样透传并附隐私提示', async () => {
+  const exec = createExecutor(mockStore(), fakeGen, null, null, mockHub());
+  const r = await exec('vault_overview', {});
+  assert.equal(r.passwords, 5);
+  assert.equal(r.files_store_size_fmt, '8.2 KB');
+  assert.ok(r.hint.includes('不含正文'));
+});
+
+test('get_note：单条返回摘要 + 全文卡片；多条只列出不展开', async () => {
+  const displays = [];
+  const exec = createExecutor(mockStore(), fakeGen, null, (d) => displays.push(d), mockHub());
+  const r = await exec('get_note', { id: 1 });
+  assert.equal(r.ok, true);
+  assert.ok(r.preview.length <= 81);
+  assert.ok(!r.content); // 不回传全文
+  assert.equal(displays.length, 1);
+  assert.equal(displays[0].kind, 'notes');
+  assert.ok(displays[0].items[0].content.includes('SF1234567890')); // 应用侧拿全文
+  // 多条：返回匹配列表让用户确认，不出详情卡
+  const m = await exec('get_note', { query: '快递 多' });
+  assert.equal(m.matched, 2);
+  assert.ok(m.hint.includes('确认'));
+  // 未找到
+  const e = await exec('get_note', { id: 404 });
+  assert.ok(e.error);
+});
+
+test('get_file：前 200 字正文摘要 + 开关关闭时只给元数据', async () => {
+  const displays = [];
+  const exec = createExecutor(mockStore(), fakeGen, null, (d) => displays.push(d), mockHub());
+  const r = await exec('get_file', { id: 11 });
+  assert.equal(r.ok, true);
+  assert.ok(r.summary.length <= 201); // 200 字 + 省略号
+  assert.ok(r.summary.includes('血常规'));
+  assert.ok(r.summary.length < 480); // ftext 全文 490+ 字，只回传前 200 字摘要
+  assert.ok(!JSON.stringify(r).includes('后续详述'.repeat(100))); // 长正文不整体外发
+  assert.equal(displays[0].kind, 'files');
+  // 开关关闭：contentAllowed=false → summary null 且注明
+  const exec2 = createExecutor(mockStore(), fakeGen, null, null, mockHub({
+    async getFile(t) { return { file: { id: 11, name: 'a.pdf', size: 1, ftext_ok: 1, ftext: '正文' }, contentAllowed: false }; },
+  }));
+  const r2 = await exec2('get_file', { id: 11 });
+  assert.equal(r2.summary, null);
+  assert.equal(r2.content_allowed, false);
+  assert.ok(r2.hint.includes('关闭'));
+});
+
+test('update_note：转交 hub 更新并出卡片；空正文拒收', async () => {
+  const hub = mockHub();
+  let changed = 0;
+  const displays = [];
+  const exec = createExecutor(mockStore(), fakeGen, () => changed++, (d) => displays.push(d), hub);
+  const r = await exec('update_note', { id: 1, content: '更新后的内容' });
+  assert.equal(r.ok, true);
+  assert.equal(hub.calls.updated[0].content, '更新后的内容');
+  assert.equal(changed, 1);
+  assert.equal(displays[0].kind, 'notes');
+  // 多条匹配：hub 返回 multi，执行器转列表给用户确认（不产生修改卡片）
+  const m = await exec('update_note', { query: '多', content: 'x' });
+  assert.equal(m.matched, 2);
+  assert.equal(hub.calls.updated.length, 2);
+  assert.equal(hub.calls.updated[1].content, 'x');
+  assert.equal(displays.length, 1); // 多条路径不出更新卡片
+  assert.ok((await exec('update_note', { id: 1, content: '  ' })).error);
+});
+
+test('remove_tag / rename_tag：校验后透传 hub', async () => {
+  const hub = mockHub();
+  const exec = createExecutor(mockStore(), fakeGen, null, null, hub);
+  const r = await exec('remove_tag', { tag: '工作', targets: [{ type: 'notes', id: 1 }] });
+  assert.equal(r.ok, true);
+  assert.equal(hub.calls.removed[0].tag, '工作');
+  assert.ok((await exec('remove_tag', { targets: [{ type: 'notes' }] })).error); // 缺 tag
+  const r2 = await exec('rename_tag', { from: '工作', to: '职场' });
+  assert.equal(r2.renamed, 3);
+  assert.deepEqual(r2.by_type, { passwords: 1, notes: 1, files: 1 });
+  assert.ok((await exec('rename_tag', { from: 'x', to: 'x' })).error); // 同名拒收
+});
+
+test('delete_note / delete_file：只发起确认卡（pending 协议），不直接删除', async () => {
+  const displays = [];
+  const exec = createExecutor(mockStore(), fakeGen, null, (d) => displays.push(d), mockHub());
+  const r = await exec('delete_note', { id: 1 });
+  assert.equal(r.pending, true);
+  assert.equal(r.action, 'delete_note');
+  assert.ok(r.hint.includes('确认删除'));
+  // 确认卡走 onDisplay：携带对象与时间戳
+  assert.equal(displays.length, 1);
+  assert.equal(displays[0].kind, 'confirm_delete');
+  assert.equal(displays[0].items[0].type, 'notes');
+  assert.equal(displays[0].items[0].id, 1);
+  assert.ok(displays[0].items[0].ts > 0);
+  const f = await exec('delete_file', { id: 11 });
+  assert.equal(f.pending, true);
+  assert.equal(displays[1].items[0].type, 'files');
+  // delete_file 必须用 id 精确定位
+  assert.ok((await exec('delete_file', {})).error);
+  // 多条匹配不发起
+  const m = await exec('delete_note', { query: '多' });
+  assert.equal(m.matched, 2);
+  assert.equal(displays.length, 2);
+});
+
+test('服务器模式（v4.8 新工具）：便签/文件能力报仅本地，list_items 密码类型可用', async () => {
+  const err = () => ({ error: '随手记/文件仓仅本地模式支持' });
+  const serverHub = {
+    searchNotes: err, searchFiles: err, createNote: err, tagItems: err,
+    vaultOverview: err, getNote: err, getFile: err, updateNote: err, removeTag: err, renameTag: err,
+    listItems: async ({ type }) => (type === 'passwords' ? { items: [{ id: 1, owner: 'GitHub', account: 'a', password: 'p', updated_at: 'x' }], total: 1 } : err()),
+  };
+  const exec = createExecutor(mockStore(), fakeGen, null, null, serverHub);
+  assert.ok((await exec('vault_overview', {})).error.includes('仅本地'));
+  assert.ok((await exec('get_note', { id: 1 })).error.includes('仅本地'));
+  assert.ok((await exec('delete_note', { id: 1 })).error.includes('仅本地'));
+  const pw = await exec('list_items', { type: 'passwords' });
+  assert.equal(pw.total, 1);
+  assert.ok((await exec('list_items', { type: 'files' })).error.includes('仅本地'));
 });
 
 // ---------- 对话循环：脚本化假渠道 ----------

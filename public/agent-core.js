@@ -137,6 +137,145 @@
     {
       type: 'function',
       function: {
+        name: 'list_items',
+        description: '按类型列出保险箱里最近的条目（不需要关键词）。用户问「文件仓里有没有文件」「我记了哪些便签」「最近存了什么」这类没有具体关键词的盘点类问题时用这个。',
+        parameters: {
+          type: 'object',
+          properties: {
+            type: { type: 'string', description: 'passwords | notes | files' },
+            limit: { type: 'number', description: '返回条数，默认 10，最大 20' },
+            tag: { type: 'string', description: '按标签/分类过滤（可选）' },
+          },
+          required: ['type'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'vault_overview',
+        description: '保险箱总览：密码/便签/文件三类条数、文件仓占用空间、内容索引覆盖情况、高频标签。用户问「我一共存了多少东西」「保险箱里都有什么」时用这个。',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_note',
+        description: '取一条便签。用户想看某条便签的具体内容时用（用 id 或标题关键词定位）。结果只含摘要，全文由应用卡片展示。',
+        parameters: {
+          type: 'object',
+          properties: {
+            id: { type: 'number', description: '便签 id（精确）' },
+            query: { type: 'string', description: '标题/正文关键词（与 id 二选一）' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_file',
+        description: '取一个文件仓文件的详情：元数据 + 正文开头摘要（前 200 字，可在设置里关闭）。用户问「这个文件讲了什么」「XX文件是什么时候存的」时用。',
+        parameters: {
+          type: 'object',
+          properties: {
+            id: { type: 'number', description: '文件 id（精确）' },
+            query: { type: 'string', description: '文件名/备注关键词（与 id 二选一）' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'update_note',
+        description: '修改已存的便签（改正文/标题/标签）。先确认对象再改：id 精确定位，或用 query 定位（多条匹配时不会改，会返回列表让用户确认）。',
+        parameters: {
+          type: 'object',
+          properties: {
+            id: { type: 'number', description: '便签 id（精确）' },
+            query: { type: 'string', description: '定位关键词（与 id 二选一）' },
+            title: { type: 'string', description: '新标题（可选，留空保持）' },
+            content: { type: 'string', description: '新正文（可选，留空保持）' },
+            tags: { type: 'string', description: '新标签串（可选，留空保持；整体替换）' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'remove_tag',
+        description: '从密码/便签/文件上摘掉某个标签（跨类型，与 tag_items 对称）。targets 数组逐项定位：type 为 passwords|notes|files，用 id 或 query。',
+        parameters: {
+          type: 'object',
+          properties: {
+            tag: { type: 'string', description: '要摘掉的标签名' },
+            targets: {
+              type: 'array',
+              description: '对象列表',
+              items: {
+                type: 'object',
+                properties: {
+                  type: { type: 'string', description: 'passwords | notes | files' },
+                  id: { type: 'number', description: '记录 id（精确）' },
+                  query: { type: 'string', description: '关键词定位（与 id 二选一）' },
+                },
+                required: ['type'],
+              },
+            },
+          },
+          required: ['tag', 'targets'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'rename_tag',
+        description: '跨类型重命名标签（密码分类/便签标签/文件标签三侧同步改）。用户说「把 工作 改成 职场」时用。',
+        parameters: {
+          type: 'object',
+          properties: {
+            from: { type: 'string', description: '原标签名' },
+            to: { type: 'string', description: '新标签名' },
+          },
+          required: ['from', 'to'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'delete_note',
+        description: '删除一条便签。⚠️ 删除需用户确认：调用后应用会弹出确认卡片，只有用户点「确认删除」才会真的删除——必须提醒用户去点确认卡，禁止口头宣称已删除。密码条目与文件本体之外的删除不经过 AI。',
+        parameters: {
+          type: 'object',
+          properties: {
+            id: { type: 'number', description: '便签 id（精确）' },
+            query: { type: 'string', description: '定位关键词（与 id 二选一）' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'delete_file',
+        description: '删除文件仓里一个文件记录（同内容多份引用时只删该记录）。⚠️ 删除需用户确认：调用后应用会弹出确认卡片，只有用户点「确认删除」才会真的删除——必须提醒用户去点确认卡。',
+        parameters: {
+          type: 'object',
+          properties: {
+            id: { type: 'number', description: '文件 id（精确）' },
+          },
+          required: ['id'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'generate_password',
         description: '用密码本内置的强密码生成器生成密码。用户要新密码时用；生成后若用户给了所属和账户，可再调用 save_password 保存。',
         parameters: {
@@ -161,10 +300,14 @@
 3.【密码】用户要改密码 → 调用 update_password；若返回多条匹配，向用户确认是哪个账户后重试。要新密码 → 必须调用 generate_password；若同时给了所属和账户，生成后接着调 save_password 存好。
 4.【便签】用户要记一条便签 → 必须调用 create_note 落库才算存好，禁止口头宣称"记下了"。用户问"我记过什么/上周记的XX" → 调用 search_notes 查询；工具结果只含≤80字摘要，让用户在应用展示的卡片里看全文，禁止编造、补全或臆测便签正文内容。
 5.【文件】用户问"XX文件/报告放哪了" → 调用 search_files 查询（元数据+可选正文检索）；结果里的 snippet 只是命中片段摘要，让用户在应用卡片里查看文件，禁止编造文件内容。
-6.【标签】用户要给某条密码/便签/文件打标签（可跨类型多项）→ 调用 tag_items，逐项返回结果如实汇报（未找到的要说明）。
-7. 服务器存储模式下随手记/文件仓不可用（工具会返回"仅本地模式支持"），如实转述即可。
-8. 回复用简体中文，简洁友好。数据只存在用户本机，不要输出与管理无关的推广或说教。
-9. 涉及存、查、改、列、记、打标签的意图，一律先调工具再回答；纯闲聊才直接回复。`;
+6.【标签】用户要给某条密码/便签/文件打标签（可跨类型多项）→ 调用 tag_items；摘标签用 remove_tag；跨类型重命名标签用 rename_tag。逐项返回结果如实汇报（未找到的要说明）。
+7.【盘点】没有具体关键词的盘点类问题（「有没有/有多少/最近」）→ 先调 list_items 或 vault_overview，不要硬猜关键词去 search。
+8.【看详情】用户要看某条便签全文/某个文件是什么 → get_note / get_file（get_file 的 summary 只是正文前 200 字摘要）；提醒用户点应用卡片可看全文与文件详情。
+9.【改便签】update_note 前先确认定位对象；多条匹配时不改，让用户选。
+10.【删除】delete_note / delete_file 只发起删除请求：应用会弹确认卡片，必须提醒用户去点「确认删除」，在用户确认前禁止说"已删除"；密码条目不提供 AI 删除。
+11. 服务器存储模式下随手记/文件仓不可用（工具会返回"仅本地模式支持"），如实转述即可。
+12. 回复用简体中文，简洁友好。数据只存在用户本机，不要输出与管理无关的推广或说教。
+13. 涉及存、查、改、列、删、记、打标签的意图，一律先调工具再回答；纯闲聊才直接回复。`;
 
   const TOOL_LABELS = {
     search_passwords: (a) => `搜索「${a.keyword || ''}」`,
@@ -176,6 +319,15 @@
     search_files: (a) => `搜文件「${a.keyword || ''}」`,
     create_note: (a) => `记便签「${(a.title || a.content || '').slice(0, 16)}」`,
     tag_items: (a) => `打标签「${a.tag || ''}」× ${(a.targets || []).length} 项`,
+    list_items: (a) => `盘点 ${a.type || ''}${a.tag ? `（标签：${a.tag}）` : ''}`,
+    vault_overview: () => '保险箱总览',
+    get_note: (a) => `看便签 ${a.id != null ? '#' + a.id : '「' + (a.query || '') + '」'}`,
+    get_file: (a) => `看文件 ${a.id != null ? '#' + a.id : '「' + (a.query || '') + '」'}`,
+    update_note: (a) => `改便签 ${a.id != null ? '#' + a.id : '「' + (a.query || '') + '」'}`,
+    remove_tag: (a) => `摘标签「${a.tag || ''}」× ${(a.targets || []).length} 项`,
+    rename_tag: (a) => `重命名标签「${a.from || ''}」→「${a.to || ''}」`,
+    delete_note: (a) => `请求删便签 ${a.id != null ? '#' + a.id : '「' + (a.query || '') + '」'}`,
+    delete_file: (a) => `请求删文件 #${a.id ?? ''}`,
   };
 
   /** 便签正文摘要：压平空白 + 截 n 字（隐私红线：给模型的永远只是摘要） */
@@ -183,6 +335,19 @@
     const cap = n || 80;
     const s = String(content == null ? '' : content).replace(/\s+/g, ' ').trim();
     return s.length > cap ? s.slice(0, cap) + '…' : s;
+  }
+
+  /** id/query 定位命中多条时的统一返回：列表 + 让用户确认（不执行任何修改/删除） */
+  function multiHint(list, label) {
+    return {
+      matched: list.length,
+      hint: `匹配到多条${label}，请让用户确认是哪一条后用 id 重试`,
+      items: list.slice(0, 10).map((x) => ({
+        id: x.id,
+        title: x.title || x.name || '',
+        preview: x.content ? previewOf(x.content, 40) : (x.note ? previewOf(x.note, 40) : undefined),
+      })),
+    };
   }
 
   /** 正文命中片段（半径 36）：与 PassFiles.snippetOf 同语义的零依赖实现 */
@@ -358,6 +523,138 @@
         if (r && r.error) return r;
         if (onChange) onChange();
         return r;
+      }
+      /* ---------- v4.8.0 全库化：盘点 / 详情 / 改便签 / 摘标签 / 重命名 / 确认删除 ---------- */
+      if (name === 'list_items') {
+        if (!hub || typeof hub.listItems !== 'function') return { error: '盘点能力不可用' };
+        const type = String(args.type || '').toLowerCase();
+        if (['passwords', 'notes', 'files'].indexOf(type) < 0) return { error: 'type 须为 passwords / notes / files' };
+        const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 20);
+        const r = await hub.listItems({ type, limit, tag: String(args.tag || '').trim() });
+        if (r && r.error) return r;
+        const items = (Array.isArray(r.items) ? r.items : []).slice(0, limit);
+        if (!items.length) return { type, total: 0, items: [], hint: '没有符合条件的条目' };
+        if (onDisplay) onDisplay({ name, kind: type === 'notes' ? 'notes' : (type === 'files' ? 'files' : undefined), items });
+        let out;
+        if (type === 'passwords') {
+          out = items.map((x) => ({
+            id: x.id, owner: x.owner, account: x.account, password: MASK,
+            has_totp: !!x.totp_secret, category: x.category, updated_at: x.updated_at,
+          }));
+        } else if (type === 'notes') {
+          out = items.map((n) => ({
+            id: n.id, title: n.title || '', preview: previewOf(n.content, 80), // ≤80字摘要红线
+            tags: n.tags || '', source: n.source || '', updated_at: n.updated_at || '',
+          }));
+        } else {
+          out = items.map((f) => ({
+            id: f.id, name: f.name || '', size: f.size || 0,
+            tags: f.tags || '', source: f.source || '', created_at: f.created_at || '',
+          }));
+        }
+        return {
+          type, total: (r && typeof r.total === 'number') ? r.total : items.length, items: out,
+          hint: type === 'passwords' ? 'password 已打码：真实密码由应用卡片展示给用户' : '详情由应用卡片展示给用户',
+        };
+      }
+      if (name === 'vault_overview') {
+        if (!hub || typeof hub.vaultOverview !== 'function') return { error: '盘点能力不可用' };
+        const r = await hub.vaultOverview();
+        if (r && r.error) return r;
+        return { ...r, hint: '以上为计数/元数据总览，不含正文内容' };
+      }
+      if (name === 'get_note') {
+        if (!hub || typeof hub.getNote !== 'function') return { error: '便签能力不可用' };
+        const r = await hub.getNote({ id: args.id, query: args.query });
+        if (r && r.error) return r;
+        if (r.multi) return multiHint(r.multi, '便签');
+        const n = r.note;
+        if (onDisplay) onDisplay({ name, kind: 'notes', items: [n] });
+        return {
+          ok: true, id: n.id, title: n.title || '',
+          preview: previewOf(n.content, 80), // 隐私红线：≤80字摘要，全文走应用卡片
+          tags: n.tags || '', source: n.source || '', updated_at: n.updated_at || '',
+          hint: 'preview 为≤80字摘要；全文已由应用卡片展示给用户，禁止编造或补全便签内容',
+        };
+      }
+      if (name === 'get_file') {
+        if (!hub || typeof hub.getFile !== 'function') return { error: '文件仓能力不可用' };
+        const r = await hub.getFile({ id: args.id, query: args.query });
+        if (r && r.error) return r;
+        if (r.multi) return multiHint(r.multi, '文件');
+        const f = r.file;
+        if (onDisplay) onDisplay({ name, kind: 'files', items: [f] });
+        const allowed = !(r && r.contentAllowed === false);
+        return {
+          ok: true, id: f.id, name: f.name || '', size: f.size || 0,
+          tags: f.tags || '', source: f.source || '', created_at: f.created_at || '',
+          ftext_indexed: !!f.ftext_ok,
+          summary: allowed ? previewOf(f.ftext, 200) : null, // 前 200 字摘要；关闭开关时不给正文
+          content_allowed: allowed,
+          hint: allowed
+            ? 'summary 为正文前 200 字摘要；完整文件请让用户在应用卡片中查看，禁止编造文件内容'
+            : '用户已关闭「允许 AI 检索文件正文」：本次仅返回元数据，未读取文件内容',
+        };
+      }
+      if (name === 'update_note') {
+        if (!hub || typeof hub.updateNote !== 'function') return { error: '便签能力不可用' };
+        if (args.content !== undefined && !String(args.content).trim()) return { error: '新正文(content)不能为空' };
+        const r = await hub.updateNote({
+          id: args.id, query: args.query,
+          title: args.title === undefined ? undefined : String(args.title),
+          content: args.content === undefined ? undefined : String(args.content),
+          tags: args.tags === undefined ? undefined : String(args.tags),
+        });
+        if (r && r.error) return r;
+        if (r.multi) return multiHint(r.multi, '便签');
+        if (onChange) onChange();
+        if (onDisplay) onDisplay({ name, kind: 'notes', items: [r.note] });
+        return { ok: true, id: r.note.id, title: r.note.title || '' };
+      }
+      if (name === 'remove_tag') {
+        if (!hub || typeof hub.removeTag !== 'function') return { error: '标签能力不可用' };
+        const tag = String(args.tag || '').trim();
+        if (!tag) return { error: '标签(tag)不能为空' };
+        const targets = Array.isArray(args.targets) ? args.targets : [];
+        if (!targets.length) return { error: 'targets 不能为空：[{type: passwords|notes|files, id 或 query}]' };
+        const r = await hub.removeTag(tag, targets);
+        if (r && r.error) return r;
+        if (onChange) onChange();
+        return r;
+      }
+      if (name === 'rename_tag') {
+        if (!hub || typeof hub.renameTag !== 'function') return { error: '标签能力不可用' };
+        const from = String(args.from || '').trim();
+        const to = String(args.to || '').trim();
+        if (!from || !to) return { error: '原标签(from)与新标签(to)都不能为空' };
+        if (from === to) return { error: '新标签与原标签相同' };
+        const r = await hub.renameTag(from, to);
+        if (r && r.error) return r;
+        if (onChange) onChange();
+        return r;
+      }
+      if (name === 'delete_note' || name === 'delete_file') {
+        // 确认卡机制：AI 只能发起——onDisplay 弹应用内确认卡，用户点「确认删除」才真删
+        const isNote = name === 'delete_note';
+        const getter = isNote ? (hub && hub.getNote) : (hub && hub.getFile);
+        if (typeof getter !== 'function') return { error: (isNote ? '便签' : '文件仓') + '能力不可用' };
+        if (!isNote && args.id == null) return { error: 'delete_file 需要 id 精确定位（可先用 search_files / list_items 查 id）' };
+        const r = await getter({ id: args.id, query: args.query });
+        if (r && r.error) return r;
+        if (r.multi) return multiHint(r.multi, isNote ? '便签' : '文件');
+        const obj = r.note || r.file;
+        const title = isNote ? (obj.title || previewOf(obj.content, 30)) : obj.name;
+        if (onDisplay) {
+          onDisplay({
+            name, kind: 'confirm_delete',
+            items: [{ type: isNote ? 'notes' : 'files', id: obj.id, title, ts: Date.now() }],
+          });
+        }
+        return {
+          pending: true, action: name,
+          item: { id: obj.id, title },
+          hint: '已生成待删除确认卡：等用户在应用里点「确认删除」后才会真正删除；用户确认前禁止宣称已删除',
+        };
       }
       if (name === 'generate_password') {
         const pw = passGen.generate({
