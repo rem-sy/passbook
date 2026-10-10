@@ -1,15 +1,25 @@
 # 密码本 Roadmap（v4.7+ 一体化时代）
 
 > 维护约定：每完成一个版本更新此文件并归档旧版到 docs/archive/。
-> 当前已发布：**v4.7.0**（v4.3 随手记 → v4.4 文件仓 → v4.5 内容检索 → v4.6 跨类型分类与导入导出修复链 → v4.7 保险箱一体化）。
-> 本版调研：[RESEARCH-v4.7-p0.md](RESEARCH-v4.7-p0.md)；开工提示词：[NEXT-TASK.md](NEXT-TASK.md)。
+> 当前已发布：**v4.8.0**（v4.3 随手记 → v4.4 文件仓 → v4.5 内容检索 → v4.6 跨类型分类与导入导出修复链 → v4.7 保险箱一体化 → v4.8 AI 助手全库化）。
+> v4.7 调研：[RESEARCH-v4.7-p0.md](RESEARCH-v4.7-p0.md)。
 
 ## 版本规范
 - 功能 +0.1.0，补丁 +0.0.1；里程碑经用户确认 → GitHub Release
 - 版本 4 处同步：package.json / src-tauri/tauri.conf.json / src-tauri/Cargo.toml / gen/android/app/tauri.properties（versionCode = M×10000+m×100+p；**versionName 也在该文件**，两行都要改）
 - sw.js CACHE_NAME 每版 +1；产物 ASCII 命名；-preset 预置版仅本地永不上传
 
-## v4.7.0（已完成，待用户验收）：保险箱一体化（P0 三项）
+## v4.8.0（已完成，待用户验收）：AI 助手全库化
+
+**目标：AI 从「带关键词检索」扩为「无关键词盘点 + 详情 + 管理」，删除走确认卡。**
+
+- 盘点：`list_items`（type+limit+tag 过滤，密码打码/便签摘要/文件元数据；服务器模式 passwords 可用）；`vault_overview`（三类条数/文件仓占用/索引覆盖率/top 标签/最近更新）
+- 详情：`get_note`（≤80 字摘要+全文卡片）、`get_file`（元数据+正文前 200 字摘要，受 agentFileContent 开关控制）；id/query 定位，多条命中只列出不猜
+- 管理：`update_note`（多条不写先确认）、`remove_tag`（与 tag_items 对称）、`rename_tag`（三侧同步重命名）
+- 删除确认卡：`delete_note`/`delete_file` 只能发起，应用内红色确认卡 5 分钟内点「确认删除」才真删（文件走引用计数）；AI 无单删权，密码不给删
+- 工具总数 9→18；SYSTEM_PROMPT 13 条规则；全套测试无回归
+
+## v4.7.0（已完成）：保险箱一体化（P0 三项）
 
 **目标：AI 助手从「密码助理」长成「保险箱助理」；文件仓数据自体检；跨设备迁移密钥免折腾。**
 
