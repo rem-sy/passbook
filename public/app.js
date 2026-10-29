@@ -4661,7 +4661,7 @@ function openDesktopUpdateModal(info) {
     } catch (e) {
       go.disabled = false;
       go.textContent = '重试下载';
-      toast('更新失败：' + e.message, true);
+      toast('更新失败：' + ((e && e.message) || String(e)), true);
     } finally {
       try { un && un(); } catch { /* 忽略 */ }
     }
@@ -4716,7 +4716,7 @@ function openApkUpdateModal(rel) {
     } catch (e) {
       go.disabled = false;
       go.textContent = '重试下载';
-      toast('下载失败：' + e.message + '（私有仓请在设置里填 GitHub Token）', true);
+      toast('下载失败：' + ((e && e.message) || String(e)) + '（私有仓请在设置里填 GitHub Token）', true);
     } finally {
       try { un && un(); } catch { /* 忽略 */ }
     }
@@ -4738,7 +4738,8 @@ document.addEventListener('click', (e) => {
       });
       if (resEl) resEl.textContent = r === false ? '已是最新版本' : '发现新版本，已弹出更新窗口';
     } catch (err) {
-      if (resEl) resEl.textContent = '失败：' + err.message;
+      const msg = (err && err.message) || String(err);
+      if (resEl) resEl.textContent = '失败：' + msg + (/404|fetch|Token|release/i.test(msg) ? '（私有仓需在上方填 GitHub Token）' : '');
     } finally {
       btn.disabled = false;
     }
