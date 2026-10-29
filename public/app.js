@@ -44,7 +44,6 @@ const DEFAULT_SETTINGS = {
   quickNoteShortcut: 'Ctrl+Alt+N', // v4.3.0：桌面随手记全局快捷键
   agentFileContent: true, // v4.7.0：允许 AI 检索文件正文（关闭后 search_files 仅元数据命中）
   autoUpdate: true, // v4.9.0：启动时自动检查更新
-  ghToken: '', // v4.9.0：GitHub Token（私有仓期间必填，转 public 后可清空）
   updateProxy: '', // v4.9.0：更新请求代理（空=直连；网络失败自动回退 127.0.0.1:7890）
 };
 
@@ -3246,7 +3245,6 @@ function openSettingsModal() {
         <div class="chk-group" style="padding-top:2px">
           <label><input type="checkbox" id="set-auto-update" ${s.autoUpdate !== false ? 'checked' : ''} /> 启动时自动检查更新（手机端 24 小时内至多一次）</label>
         </div>
-        <input id="set-gh-token" type="password" placeholder="GitHub Token（仓库为私有时必填，contents 读权限；公开后可清空）" value="${escapeHtml(s.ghToken || '')}" autocomplete="off" style="margin-top:6px" />
         <input id="set-update-proxy" type="text" placeholder="更新代理（可选，如 http://127.0.0.1:7890；留空直连，失败自动回退本机 7890）" value="${escapeHtml(s.updateProxy || '')}" style="margin-top:6px" />
         <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap">
           <button class="btn" id="btn-check-update" type="button">立即检查更新</button>
@@ -3483,8 +3481,6 @@ function openSettingsModal() {
     // v4.9.0：自动更新设置
     const auEl = $('#set-auto-update');
     if (auEl) ns.autoUpdate = auEl.checked;
-    const gtEl = $('#set-gh-token');
-    if (gtEl) ns.ghToken = gtEl.value.trim();
     const upEl = $('#set-update-proxy');
     if (upEl) ns.updateProxy = upEl.value.trim();
     const qnEl = $('#set-quicknote-key'); // v4.3.0：随手记全局快捷键（桌面）
@@ -4562,9 +4558,9 @@ let APP_VERSION = '';
 const UPDATE_LAST_LS = 'passbook-update-last';
 
 function updateCfg(override) {
-  if (override) return { ghToken: override.token || '', updateProxy: override.proxy || '' };
+  if (override) return { updateProxy: override.proxy || '' };
   const s = loadSettings();
-  return { ghToken: s.ghToken || '', updateProxy: s.updateProxy || '' };
+  return { updateProxy: s.updateProxy || '' };
 }
 
 /** Tauri 事件监听小助手（更新进度） */
@@ -4584,15 +4580,15 @@ async function checkForUpdate(manual, override) {
     localStorage.setItem(UPDATE_LAST_LS, String(Date.now()));
   } catch { /* 忽略 */ }
   if (!IS_ANDROID) {
-    const info = await tauriInvoke('update_check', { token: cfg.ghToken || null, proxy: cfg.updateProxy || null });
+    const info = await tauriInvoke('update_check', { proxy: cfg.updateProxy || null });
     if (info) { openDesktopUpdateModal(info); return true; }
     if (manual) toast('已是最新版本');
     return false;
   }
   // Android：GitHub API 查 Release，比较 tag 与 versionName
-  const rel = await tauriInvoke('update_query_latest', { token: cfg.ghToken || null, proxy: cfg.updateProxy || null });
+  const rel = await tauriInvoke('update_query_latest', { proxy: cfg.updateProxy || null });
   if (!rel) {
-    if (manual) toast('未查询到 Release（仓库暂无发布，或私有仓未填 Token）');
+    if (manual) toast('未查询到 Release（仓库暂无发布）');
     return false;
   }
   if (!PassUpdater.isNewer(rel.tag, APP_VERSION)) {
@@ -4701,7 +4697,7 @@ function openApkUpdateModal(rel) {
     const cfg = updateCfg();
     const un = await listenTauriOnce('update-progress', (p) => prog.set(p.downloaded, p.total));
     try {
-      const path = await tauriInvoke('update_download_apk', { url: rel.apk_url, token: cfg.ghToken || null, proxy: cfg.updateProxy || null });
+      const path = await tauriInvoke('update_download_apk', { url: rel.apk_url, proxy: cfg.updateProxy || null });
       go.textContent = '安装中…';
       prog.label.textContent = '下载完成，正在拉起系统安装器…';
       if (window.__passbook_saf && typeof window.__passbook_saf.open === 'function') {
@@ -4716,7 +4712,7 @@ function openApkUpdateModal(rel) {
     } catch (e) {
       go.disabled = false;
       go.textContent = '重试下载';
-      toast('下载失败：' + ((e && e.message) || String(e)) + '（私有仓请在设置里填 GitHub Token）', true);
+      toast('下载失败：' + ((e && e.message) || String(e)), true);
     } finally {
       try { un && un(); } catch { /* 忽略 */ }
     }
@@ -4733,13 +4729,12 @@ document.addEventListener('click', (e) => {
     if (resEl) resEl.textContent = '检查中…';
     try {
       const r = await checkForUpdate(true, {
-        token: (document.querySelector('#set-gh-token') || {}).value || '',
         proxy: (document.querySelector('#set-update-proxy') || {}).value || '',
       });
       if (resEl) resEl.textContent = r === false ? '已是最新版本' : '发现新版本，已弹出更新窗口';
     } catch (err) {
       const msg = (err && err.message) || String(err);
-      if (resEl) resEl.textContent = '失败：' + msg + (/404|fetch|Token|release/i.test(msg) ? '（私有仓需在上方填 GitHub Token）' : '');
+      if (resEl) resEl.textContent = '失败：' + msg;
     } finally {
       btn.disabled = false;
     }
@@ -5928,7 +5923,7 @@ function openGuideModal() {
         <p>· <b>数据库加密</b>：AES-256 全库加密（含导出的 .db）；<b>文件仓本体同样始终加密</b>（密钥从数据库密钥派生，未启用整库加密时用本机固定密钥），开启/关闭加密或更换密钥时文件本体自动重加密。<b>请务必备份密钥</b>（设置 → 数据库加密 → 备份密钥）。</p>
         <p>· <b>存储模式 / 数据库位置</b>：桌面版默认本地文件，可指向网盘文件夹多机共用。随手记与文件仓为本地模式功能。</p>
         <p>· <b>AI 助理</b>：填接口地址 / 模型名 / API Key（OpenAI 兼容渠道均可）；「允许 AI 检索文件正文」开关（默认开，仅发送命中片段摘要）；<b>随手记快捷键</b>（默认 Ctrl+Alt+N）。</p>
-        <p>· <b>自动更新</b>：启动时自动检查 GitHub Release（手机端 24 小时至多一次）；电脑端下载验签后静默安装并自动重启，手机端下载 APK 拉起系统安装器。仓库私有时需填 GitHub Token（转公开后可清空）；可配代理。</p>
+        <p>· <b>自动更新</b>：启动时自动检查 GitHub Release（手机端 24 小时至多一次）；电脑端下载验签后静默安装并自动重启，手机端下载 APK 拉起系统安装器。更新走公开的 GitHub Release；可配代理。</p>
         <p>· <b>启动锁 PIN</b> 与 <b>自动锁定</b>：闲置可锁定（默认 5 分钟），复制密码后剪贴板自动清除；深色主题跟随系统或手动固定。电脑（Windows Hello）与手机（指纹/面容）可开启<b>生物识别解锁</b>。</p>`)}
       ${guideSec('', '⑨ 多端同步（手机 ↔ 电脑）', `
         <p>每台设备各存一份完整数据库（桌面是本地 <b>.db</b> 文件，手机是应用内存储），通过<b>导出 .db → 网盘/Syncthing → 另一端导入</b>合并；导入时选<b>「合并（跳过重复）」</b>即可汇总。导出的 .db 不含文件仓本体——文件仓单独用「导出 → 文件仓导出（zip：加密本体+清单）」。</p>
