@@ -801,6 +801,322 @@ async fn agent_http_stream(
 
 // mobile 入口宏：生成 Android 端 Rust.create() 等所需的 JNI 符号，缺失会导致启动即闪退
 //（windows_subsystem 已在 main.rs 以 crate 级别设置，不需要在此重复）
+
+/* ---------------- v4.9.0 自动更新 ----------------
+ * 桌面：tauri-plugin-updater（端点 GitHub Releases latest.json，passive 安装，安装器自动重启）
+ * Android：GitHub API 查最新 Release → 流式下载 APK 到 cache/filehub_tmp → 原生桥 ACTION_VIEW 安装
+ * 私有仓期间：token 以 Authorization 头随检查与下载请求（updater 构建器级 header 两处同生效）
+ * 代理策略：先按设置（默认直连），网络层失败自动回退 http://127.0.0.1:7890 重试一次
+ */
+
+#[derive(serde::Serialize)]
+struct UpdateInfo {
+    version: String,
+    notes: Option<String>,
+    date: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct ReleaseInfo {
+    tag: String,
+    name: Option<String>,
+    notes: Option<String>,
+    apk_url: Option<String>,
+    apk_size: u64,
+    html_url: String,
+}
+
+/// 暂存待安装更新（update_check 成功后由 update_download_install 消费）
+struct PendingUpdate(std::sync::Mutex<Option<tauri_plugin_updater::Update>>);
+
+/// 当前应用版本（前端与 Release tag 比较用）
+#[tauri::command]
+fn app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// 桌面：构建 Updater（token 头 / 代理 / 超时）
+#[cfg(desktop)]
+fn build_updater(
+    app: &AppHandle,
+    token: &Option<String>,
+    proxy: Option<&str>,
+) -> Result<tauri_plugin_updater::Updater, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let mut b = app.updater_builder().timeout(std::time::Duration::from_secs(30));
+    if let Some(t) = token.as_deref() {
+        let t = t.trim();
+        if !t.is_empty() {
+            b = b
+                .header("Authorization", format!("Bearer {t}"))
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    if let Some(p) = proxy.map(str::trim).filter(|s| !s.is_empty()) {
+        let url: tauri::Url = p.parse().map_err(|e| format!("代理地址无效: {e}"))?;
+        b = b.proxy(url);
+    }
+    b.build().map_err(|e| e.to_string())
+}
+
+#[cfg(desktop)]
+async fn check_with(
+    app: &AppHandle,
+    token: &Option<String>,
+    proxy: Option<String>,
+) -> Result<Option<tauri_plugin_updater::Update>, String> {
+    let updater = build_updater(app, token, proxy.as_deref())?;
+    updater.check().await.map_err(|e| e.to_string())
+}
+
+/// 桌面：检查更新（updater 插件全链路：latest.json + 验签比较）；None = 已是最新
+#[cfg(desktop)]
+#[tauri::command]
+async fn update_check(
+    app: AppHandle,
+    state: tauri::State<'_, PendingUpdate>,
+    token: Option<String>,
+    proxy: Option<String>,
+) -> Result<Option<UpdateInfo>, String> {
+    let res = check_with(&app, &token, proxy.clone()).await;
+    let update = match res {
+        Ok(u) => u,
+        Err(e) => {
+            // 网络层失败（直连不通）→ 回退本机代理再试一次；其余错误（如 404/验签）原样报
+            let networkish = e.contains("timed out") || e.contains("request") || e.contains("dns") || e.contains("connect");
+            if !networkish || proxy.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some() {
+                return Err(e);
+            }
+            check_with(&app, &token, Some("http://127.0.0.1:7890".into()))
+                .await
+                .map_err(|_| e)?
+        }
+    };
+    match update {
+        Some(u) => {
+            let info = UpdateInfo {
+                version: u.version.clone(),
+                notes: u.body.clone(),
+                date: u.date.map(|d| d.to_string()),
+            };
+            *state.0.lock().unwrap() = Some(u);
+            Ok(Some(info))
+        }
+        None => {
+            *state.0.lock().unwrap() = None;
+            Ok(None)
+        }
+    }
+}
+
+/// 桌面：下载并安装（passive 模式；NSIS 安装完成后自动重启应用，本命令正常不返回）
+#[cfg(desktop)]
+#[tauri::command]
+async fn update_download_install(
+    app: AppHandle,
+    state: tauri::State<'_, PendingUpdate>,
+) -> Result<(), String> {
+    // 短锁取出（MutexGuard 不能跨 await）
+    let update = {
+        let mut guard = state.0.lock().unwrap();
+        guard.take().ok_or("没有待安装的更新（请先检查更新）")?
+    };
+    let app2 = app.clone();
+    update
+        .download_and_install(
+            |downloaded, total| {
+                let _ = app2.emit("update-progress", serde_json::json!({ "downloaded": downloaded, "total": total }));
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+async fn update_check(
+    _state: tauri::State<'_, PendingUpdate>,
+    _token: Option<String>,
+    _proxy: Option<String>,
+) -> Result<Option<UpdateInfo>, String> {
+    Err("桌面版才支持自动安装更新，手机请用应用内下载".into())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+async fn update_download_install(_state: tauri::State<'_, PendingUpdate>) -> Result<(), String> {
+    Err("桌面版才支持自动安装更新".into())
+}
+
+/// 双平台：GitHub API 查最新 Release（Android 主用；404 = 仓库无 Release 或无权限）
+#[tauri::command]
+async fn update_query_latest(
+    token: Option<String>,
+    proxy: Option<String>,
+) -> Result<Option<ReleaseInfo>, String> {
+    async fn query(token: &Option<String>, proxy: Option<String>) -> Result<Option<ReleaseInfo>, String> {
+        let mut b = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(20))
+            .user_agent("passbook-updater");
+        if let Some(p) = proxy.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            b = b.proxy(reqwest::Proxy::all(p).map_err(|e| e.to_string())?);
+        }
+        let client = b.build().map_err(|e| e.to_string())?;
+        let mut req = client
+            .get("https://api.github.com/repos/rem-sy/passbook/releases/latest")
+            .header("Accept", "application/vnd.github+json");
+        if let Some(t) = token.as_deref() {
+            let t = t.trim();
+            if !t.is_empty() {
+                req = req.header("Authorization", format!("Bearer {t}"));
+            }
+        }
+        let resp = req.send().await.map_err(|e| e.to_string())?;
+        let status = resp.status().as_u16();
+        let text = resp.text().await.map_err(|e| e.to_string())?;
+        if status == 404 {
+            return Ok(None); // 无 Release（或 token 无权看私有仓，与不存在同表现）
+        }
+        if status == 401 {
+            return Err("GitHub Token 无效（401），请检查设置里的 Token".into());
+        }
+        if status == 403 {
+            return Err("GitHub API 限流（403），稍后再试".into());
+        }
+        if status >= 400 {
+            return Err(format!("GitHub API 返回 {status}"));
+        }
+        let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("Release 响应解析失败: {e}"))?;
+        let tag = v["tag_name"].as_str().unwrap_or_default().trim().to_string();
+        if tag.is_empty() {
+            return Ok(None);
+        }
+        let mut apk_url = None;
+        let mut apk_size = 0u64;
+        if let Some(assets) = v["assets"].as_array() {
+            for a in assets {
+                let n = a["name"].as_str().unwrap_or_default();
+                // 正式 APK（排除预置版）；预置版绝不上传 Release，双保险
+                if n.starts_with("Passbook-Android-") && n.ends_with("-arm64.apk") && !n.contains("preset") {
+                    apk_url = a["browser_download_url"].as_str().map(String::from);
+                    apk_size = a["size"].as_u64().unwrap_or(0);
+                    break;
+                }
+            }
+        }
+        Ok(Some(ReleaseInfo {
+            tag,
+            name: v["name"].as_str().map(String::from),
+            notes: v["body"].as_str().map(String::from),
+            apk_url,
+            apk_size,
+            html_url: v["html_url"].as_str().unwrap_or_default().to_string(),
+        }))
+    }
+    match query(&token, proxy.clone()).await {
+        Ok(x) => Ok(x),
+        Err(e) => {
+            // 网络层失败且未自配代理 → 回退本机代理
+            let networkish = e.contains("timed out") || e.contains("request") || e.contains("dns") || e.contains("connect");
+            if !networkish || proxy.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some() {
+                return Err(e);
+            }
+            query(&token, Some("http://127.0.0.1:7890".into())).await.map_err(|_| e)
+        }
+    }
+}
+
+/// 双平台：流式下载 APK 到 <cache>/filehub_tmp/passbook-update.apk（FileProvider 覆盖路径），
+/// 进度事件 update-progress {downloaded,total}；仅接受本仓 Release 资产地址
+#[tauri::command]
+async fn update_download_apk(
+    app: AppHandle,
+    url: String,
+    token: Option<String>,
+    proxy: Option<String>,
+) -> Result<String, String> {
+    if !url.starts_with("https://github.com/rem-sy/passbook/releases/") {
+        return Err("仅允许下载本仓库 Release 资产".into());
+    }
+    let dir = app
+        .path()
+        .cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("filehub_tmp");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let dest = dir.join("passbook-update.apk");
+
+    async fn dl(
+        app: &AppHandle,
+        url: &str,
+        dest: &std::path::Path,
+        token: &Option<String>,
+        proxy: Option<String>,
+    ) -> Result<u64, String> {
+        use std::io::Write;
+        let mut b = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(600))
+            .user_agent("passbook-updater");
+        if let Some(p) = proxy.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            b = b.proxy(reqwest::Proxy::all(p).map_err(|e| e.to_string())?);
+        }
+        let client = b.build().map_err(|e| e.to_string())?;
+        let mut req = client.get(url);
+        if let Some(t) = token.as_deref() {
+            let t = t.trim();
+            if !t.is_empty() {
+                req = req.header("Authorization", format!("Bearer {t}"));
+            }
+        }
+        let resp = req.send().await.map_err(|e| e.to_string())?;
+        let status = resp.status().as_u16();
+        if status == 404 {
+            return Err("下载地址 404（私有仓需填 Token，或资产已删除）".into());
+        }
+        if status >= 400 {
+            return Err(format!("下载失败（HTTP {status}）"));
+        }
+        let total = resp.content_length();
+        let mut file = fs::File::create(dest).map_err(|e| e.to_string())?;
+        let mut stream = resp.bytes_stream();
+        let mut done: u64 = 0;
+        while let Some(chunk) = stream.next().await {
+            let bytes = chunk.map_err(|e| e.to_string())?;
+            file.write_all(&bytes).map_err(|e| e.to_string())?;
+            done += bytes.len() as u64;
+            let _ = app.emit("update-progress", serde_json::json!({ "downloaded": done, "total": total }));
+        }
+        Ok(done)
+    }
+
+    match dl(&app, &url, &dest, &token, proxy.clone()).await {
+        Ok(n) => {
+            if n == 0 {
+                return Err("下载内容为空".into());
+            }
+            Ok(dest.to_string_lossy().to_string())
+        }
+        Err(e) => {
+            let networkish = e.contains("timed out") || e.contains("request") || e.contains("dns") || e.contains("connect");
+            if !networkish || proxy.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some() {
+                return Err(e);
+            }
+            dl(&app, &url, &dest, &token, Some("http://127.0.0.1:7890".into()))
+                .await
+                .map_err(|_| e)?;
+            Ok(dest.to_string_lossy().to_string())
+        }
+    }
+}
+
+/// 重启应用（桌面更新安装后的手动重启入口；Windows passive 安装通常自动重启，此命令兜底）
+#[tauri::command]
+fn update_restart(app: AppHandle) {
+    app.restart();
+}
+
 /* ---------------- 生物识别解锁（v2.6.0） ----------------
  * 桌面：Windows Hello（UserConsentVerifier，指纹/面容/系统 PIN）
  * Android：不经 Rust——前端直接调 RustWebView 注入的 __passbook_bio JS 桥
@@ -948,8 +1264,19 @@ pub fn run() {
             read_file_bytes_b64,
             filehub_temp_write_b64,
             shell_open,
-            export_bytes_b64
+            export_bytes_b64,
+            app_version,
+            update_check,
+            update_download_install,
+            update_query_latest,
+            update_download_apk,
+            update_restart
         ]);
+
+    // v4.9.0 自动更新：updater 插件仅桌面；PendingUpdate 状态全平台托管（非桌面命令为 stub）
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    let builder = builder.manage(PendingUpdate(std::sync::Mutex::new(None)));
 
     // v4.3.0：桌面随手记——全局快捷键 + 剪贴板读取（仅 Windows 桌面构建）
     #[cfg(windows)]
