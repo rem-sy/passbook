@@ -18,10 +18,14 @@ $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
 $env:CARGO_NET_OFFLINE = 'true'
 
 # v4.9.0：更新签名密钥（tauri signer generate 产物；与 jks 同目录，绝不入库）
+# 坑：密钥必须带密码——PS5.1 给 env 赋空串等于删除变量，空密码密钥会令 CLI
+# 交互式等密码输入、在 cmd 重定向下永久挂起（踩过两次：BOM 丢失 + 空密码）
 $updaterKey = 'D:\hobby\产物\密码本\signing\updater.key'
+$updaterKeyPw = 'passbook2024'
 if (Test-Path $updaterKey) {
   $env:TAURI_SIGNING_PRIVATE_KEY = [System.IO.File]::ReadAllText($updaterKey)
-  $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ''
+  $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $updaterKeyPw
+  Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY_PATH -ErrorAction SilentlyContinue
   Write-Host "更新签名密钥已加载（将产出 .sig）"
 } else {
   Write-Warning '未找到 updater.key：本次构建不产出更新签名（latest.json 将跳过）'

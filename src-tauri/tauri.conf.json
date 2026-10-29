@@ -42,7 +42,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNDNzc1MjAwMzY0RjQ5NUEKUldSYVNVODJBRkozUEJITnUyTGtuaGQzL2tkNHh1b05xWTNvQzJUek0yd1pvOElyVEZhUkgyeDcK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE4RTA5OEQ4Q0FCRDc2MUIKUldRYmRyM0sySmpnR0N1WE13eEsxY1JGNHAwc2toajEzMUpOQ2NXWDVMdzhWTGkvaWl6WFpvaXEK",
       "endpoints": [
         "https://github.com/rem-sy/passbook/releases/latest/download/latest.json"
       ],
