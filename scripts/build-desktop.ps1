@@ -1,4 +1,4 @@
-# 密码本桌面版双版本构建：正式版（无渠道，无后缀，对外发布）+ 预置渠道版（-preset，仅本机）
+﻿# 密码本桌面版双版本构建：正式版（无渠道，无后缀，对外发布）+ 预置渠道版（-preset，仅本机）
 # 用法：powershell -ExecutionPolicy Bypass -File scripts\build-desktop.ps1 [-SkipPreset] [-SkipClean]
 # 预置渠道来自 public\agent-config.local.js（不入库，本机文件）；
 # 正式版构建时该文件被临时移出，产物不带任何渠道；预置版绝不上传 GitHub。
