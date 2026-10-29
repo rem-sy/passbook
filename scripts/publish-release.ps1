@@ -59,8 +59,10 @@ try {
   Write-Host "Release 已存在，复用 id=$($rel.id)"
 }
 
-# 2) 传资产（重名先删：同 tag 重发场景幂等）
-foreach ($a in $assets) {
+# 2) 传资产（重名先删：同 tag 重发场景幂等）。latest.json 最后传——
+#    其 platforms.url 必须指向 setup 资产的 assets API 地址（私有仓直链 404，公开后同样可用）
+$assetsNoLatest = @($assets | Where-Object { $_.Name -ne 'latest.json' })
+foreach ($a in $assetsNoLatest) {
   $exist = @($rel.assets | Where-Object { $_.name -eq $a.Name })
   foreach ($e in $exist) {
     & $irm Delete "https://api.github.com/repos/$repo/releases/assets/$($e.id)" | Out-Null
@@ -70,4 +72,29 @@ foreach ($a in $assets) {
   & $irm Post $up $null $a.Path $a.Type | Out-Null
   Write-Host ("  已上传 {0}（{1:N1} MB）" -f $a.Name, ((Get-Item $a.Path).Length / 1MB))
 }
+
+# 3) 生成并上传 latest.json（签名读构建产物 .sig；URL 用刚上传 setup 的资产 id）
+$sigPath = "$prod\Passbook_${ver}_x64-setup.exe.sig"
+if (-not (Test-Path $sigPath)) { throw "缺少签名文件 $sigPath（build-desktop 正式版应产出）" }
+$relNow = & $irm Get "https://api.github.com/repos/$repo/releases/tags/$Tag"
+$setupAsset = $relNow.assets | Where-Object { $_.name -eq "Passbook_${ver}_x64-setup.exe" } | Select-Object -First 1
+if (-not $setupAsset) { throw '未找到 setup 资产（刚上传失败？）' }
+$setupApiUrl = "https://api.github.com/repos/$repo/releases/assets/$($setupAsset.id)"
+$sig = ([System.IO.File]::ReadAllText($sigPath)).Trim()
+$latestObj = @{
+  version = $ver
+  notes = ''
+  pub_date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+  platforms = @{ 'windows-x86_64' = @{ signature = $sig; url = $setupApiUrl } }
+}
+$latestFile = Join-Path $env:TEMP "passbook-latest-$ver.json"
+[System.IO.File]::WriteAllText($latestFile, ($latestObj | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
+$existLatest = @($relNow.assets | Where-Object { $_.name -eq 'latest.json' })
+foreach ($e in $existLatest) {
+  & $irm Delete "https://api.github.com/repos/$repo/releases/assets/$($e.id)" | Out-Null
+  Write-Host '  删旧资产 latest.json'
+}
+$upLatest = "https://uploads.github.com/repos/$repo/releases/$($rel.id)/assets?name=latest.json"
+& $irm Post $upLatest $null $latestFile 'application/json' | Out-Null
+Write-Host "  已上传 latest.json（setup 资产 id=$($setupAsset.id)）"
 Write-Host "完成：https://github.com/$repo/releases/tag/$Tag"

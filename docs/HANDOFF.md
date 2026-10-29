@@ -11,11 +11,12 @@
 - token：`$env:TEMP\gh-token.txt`；curl 用 `$env:SystemRoot\System32\curl.exe`
 
 ## 当前状态（交接时点）
-- HEAD = tag **v4.8.0**（AI 助手全库化：盘点/详情/改便签/标签管理/确认删除九新工具，工具总数 18）；Release 停在 v4.1.0（后续版本待用户整体确认后择机发）
-- 版本演进：v4.3 随手记+三标签页 → v4.4.0 文件仓（四通道收件/加密分桶/预览矩阵/zip 导出）→ v4.5.0 内容检索（ftext 抽取索引）→ v4.6.0 跨类型分类（侧栏三页通用/统一管理）→ v4.6.1~v4.6.5 导入导出修复链 → v4.7.0 保险箱一体化（agent-core hub 架构/healthPlan/resolveZipKey 先验后写迁移）→ v4.8.0 AI 助手全库化（list_items/vault_overview/get_note/get_file/update_note/remove_tag/rename_tag/删除确认卡）
-- 测试：20 套单测 + channel-live；e2e：scripts/e2e-import.mjs（加密 .db 导入全链路）、scripts/e2e-zip.mjs（zip 导出导入+判重+自愈+同名不同内容）
-- 惯例脏文件：RustWebView.kt（带补丁的正确状态）/ tauri.settings.gradle；Cargo.lock 随版本提交
-- 下一版：v4.7.0 与 v4.8.0 均已实现待用户真机验收（清单见 ROADMAP 对应节）；后续排期看 ROADMAP P1
+- HEAD = tag **v4.9.0**（自动更新：桌面 tauri-plugin-updater 全自动 + Android 应用内下载 APK + 每版发 GitHub Release）；对外里程碑 Release 停在 v4.1.0
+- 版本演进：v4.3 随手记 → v4.4 文件仓 → v4.5 内容检索 → v4.6 跨类型分类 → v4.7 保险箱一体化 → v4.8 AI 全库化（18 工具+确认删除）→ v4.8.1 UI 对齐应用图标 → v4.9.0 自动更新
+- 测试：21 套单测 + channel-live；e2e：e2e-import（加密 .db）、e2e-zip（zip+异密钥迁移）、e2e-updater（手动：桌面更新真链路）
+- 自动更新关键物：minisign 密钥在 `D:\hobby\产物\密码本\signing\`（密码 passbook2024，绝不入库/丢失即断更）；token 在 `%TEMP%\gh-token.txt`；私有仓下载只能走 assets API（见 DEVELOPGUIDE §8 v4.9.0 新坑）；仓库拟转 public（转前审计 git 历史）
+- 惯例脏文件：RustWebView.kt（带补丁的正确状态）/ tauri.settings.gradle；Cargo.lock 随版本提交；docs/archive 已 gitignore 不入库
+- 下一版：v4.7~v4.9 均待用户真机验收（清单见 ROADMAP）；仓库转 public 后让用户复测免 token 更新链路
 
 ## 近期重要教训（新会话必看，DEVELOPGUIDE §8 有完整版）
 - 自建弹窗层 z-index 一律 **660**（promptKeyInput 曾沉在导入弹窗背后 → 用户"看不到密钥输入"）

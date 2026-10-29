@@ -61,13 +61,13 @@ build-android.ps1（含 RustWebView 幂等补丁链 a1~a5）/ build-desktop.ps1 
 ## 4. 标准发布流水线（每版照此）
 
 1. 功能 + 测试（新功能配 `test/X.test.mjs` 纯函数测试；涉及导入/zip 的加 e2e 场景）+ `node --check public/*.js`
-2. 跑全部测试套件（`test/*.test.mjs`，channel-live 为外部探测不计；当前 20 套）
+2. 跑全部测试套件（`test/*.test.mjs`，channel-live 为外部探测不计；当前 21 套——v4.9.0 加 updater）
 3. 版本 4 处 + sw.js CACHE_NAME +1（改版本文件用 .NET WriteAllText + UTF8Encoding($false) + 绝对路径；tauri.properties 有 versionCode/versionName 两行）
-4. commit（中文信息、不含英文双引号；只 add 明确文件，勿 `git add -u`）
+4. commit（中文信息、不含英文双引号；只 add 明确文件，勿 `git add -u`——**v4.9.0 教训：逐个列路径漏了 lib.rs，tag 一度指向缺实现的提交**）
 5. build-android.ps1 → -Preset → build-desktop.ps1（共 6 产物，**串行勿并发**；gradle daemon 偶发被内存压力杀掉，重跑即可）
 6. 验收：aapt2 dump badging（versionName/versionCode）+ apksigner verify（cc06eb3e，JAVA_HOME=D:\hobby\.android-dev\jdk）+ 解包 grep 新功能关键词（unzip -p assets/...）
 7. tag vX.Y.Z + `git push origin main vX.Y.Z`（代理 127.0.0.1:7890；代理进程可能没起——先探测，失败改 `-c http.https://github.com.proxy= -c http.proxy=` 直连）
-8. GitHub Release 仅在用户明示：正式 3 件（APK/setup/portable）
+8. **v4.9.0 起必跑 `scripts/publish-release.ps1 -Tag vX.Y.Z`**：建 Release 挂四资产（正式 setup/portable/APK + latest.json——latest.json 最后传，platforms.url 指向 setup 资产的 assets API 地址）；预置版绝不上传；token 读 `%TEMP%\gh-token.txt`；同 tag 重跑幂等（先删旧资产）。对外里程碑 Release（发说明/置顶）仍需用户明示
 
 ## 5. 测试规范
 
@@ -99,10 +99,17 @@ build-android.ps1（含 RustWebView 幂等补丁链 a1~a5）/ build-desktop.ps1 
 - **headless Edge 测试三坑**：①`--disable-gpu` 会令新版 headless 完全不出帧（去掉）；②`/json` 多目标必须挑 `type==='page'`；③**调试端口被残留僵尸占用时新实例绑不上、CDP 连旧实例旧数据**——脚本启动前用 PowerShell 按 `remote-debugging-port+headless` 双特征精准清理（绝不按映像名杀 Edge），退出 finally 同步 taskkill /T，每轮独立 profile
 - **SW/HTTP 缓存吃旧代码**：测试页连应用前先 unregister SW + caches.delete + Network.setCacheDisabled，否则跑到旧版 app.js 全部断言失真
 - 其余旧坑：RustWebView.kt 构建后处于无补丁状态勿提交（惯例脏文件）；Cargo.lock 随版本提交；Tauri IPC 大数据禁 JSON 数字数组（一律 b64）；`-replace` 全局；缓存目录 API unwrap；分支操作前 checkout tauri.settings.gradle
+- **v4.9.0 新坑（自动更新调试血泪）**：
+  1. **编辑工具重写 ps1 会丢 BOM**——每次改完 ps1 必须补单 BOM 再跑（丢 BOM = PS5.1 按 ANSI 解析中文 = 意外的 `}` 解析错）
+  2. **updater 签名密钥必须带密码**——PS5.1 给环境变量赋空串等于删除变量；空密码密钥会令 tauri CLI 交互式等密码输入、在 cmd 重定向下永久挂死。密钥+密码存 `产物\signing\`（passbook2024），公钥嵌 tauri.conf.json，私钥绝不入库
+  3. **NSIS 必须 `displayLanguageSelector: false`**——语言选择窗在 updater passive 安装时照样弹出等交互，安装卡死
+  4. **私有仓 `github.com/releases/...` 直链带 token 也是 404**——资产下载一律走 `api.github.com/repos/.../releases/assets/<id>` + `Accept: application/octet-stream`（公开后同样有效）；latest.json 的 platforms.url 由 publish-release.ps1 用资产 id 生成
+  5. 桌面更新检查在有 token 时走「API 发现 latest.json 资产地址 → UpdaterBuilder.endpoints 动态注入」；网络失败自动回退 `http://127.0.0.1:7890` 重试一次
+  6. e2e-updater.mjs：便携版真链路回归（CDP 驱动真实应用完成 检查→下载→验签→安装→重启），需配合谎报版本的测试 Release
 
 ## 9. 版本纪律
 
 - 功能 +0.1.0，补丁 +0.0.1；等用户测试确认再进下一版
-- Release 只在用户确认的里程碑（已发：3.0.0/3.2.0/3.3.9/3.4.4/4.0.3/4.1.0）
-- 预置版永不外传；上边栏四按钮不轻易动
+- v4.9.0 起每版 tag 后必发 Release（publish-release.ps1，自动更新通道依赖）；对外里程碑 Release（带说明的正式发布页）仍在用户确认时（已发：3.0.0/3.2.0/3.3.9/3.4.4/4.0.3/4.1.0）
+- 预置版永不外传（Release 只挂正式产物）；上边栏四按钮不轻易动
 - tag 已推送后发现补丁：独立 patch 版（私有单人仓也可移 tag 强推，需核验 ls-remote）

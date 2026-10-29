@@ -835,12 +835,16 @@ fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-/// 桌面：构建 Updater（token 头 / 代理 / 超时）
+/// 桌面：构建 Updater（token 头 / 代理 / 超时 / 可选动态端点）
+/// 私有仓关键：github.com/releases/latest/download 直链带 token 也 404（实测），
+/// 唯一可用的是 API assets 端点——因此有 token 时由 update_check 先经 API 发现
+/// latest.json 资产地址，再以动态端点注入；公开仓则走配置默认端点即可。
 #[cfg(desktop)]
 fn build_updater(
     app: &AppHandle,
     token: &Option<String>,
     proxy: Option<&str>,
+    endpoint: Option<&str>,
 ) -> Result<tauri_plugin_updater::Updater, String> {
     use tauri_plugin_updater::UpdaterExt;
     let mut b = app.updater_builder().timeout(std::time::Duration::from_secs(30));
@@ -850,13 +854,66 @@ fn build_updater(
             b = b
                 .header("Authorization", format!("Bearer {t}"))
                 .map_err(|e| e.to_string())?;
+            // assets API 通道必需（否则返回 JSON 元数据而非文件本体）；对公开仓直链无害
+            b = b
+                .header("Accept", "application/octet-stream")
+                .map_err(|e| e.to_string())?;
         }
     }
     if let Some(p) = proxy.map(str::trim).filter(|s| !s.is_empty()) {
         let url: tauri::Url = p.parse().map_err(|e| format!("代理地址无效: {e}"))?;
         b = b.proxy(url);
     }
+    if let Some(ep) = endpoint.map(str::trim).filter(|s| !s.is_empty()) {
+        let url: tauri::Url = ep.parse().map_err(|e| format!("更新端点地址无效: {e}"))?;
+        b = b.endpoints(vec![url]).map_err(|e| e.to_string())?;
+    }
     b.build().map_err(|e| e.to_string())
+}
+
+/// GitHub API：取最新 Release 原始 JSON（UA 必带；token/代理可空）
+async fn gh_latest_release(
+    token: &Option<String>,
+    proxy: Option<String>,
+) -> Result<Option<serde_json::Value>, String> {
+    let mut b = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .user_agent("passbook-updater");
+    if let Some(p) = proxy.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        b = b.proxy(reqwest::Proxy::all(p).map_err(|e| e.to_string())?);
+    }
+    let client = b.build().map_err(|e| e.to_string())?;
+    let mut req = client
+        .get("https://api.github.com/repos/rem-sy/passbook/releases/latest")
+        .header("Accept", "application/vnd.github+json");
+    if let Some(t) = token.as_deref() {
+        let t = t.trim();
+        if !t.is_empty() {
+            req = req.header("Authorization", format!("Bearer {t}"));
+        }
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    match status {
+        200 => Ok(Some(serde_json::from_str(&text).map_err(|e| format!("Release 响应解析失败: {e}"))?)),
+        404 => Ok(None),
+        401 => Err("GitHub Token 无效（401），请检查设置里的 Token".into()),
+        403 => Err("GitHub API 限流（403），稍后再试".into()),
+        _ => Err(format!("GitHub API 返回 {status}")),
+    }
+}
+
+/// 从 Release JSON 里取指定名资产的 API 下载地址（私有仓唯一可用通道；公开后同样有效）
+fn gh_asset_api_url(release: &serde_json::Value, name: &str) -> Option<String> {
+    let assets = release["assets"].as_array()?;
+    for a in assets {
+        if a["name"].as_str() == Some(name) {
+            let id = a["id"].as_u64()?;
+            return Some(format!("https://api.github.com/repos/rem-sy/passbook/releases/assets/{id}"));
+        }
+    }
+    None
 }
 
 #[cfg(desktop)]
@@ -865,7 +922,17 @@ async fn check_with(
     token: &Option<String>,
     proxy: Option<String>,
 ) -> Result<Option<tauri_plugin_updater::Update>, String> {
-    let updater = build_updater(app, token, proxy.as_deref())?;
+    // 有 token：先经 API 发现 latest.json 资产地址（私有仓直链 404，必须走 assets API）
+    let endpoint = if token.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some() {
+        match gh_latest_release(token, proxy.clone()).await {
+            Ok(Some(rel)) => gh_asset_api_url(&rel, "latest.json"),
+            Ok(None) => return Ok(None), // 无 Release
+            Err(e) => return Err(e),
+        }
+    } else {
+        None // 公开仓：配置默认端点
+    };
+    let updater = build_updater(app, token, proxy.as_deref(), endpoint.as_deref())?;
     updater.check().await.map_err(|e| e.to_string())
 }
 
@@ -882,14 +949,16 @@ async fn update_check(
     let update = match res {
         Ok(u) => u,
         Err(e) => {
-            // 网络层失败（直连不通）→ 回退本机代理再试一次；其余错误（如 404/验签）原样报
-            let networkish = e.contains("timed out") || e.contains("request") || e.contains("dns") || e.contains("connect");
-            if !networkish || proxy.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some() {
+            // 未自配代理时：任何检查失败（updater 插件会把网络错误包装成
+            // 「Could not fetch a valid release JSON」等不含网络关键词的文案）都回退
+            // 本机代理重试一次；重试也失败才报原错误
+            if proxy.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some() {
                 return Err(e);
             }
-            check_with(&app, &token, Some("http://127.0.0.1:7890".into()))
-                .await
-                .map_err(|_| e)?
+            match check_with(&app, &token, Some("http://127.0.0.1:7890".into())).await {
+                Ok(u) => u,
+                Err(_) => return Err(e),
+            }
         }
     };
     match update {
@@ -951,44 +1020,17 @@ async fn update_download_install(_state: tauri::State<'_, PendingUpdate>) -> Res
 }
 
 /// 双平台：GitHub API 查最新 Release（Android 主用；404 = 仓库无 Release 或无权限）
+/// APK 下载地址用 assets API 端点（私有仓直链 404；公开后同样有效）
 #[tauri::command]
 async fn update_query_latest(
     token: Option<String>,
     proxy: Option<String>,
 ) -> Result<Option<ReleaseInfo>, String> {
     async fn query(token: &Option<String>, proxy: Option<String>) -> Result<Option<ReleaseInfo>, String> {
-        let mut b = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(20))
-            .user_agent("passbook-updater");
-        if let Some(p) = proxy.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-            b = b.proxy(reqwest::Proxy::all(p).map_err(|e| e.to_string())?);
-        }
-        let client = b.build().map_err(|e| e.to_string())?;
-        let mut req = client
-            .get("https://api.github.com/repos/rem-sy/passbook/releases/latest")
-            .header("Accept", "application/vnd.github+json");
-        if let Some(t) = token.as_deref() {
-            let t = t.trim();
-            if !t.is_empty() {
-                req = req.header("Authorization", format!("Bearer {t}"));
-            }
-        }
-        let resp = req.send().await.map_err(|e| e.to_string())?;
-        let status = resp.status().as_u16();
-        let text = resp.text().await.map_err(|e| e.to_string())?;
-        if status == 404 {
-            return Ok(None); // 无 Release（或 token 无权看私有仓，与不存在同表现）
-        }
-        if status == 401 {
-            return Err("GitHub Token 无效（401），请检查设置里的 Token".into());
-        }
-        if status == 403 {
-            return Err("GitHub API 限流（403），稍后再试".into());
-        }
-        if status >= 400 {
-            return Err(format!("GitHub API 返回 {status}"));
-        }
-        let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("Release 响应解析失败: {e}"))?;
+        let v = match gh_latest_release(token, proxy).await? {
+            Some(v) => v,
+            None => return Ok(None), // 无 Release（或 token 无权看私有仓，与不存在同表现）
+        };
         let tag = v["tag_name"].as_str().unwrap_or_default().trim().to_string();
         if tag.is_empty() {
             return Ok(None);
@@ -1000,7 +1042,9 @@ async fn update_query_latest(
                 let n = a["name"].as_str().unwrap_or_default();
                 // 正式 APK（排除预置版）；预置版绝不上传 Release，双保险
                 if n.starts_with("Passbook-Android-") && n.ends_with("-arm64.apk") && !n.contains("preset") {
-                    apk_url = a["browser_download_url"].as_str().map(String::from);
+                    if let Some(id) = a["id"].as_u64() {
+                        apk_url = Some(format!("https://api.github.com/repos/rem-sy/passbook/releases/assets/{id}"));
+                    }
                     apk_size = a["size"].as_u64().unwrap_or(0);
                     break;
                 }
@@ -1037,7 +1081,9 @@ async fn update_download_apk(
     token: Option<String>,
     proxy: Option<String>,
 ) -> Result<String, String> {
-    if !url.starts_with("https://github.com/rem-sy/passbook/releases/") {
+    if !url.starts_with("https://api.github.com/repos/rem-sy/passbook/releases/assets/")
+        && !url.starts_with("https://github.com/rem-sy/passbook/releases/")
+    {
         return Err("仅允许下载本仓库 Release 资产".into());
     }
     let dir = app
@@ -1063,7 +1109,7 @@ async fn update_download_apk(
             b = b.proxy(reqwest::Proxy::all(p).map_err(|e| e.to_string())?);
         }
         let client = b.build().map_err(|e| e.to_string())?;
-        let mut req = client.get(url);
+        let mut req = client.get(url).header("Accept", "application/octet-stream"); // assets API 必须，否则返回 JSON 元数据
         if let Some(t) = token.as_deref() {
             let t = t.trim();
             if !t.is_empty() {
@@ -1075,8 +1121,20 @@ async fn update_download_apk(
         if status == 404 {
             return Err("下载地址 404（私有仓需填 Token，或资产已删除）".into());
         }
+        if status == 401 {
+            return Err("GitHub Token 无效（401）".into());
+        }
         if status >= 400 {
             return Err(format!("下载失败（HTTP {status}）"));
+        }
+        let mime = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if mime.starts_with("application/json") && url.contains("/assets/") {
+            return Err("下载被重定向到 JSON（Token 无效或资产不可用）".into());
         }
         let total = resp.content_length();
         let mut file = fs::File::create(dest).map_err(|e| e.to_string())?;
