@@ -1,13 +1,22 @@
 # 密码本 Roadmap（v4.7+ 一体化时代）
 
-> 维护约定：每完成一个版本更新此文件并归档旧版到 docs/archive/。
-> 当前已发布：**v4.8.0**（v4.3 随手记 → v4.4 文件仓 → v4.5 内容检索 → v4.6 跨类型分类与导入导出修复链 → v4.7 保险箱一体化 → v4.8 AI 助手全库化）。
-> v4.7 调研：[RESEARCH-v4.7-p0.md](RESEARCH-v4.7-p0.md)。
+> 维护约定：每完成一个版本更新此文件并归档旧版到 docs/archive/（archive 不入 git）。
+> 当前已发布：**v4.8.1**（… → v4.8 AI 助手全库化 → v4.8.1 UI 对齐应用图标）。
+> v4.7 调研：[RESEARCH-v4.7-p0.md](RESEARCH-v4.7-p0.md)；v4.9 调研：[RESEARCH-v4.9-autoupdate.md](RESEARCH-v4.9-autoupdate.md)。
+
+## v4.9.0（进行中）：自动更新（GitHub Release 分发）
+
+**目标：桌面全自动更新（官方 updater 插件）；Android 应用内下载 APK 半自动；每版发 GitHub Release。设计细节见 [RESEARCH-v4.9-autoupdate.md](RESEARCH-v4.9-autoupdate.md)。**
+
+- 桌面：tauri-plugin-updater（passive 安装）+ minisign 签名（私钥与 jks 同目录保管）+ latest.json 静态端点；启动静默检查 + 设置手动检查；token/代理可配，网络失败自动回退 127.0.0.1:7890
+- Android：GitHub API 查最新 Release → Rust 流式下载 APK 到 cache → FileProvider+ACTION_VIEW 拉起系统安装器（需 REQUEST_INSTALL_PACKAGES）；SAF 另存与浏览器打开兜底；启动检查 24h 节流
+- 发布管线：build-desktop 产 latest.json；新增 publish-release.ps1（gh release create 附正式产物，预置版永不上传）；版本纪律改 tag→push→publish 三连
+- 仓库将转 public：转前审计 git 历史敏感文件；docs/archive 移出 git 跟踪（已 gitignore）
 
 ## 版本规范
-- 功能 +0.1.0，补丁 +0.0.1；里程碑经用户确认 → GitHub Release
+- 功能 +0.1.0，补丁 +0.0.1；v4.9.0 起每版发 GitHub Release（自动更新依赖）；对外里程碑 Release 照旧需用户明示
 - 版本 4 处同步：package.json / src-tauri/tauri.conf.json / src-tauri/Cargo.toml / gen/android/app/tauri.properties（versionCode = M×10000+m×100+p；**versionName 也在该文件**，两行都要改）
-- sw.js CACHE_NAME 每版 +1；产物 ASCII 命名；-preset 预置版仅本地永不上传
+- sw.js CACHE_NAME 每版 +1；产物 ASCII 命名；-preset 预置版仅本地永不上传（Release 也只挂正式产物）
 
 ## v4.8.0（已完成，待用户验收）：AI 助手全库化
 

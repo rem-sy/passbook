@@ -43,6 +43,9 @@ const DEFAULT_SETTINGS = {
   favicons: false, // 站点图标（v2.7.0）：联网经 DuckDuckGo 图标服务，默认关
   quickNoteShortcut: 'Ctrl+Alt+N', // v4.3.0：桌面随手记全局快捷键
   agentFileContent: true, // v4.7.0：允许 AI 检索文件正文（关闭后 search_files 仅元数据命中）
+  autoUpdate: true, // v4.9.0：启动时自动检查更新
+  ghToken: '', // v4.9.0：GitHub Token（私有仓期间必填，转 public 后可清空）
+  updateProxy: '', // v4.9.0：更新请求代理（空=直连；网络失败自动回退 127.0.0.1:7890）
 };
 
 function loadSettings() {
@@ -3237,6 +3240,19 @@ function openSettingsModal() {
         </div>
       </div>
       <p class="hint">任何 OpenAI 兼容渠道均可（DeepSeek / OpenAI / 通义 / 本地 Ollama…）。配置后即可在右上角 AI 助理面板聊天存/查密码、记便签、搜文件仓。</p>`;
+  // v4.9.0：自动更新区
+  const updateField = `
+      <div class="field"><span>自动更新（GitHub Release）</span>
+        <div class="chk-group" style="padding-top:2px">
+          <label><input type="checkbox" id="set-auto-update" ${s.autoUpdate !== false ? 'checked' : ''} /> 启动时自动检查更新（手机端 24 小时内至多一次）</label>
+        </div>
+        <input id="set-gh-token" type="password" placeholder="GitHub Token（仓库为私有时必填，contents 读权限；公开后可清空）" value="${escapeHtml(s.ghToken || '')}" autocomplete="off" style="margin-top:6px" />
+        <input id="set-update-proxy" type="text" placeholder="更新代理（可选，如 http://127.0.0.1:7890；留空直连，失败自动回退本机 7890）" value="${escapeHtml(s.updateProxy || '')}" style="margin-top:6px" />
+        <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn" id="btn-check-update" type="button">立即检查更新</button>
+          <span class="hint" id="update-check-result"></span>
+        </div>
+      </div>`;
   const encField = currentMode === 'local' ? `
       <div class="field"><span>数据库加密（防止 .db 文件被拷走后明文泄露）</span>
         <div class="lock-toggle"><span class="lock-state" id="enc-state">检测中…</span><button class="hint-btn" type="button" data-hint="enc" title="数据库加密说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></div>
@@ -3291,6 +3307,7 @@ function openSettingsModal() {
       ${faviconField}
       ${quickNoteField}
       ${agentField}
+      ${updateField}
       <div class="field"><span>安全体检</span>
         <div class="chk-group" style="padding-top:2px">
           <label><input type="checkbox" id="set-wt-hibp" ${loadWtSettings().hibp ? 'checked' : ''} /> 联网检查泄露密码（仅上传 SHA-1 前 5 位，密码不出本机）</label>
@@ -3463,6 +3480,13 @@ function openSettingsModal() {
     ns.favicons = !!$('#set-favicons')?.checked; // 站点图标（v2.7.0）
     const agFtEl = $('#set-agent-ftext'); // v4.7.0：允许 AI 检索文件正文（默认开）
     if (agFtEl) ns.agentFileContent = agFtEl.checked;
+    // v4.9.0：自动更新设置
+    const auEl = $('#set-auto-update');
+    if (auEl) ns.autoUpdate = auEl.checked;
+    const gtEl = $('#set-gh-token');
+    if (gtEl) ns.ghToken = gtEl.value.trim();
+    const upEl = $('#set-update-proxy');
+    if (upEl) ns.updateProxy = upEl.value.trim();
     const qnEl = $('#set-quicknote-key'); // v4.3.0：随手记全局快捷键（桌面）
     if (qnEl && qnEl.value.trim()) {
       ns.quickNoteShortcut = qnEl.value.trim();
@@ -4528,6 +4552,197 @@ $('#agent-input').addEventListener('keydown', (e) => {
 $('#agent-input').addEventListener('input', (e) => {
   e.target.style.height = 'auto';
   e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
+});
+
+/* ---------------- v4.9.0 自动更新 ---------------- */
+/* 桌面：update_check（updater 插件）→ 更新弹窗 → 下载安装（passive，装完自动重启）
+ * Android：update_query_latest（GitHub API）→ 比版本 → 下载 APK → 原生桥拉起系统安装器
+ * 静默检查：桌面每次启动；手机 24h 节流；失败静默（手动检查才报错） */
+let APP_VERSION = '';
+const UPDATE_LAST_LS = 'passbook-update-last';
+
+function updateCfg(override) {
+  if (override) return { ghToken: override.token || '', updateProxy: override.proxy || '' };
+  const s = loadSettings();
+  return { ghToken: s.ghToken || '', updateProxy: s.updateProxy || '' };
+}
+
+/** Tauri 事件监听小助手（更新进度） */
+async function listenTauriOnce(evt, cb) {
+  const evtApi = window.__TAURI__ && window.__TAURI__.event;
+  if (!evtApi || !evtApi.listen) return () => {};
+  return await evtApi.listen(evt, (e) => cb(e.payload));
+}
+
+async function checkForUpdate(manual, override) {
+  if (!IS_TAURI) { if (manual) toast('自动更新需在桌面/手机应用内使用', true); return false; }
+  const cfg = updateCfg(override);
+  if (!APP_VERSION) {
+    try { APP_VERSION = await tauriInvoke('app_version'); } catch { APP_VERSION = ''; }
+  }
+  try {
+    localStorage.setItem(UPDATE_LAST_LS, String(Date.now()));
+  } catch { /* 忽略 */ }
+  if (!IS_ANDROID) {
+    const info = await tauriInvoke('update_check', { token: cfg.ghToken || null, proxy: cfg.updateProxy || null });
+    if (info) { openDesktopUpdateModal(info); return true; }
+    if (manual) toast('已是最新版本');
+    return false;
+  }
+  // Android：GitHub API 查 Release，比较 tag 与 versionName
+  const rel = await tauriInvoke('update_query_latest', { token: cfg.ghToken || null, proxy: cfg.updateProxy || null });
+  if (!rel) {
+    if (manual) toast('未查询到 Release（仓库暂无发布，或私有仓未填 Token）');
+    return false;
+  }
+  if (!PassUpdater.isNewer(rel.tag, APP_VERSION)) {
+    if (manual) toast(`已是最新版本（${APP_VERSION}）`);
+    return false;
+  }
+  if (!rel.apk_url) {
+    if (manual) toast(`发现 ${rel.tag}，但该 Release 未附正式 APK`, true);
+    return true;
+  }
+  openApkUpdateModal(rel);
+  return true;
+}
+
+/** 进度条渲染小件（更新弹窗内复用） */
+function updateProgressBar() {
+  const bar = document.createElement('div');
+  bar.style.cssText = 'height:8px;border-radius:4px;background:var(--line,#e5e7eb);overflow:hidden;margin-top:10px';
+  bar.innerHTML = '<div style="height:100%;width:0%;background:var(--primary,#1d4a80);transition:width .2s"></div>';
+  const label = document.createElement('div');
+  label.className = 'hint';
+  label.style.marginTop = '4px';
+  const set = (done, total) => {
+    const pct = total ? Math.min(100, Math.round((done / total) * 100)) : 0;
+    bar.firstChild.style.width = pct + '%';
+    label.textContent = total
+      ? `${PassFiles.formatSize(done)} / ${PassFiles.formatSize(total)}（${pct}%）`
+      : `${PassFiles.formatSize(done)}，大小未知`;
+  };
+  return { el: bar, label, set };
+}
+
+/** 桌面更新弹窗（下载 → passive 安装 → 应用自动重启） */
+function openDesktopUpdateModal(info) {
+  openModal(`
+    <div class="modal-head">
+      <h3>发现新版本 v${escapeHtml(info.version)}</h3>
+      <button class="modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <p class="hint">当前 v${escapeHtml(APP_VERSION)} → 新版 v${escapeHtml(info.version)}。更新包经签名校验，下载安装完成后应用会自动重启（便携版请手动下载 setup 覆盖安装）。</p>
+      ${info.notes ? `<div style="white-space:pre-wrap;word-break:break-word;max-height:30vh;overflow-y:auto;font-size:13px;line-height:1.7;margin-top:8px">${escapeHtml(info.notes)}</div>` : ''}
+      <div id="upd-progress"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="btn-upd-later">暂不更新</button>
+      <button class="btn primary" id="btn-upd-go">下载并安装</button>
+    </div>
+  `, true);
+  $('#btn-upd-later').addEventListener('click', closeModal);
+  $('#btn-upd-go').addEventListener('click', async () => {
+    const go = $('#btn-upd-go');
+    go.disabled = true;
+    go.textContent = '下载中…';
+    const box = $('#upd-progress');
+    const prog = updateProgressBar();
+    box.appendChild(prog.el);
+    box.appendChild(prog.label);
+    const un = await listenTauriOnce('update-progress', (p) => prog.set(p.downloaded, p.total));
+    try {
+      await tauriInvoke('update_download_install');
+      go.textContent = '安装完成';
+      prog.set(1, 1);
+      toast('更新已安装，应用即将重启');
+      setTimeout(() => tauriInvoke('update_restart').catch(() => {}), 1500);
+    } catch (e) {
+      go.disabled = false;
+      go.textContent = '重试下载';
+      toast('更新失败：' + e.message, true);
+    } finally {
+      try { un && un(); } catch { /* 忽略 */ }
+    }
+  });
+}
+
+/** Android 更新弹窗（下载 APK → 系统安装器；另存/复制链接兜底） */
+function openApkUpdateModal(rel) {
+  openModal(`
+    <div class="modal-head">
+      <h3>发现新版本 ${escapeHtml(rel.tag)}</h3>
+      <button class="modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <p class="hint">当前 v${escapeHtml(APP_VERSION)} → 新版 ${escapeHtml(rel.tag)}（APK ${escapeHtml(PassFiles.formatSize(rel.apk_size || 0))}）。下载完成后会拉起系统安装器，首次需允许「安装未知应用」。</p>
+      ${rel.notes ? `<div style="white-space:pre-wrap;word-break:break-word;max-height:26vh;overflow-y:auto;font-size:13px;line-height:1.7;margin-top:8px">${escapeHtml(rel.notes)}</div>` : ''}
+      <div id="upd-progress"></div>
+    </div>
+    <div class="modal-foot foot-wrap">
+      <button class="btn" id="btn-upd-later">暂不更新</button>
+      <button class="btn" id="btn-upd-copy">复制链接</button>
+      <button class="btn primary" id="btn-upd-go">下载并安装</button>
+    </div>
+  `, true);
+  $('#btn-upd-later').addEventListener('click', closeModal);
+  $('#btn-upd-copy').addEventListener('click', () => {
+    copyText(rel.apk_url || rel.html_url || '').catch(() => toast('复制失败', true));
+  });
+  $('#btn-upd-go').addEventListener('click', async () => {
+    const go = $('#btn-upd-go');
+    go.disabled = true;
+    go.textContent = '下载中…';
+    const box = $('#upd-progress');
+    const prog = updateProgressBar();
+    box.appendChild(prog.el);
+    box.appendChild(prog.label);
+    const cfg = updateCfg();
+    const un = await listenTauriOnce('update-progress', (p) => prog.set(p.downloaded, p.total));
+    try {
+      const path = await tauriInvoke('update_download_apk', { url: rel.apk_url, token: cfg.ghToken || null, proxy: cfg.updateProxy || null });
+      go.textContent = '安装中…';
+      prog.label.textContent = '下载完成，正在拉起系统安装器…';
+      if (window.__passbook_saf && typeof window.__passbook_saf.open === 'function') {
+        window.__passbook_saf.open(path, 'application/vnd.android.package-archive');
+        toast('已拉起系统安装器（首次需允许安装未知应用）；也可点「保存 APK」留底');
+        // 弹窗保留：提供保存与复制链接兜底
+        go.disabled = false;
+        go.textContent = '再次拉起安装';
+      } else {
+        toast('此环境不支持拉起安装器，请点「复制链接」用浏览器下载', true);
+      }
+    } catch (e) {
+      go.disabled = false;
+      go.textContent = '重试下载';
+      toast('下载失败：' + e.message + '（私有仓请在设置里填 GitHub Token）', true);
+    } finally {
+      try { un && un(); } catch { /* 忽略 */ }
+    }
+  });
+}
+
+/* 设置弹窗内「立即检查更新」（读取未保存的 token/代理输入） */
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('#btn-check-update');
+  if (!btn) return;
+  (async () => {
+    const resEl = document.querySelector('#update-check-result');
+    btn.disabled = true;
+    if (resEl) resEl.textContent = '检查中…';
+    try {
+      const r = await checkForUpdate(true, {
+        token: (document.querySelector('#set-gh-token') || {}).value || '',
+        proxy: (document.querySelector('#set-update-proxy') || {}).value || '',
+      });
+      if (resEl) resEl.textContent = r === false ? '已是最新版本' : '发现新版本，已弹出更新窗口';
+    } catch (err) {
+      if (resEl) resEl.textContent = '失败：' + err.message;
+    } finally {
+      btn.disabled = false;
+    }
+  })();
 });
 
 /* ---------------- PWA ---------------- */
@@ -5617,6 +5832,15 @@ async function injectShotDemo() {
     await consumePendingFiles();
     await injectShotDemo(); // 截图深链演示注入（非截图场景为 no-op）
     setupQuickNoteShortcut();
+    // v4.9.0 启动静默检查更新（桌面每次启动；手机 24h 节流；失败静默不打扰）
+    if (IS_TAURI) {
+      const sUpd = loadSettings();
+      let lastUpdTs = 0;
+      try { lastUpdTs = +(localStorage.getItem(UPDATE_LAST_LS) || 0) || 0; } catch { /* 忽略 */ }
+      if (PassUpdater.shouldAutoCheck({ enabled: sUpd.autoUpdate !== false, mobile: IS_ANDROID, lastCheckTs: lastUpdTs })) {
+        setTimeout(() => { checkForUpdate(false).catch(() => { /* 静默 */ }); }, 3000);
+      }
+    }
   } catch (e) {
     toast('初始化失败: ' + e.message, true);
     console.error(e);
@@ -5703,6 +5927,7 @@ function openGuideModal() {
         <p>· <b>数据库加密</b>：AES-256 全库加密（含导出的 .db）；<b>文件仓本体同样始终加密</b>（密钥从数据库密钥派生，未启用整库加密时用本机固定密钥），开启/关闭加密或更换密钥时文件本体自动重加密。<b>请务必备份密钥</b>（设置 → 数据库加密 → 备份密钥）。</p>
         <p>· <b>存储模式 / 数据库位置</b>：桌面版默认本地文件，可指向网盘文件夹多机共用。随手记与文件仓为本地模式功能。</p>
         <p>· <b>AI 助理</b>：填接口地址 / 模型名 / API Key（OpenAI 兼容渠道均可）；「允许 AI 检索文件正文」开关（默认开，仅发送命中片段摘要）；<b>随手记快捷键</b>（默认 Ctrl+Alt+N）。</p>
+        <p>· <b>自动更新</b>：启动时自动检查 GitHub Release（手机端 24 小时至多一次）；电脑端下载验签后静默安装并自动重启，手机端下载 APK 拉起系统安装器。仓库私有时需填 GitHub Token（转公开后可清空）；可配代理。</p>
         <p>· <b>启动锁 PIN</b> 与 <b>自动锁定</b>：闲置可锁定（默认 5 分钟），复制密码后剪贴板自动清除；深色主题跟随系统或手动固定。电脑（Windows Hello）与手机（指纹/面容）可开启<b>生物识别解锁</b>。</p>`)}
       ${guideSec('', '⑨ 多端同步（手机 ↔ 电脑）', `
         <p>每台设备各存一份完整数据库（桌面是本地 <b>.db</b> 文件，手机是应用内存储），通过<b>导出 .db → 网盘/Syncthing → 另一端导入</b>合并；导入时选<b>「合并（跳过重复）」</b>即可汇总。导出的 .db 不含文件仓本体——文件仓单独用「导出 → 文件仓导出（zip：加密本体+清单）」。</p>

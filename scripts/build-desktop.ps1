@@ -1,4 +1,4 @@
-﻿# 密码本桌面版双版本构建：正式版（无渠道，无后缀，对外发布）+ 预置渠道版（-preset，仅本机）
+# 密码本桌面版双版本构建：正式版（无渠道，无后缀，对外发布）+ 预置渠道版（-preset，仅本机）
 # 用法：powershell -ExecutionPolicy Bypass -File scripts\build-desktop.ps1 [-SkipPreset] [-SkipClean]
 # 预置渠道来自 public\agent-config.local.js（不入库，本机文件）；
 # 正式版构建时该文件被临时移出，产物不带任何渠道；预置版绝不上传 GitHub。
@@ -16,6 +16,16 @@ Write-Host "版本：$ver"
 
 $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
 $env:CARGO_NET_OFFLINE = 'true'
+
+# v4.9.0：更新签名密钥（tauri signer generate 产物；与 jks 同目录，绝不入库）
+$updaterKey = 'D:\hobby\产物\密码本\signing\updater.key'
+if (Test-Path $updaterKey) {
+  $env:TAURI_SIGNING_PRIVATE_KEY = [System.IO.File]::ReadAllText($updaterKey)
+  $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ''
+  Write-Host "更新签名密钥已加载（将产出 .sig）"
+} else {
+  Write-Warning '未找到 updater.key：本次构建不产出更新签名（latest.json 将跳过）'
+}
 
 function Build-One([string]$name, [string]$suffix, [switch]$official) {
   Write-Host "==> 构建 $name"
@@ -44,6 +54,18 @@ function Build-One([string]$name, [string]$suffix, [switch]$official) {
     Copy-Item "$proj\src-tauri\target\release\bundle\nsis\密码本_${ver}_x64-setup.exe" "$prod\Passbook_${ver}_x64-setup$suffix.exe" -Force
     Copy-Item "$proj\src-tauri\target\release\passbook-desktop.exe" "$prod\Passbook_${ver}_portable$suffix.exe" -Force
     Write-Host "    完成：Passbook_${ver}_x64-setup$suffix.exe + Passbook_${ver}_portable$suffix.exe"
+    # v4.9.0：正式版产 latest.json（updater 插件静态清单；签名随构建变化）
+    if ($official) {
+      $sigFile = "$proj\src-tauri\target\release\bundle\nsis\密码本_${ver}_x64-setup.exe.sig"
+      if (Test-Path $sigFile) {
+        $sig = ([System.IO.File]::ReadAllText($sigFile)).Trim()
+        $setupUrl = "https://github.com/rem-sy/passbook/releases/download/v$ver/Passbook_${ver}_x64-setup.exe"
+        $latest = @{ version = $ver; notes = ''; pub_date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); platforms = @{ 'windows-x86_64' = @{ signature = $sig; url = $setupUrl } } } | ConvertTo-Json -Depth 5
+        [System.IO.File]::WriteAllText("$prod\latest.json", $latest, (New-Object System.Text.UTF8Encoding($false)))
+        Copy-Item $sigFile "$prod\Passbook_${ver}_x64-setup.exe.sig" -Force
+        Write-Host "    latest.json 已生成（v$ver）"
+      } else { Write-Warning '未找到 setup .sig：跳过 latest.json（老版本更新通道不受影响）' }
+    }
   } finally {
     if ($bak) { Move-Item $bak $localCfg -Force; Write-Host '    已恢复 agent-config.local.js' }
   }

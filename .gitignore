@@ -31,3 +31,4 @@ Thumbs.db
 # 探针临时目录
 .probe/
 probe-tauri/
+docs/archive/
