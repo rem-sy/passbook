@@ -32,3 +32,4 @@ Thumbs.db
 .probe/
 probe-tauri/
 docs/archive/
+.github-monitor/
