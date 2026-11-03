@@ -48,6 +48,43 @@ class RustWebView(context: Context, val initScripts: Array<String>, val id: Stri
         @android.webkit.JavascriptInterface
         fun result(): String { return SafSaveActivity.lastResult }
 
+        // 密码本 v4.4.0：文件仓「系统打开」桥 PbFileHubOpen（FileProvider + ACTION_VIEW）
+        @android.webkit.JavascriptInterface
+        fun open(tempPath: String, mime: String) {
+            val f = java.io.File(tempPath)
+            if (!f.exists()) return
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                context, context.packageName + ".fileprovider", f)
+            val i = android.content.Intent(android.content.Intent.ACTION_VIEW)
+            i.setDataAndType(uri, mime.ifBlank { "*/*" })
+            i.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(i)
+        }
+
+        // 密码本 v4.4.0：SAF 批量导入桥（配合 SafImportActivity，ACTION_OPEN_DOCUMENT 多选）
+        @android.webkit.JavascriptInterface
+        fun pick() {
+            SafImportActivity.lastResult = "pending" // v4.6.4：同款残留隐患
+            val i = android.content.Intent(context, SafImportActivity::class.java)
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(i)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun pickResult(): String { return SafImportActivity.lastResult }
+
+        // 密码本 v4.6.1：通用单文件选取桥（配合 SafPickRawActivity，导入选文件用）
+        @android.webkit.JavascriptInterface
+        fun pickRaw() {
+            SafPickRawActivity.lastResult = "pending" // v4.6.4：启动前重置（静态残留教训）
+            val i = android.content.Intent(context, SafPickRawActivity::class.java)
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(i)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun pickRawResult(): String { return SafPickRawActivity.lastResult }
         @android.webkit.JavascriptInterface
         fun save(name: String, tempPath: String) {
             SafSaveActivity.displayName = name.ifBlank { "passbook.bin" }

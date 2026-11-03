@@ -128,6 +128,44 @@ fn read_pending_files(app: AppHandle) -> Result<Option<String>, String> {
     Ok(None)
 }
 
+/// v4.10.0：已注册全局快捷键登记表（key → Shortcut），各快捷键独立注销互不影响。
+/// v4.3.0 原实现 unregister_all 会把快捷面板的 Alt+P 一并杀掉，已废弃该写法。
+#[cfg(windows)]
+struct RegisteredShortcuts(std::sync::Mutex<std::collections::HashMap<String, tauri_plugin_global_shortcut::Shortcut>>);
+
+/// v4.10.0：关闭主窗行为——true=最小化到托盘，false=直接退出（设置页可改，前端启动时同步）。
+struct CloseToTray(AtomicBool);
+
+/// 注册/更换一个全局快捷键（只注销同名旧键，不影响其他快捷键）。
+#[cfg(windows)]
+fn register_named_shortcut<F>(app: &AppHandle, name: &str, accel: &str, handler: F) -> Result<(), String>
+where
+    F: Fn(&AppHandle) + Send + Sync + 'static,
+{
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    let gs = app.global_shortcut();
+    let shortcut: tauri_plugin_global_shortcut::Shortcut =
+        accel.parse().map_err(|e| format!("快捷键格式无效: {e:?}"))?;
+    // 先换登记表，拿回旧键精确注销（不存在则无操作）
+    let old = {
+        let state = app.state::<RegisteredShortcuts>();
+        let mut map = state.0.lock().map_err(|e| e.to_string())?;
+        map.insert(name.to_string(), shortcut.clone())
+    };
+    if let Some(prev) = old {
+        let _ = gs.unregister(prev);
+    }
+    let app2 = app.clone();
+    gs.on_shortcut(shortcut, move |_app, _s, event| {
+        if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+            handler(&app2);
+        }
+    })
+    .map_err(|e| format!("注册全局快捷键失败: {e}"))?;
+    Ok(())
+}
+
 /// v4.3.0：注册/更换桌面随手记全局快捷键（默认 Ctrl+Alt+N，设置里可改）。
 /// 触发时读剪贴板 → 弹主窗 → 事件 quicknote-clip（payload=base64 文本）交前端确认入库。
 #[cfg(windows)]
@@ -135,34 +173,149 @@ fn read_pending_files(app: AppHandle) -> Result<Option<String>, String> {
 fn set_quicknote_shortcut(app: AppHandle, accel: String) -> Result<(), String> {
     use base64::Engine as _;
     use tauri_plugin_clipboard_manager::ClipboardExt;
-    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
-    let gs = app.global_shortcut();
-    let _ = gs.unregister_all(); // 更换快捷键：先全部注销
-    let shortcut: tauri_plugin_global_shortcut::Shortcut =
-        accel.parse().map_err(|e| format!("快捷键格式无效: {e:?}"))?;
-    gs.on_shortcut(shortcut, move |app, _s, event| {
-        if event.state() == ShortcutState::Pressed {
-            let text = app.clipboard().read_text().ok().unwrap_or_default();
-            if !text.trim().is_empty() {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.unminimize();
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                }
-                let b64 = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-                let _ = app.emit("quicknote-clip", b64);
+    register_named_shortcut(&app, "quicknote", &accel, move |app| {
+        let text = app.clipboard().read_text().ok().unwrap_or_default();
+        if !text.trim().is_empty() {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
             }
+            let b64 = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+            let _ = app.emit("quicknote-clip", b64);
         }
     })
-    .map_err(|e| format!("注册全局快捷键失败: {e}"))?;
-    Ok(())
 }
 
 #[cfg(not(windows))]
 #[tauri::command]
 fn set_quicknote_shortcut(_app: AppHandle, _accel: String) -> Result<(), String> {
     Ok(()) // 桌面（Windows）专属；移动端无全局快捷键概念
+}
+
+/// v4.10.0：注册/更换快捷面板全局快捷键（默认 Alt+P）。触发即切换快捷面板小窗显隐。
+#[cfg(windows)]
+#[tauri::command]
+fn set_quickpanel_shortcut(app: AppHandle, accel: String) -> Result<(), String> {
+    register_named_shortcut(&app, "quickpanel", &accel, |app| {
+        quick_panel_toggle(app);
+    })
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn set_quickpanel_shortcut(_app: AppHandle, _accel: String) -> Result<(), String> {
+    Ok(()) // 桌面（Windows）专属；移动端无全局快捷键概念
+}
+
+/// v4.10.0：切换快捷面板小窗（Alt+P / 托盘菜单共用入口）。
+/// 已存在则切换显隐；不存在则创建（无边框、置顶、不进任务栏，位于鼠标附近）。
+#[cfg(desktop)]
+fn quick_panel_toggle(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("quick") {
+        match w.is_visible() {
+            Ok(true) => { let _ = w.hide(); }
+            _ => quick_panel_show(app, &w),
+        }
+        return;
+    }
+    let wv_dir = app
+        .try_state::<DataRoot>()
+        .map(|r| r.0.join("webview2"))
+        .unwrap_or_else(|| PathBuf::from("webview2"));
+    let _ = fs::create_dir_all(&wv_dir);
+    match tauri::WebviewWindowBuilder::new(
+        app,
+        "quick",
+        tauri::WebviewUrl::App("quick.html".into()),
+    )
+    .title("快捷面板")
+    .inner_size(430.0, 560.0)
+    .resizable(false)
+    .decorations(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .visible(false)
+    .data_directory(wv_dir) // 与主窗同 profile：共享 localStorage（设置/生成器偏好/PIN 哈希）
+    .build()
+    {
+        Ok(w) => quick_panel_show(app, &w),
+        Err(e) => eprintln!("[passbook] quick panel build error: {e}"),
+    }
+}
+
+/// 显示并定位快捷面板：优先放在鼠标所在位置附近，回退主显示器居中偏上。
+#[cfg(desktop)]
+fn quick_panel_show(app: &AppHandle, w: &tauri::WebviewWindow) {
+    let size = w.outer_size().unwrap_or_default();
+    let (ww, wh) = (size.width as i32, size.height as i32);
+    let mut pos: Option<(i32, i32)> = None;
+    if let Ok(cursor) = app.cursor_position() {
+        let (cx, cy) = (cursor.x as i32, cursor.y as i32);
+        let monitor = app
+            .monitor_from_point(cursor.x, cursor.y)
+            .or_else(|_| app.primary_monitor())
+            .ok()
+            .flatten();
+        if let Some(m) = monitor {
+            let msz = m.size();
+            let mpos = m.position();
+            // 目标：鼠标右下方偏移 8px；越出工作区则向左/上翻折；再兜底夹紧到显示器内
+            let mut x = cx + 8;
+            let mut y = cy + 8;
+            let max_x = mpos.x + msz.width as i32 - ww;
+            let max_y = mpos.y + msz.height as i32 - wh;
+            if x > max_x { x = cx - ww - 8; }
+            if y > max_y { y = cy - wh - 8; }
+            x = x.clamp(mpos.x, max_x.max(mpos.x));
+            y = y.clamp(mpos.y, max_y.max(mpos.y));
+            pos = Some((x, y));
+        }
+    }
+    if let Some((x, y)) = pos {
+        let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+    } else if let Ok(Some(m)) = app.primary_monitor() {
+        let msz = m.size();
+        let mpos = m.position();
+        let x = mpos.x + (msz.width as i32 - ww) / 2;
+        let y = mpos.y + (msz.height as i32 - wh) / 3;
+        let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+    }
+    let _ = w.show();
+    let _ = w.set_focus();
+}
+
+#[cfg(not(desktop))]
+fn quick_panel_toggle(_app: &AppHandle) {}
+
+/// v4.10.0：快捷面板失焦自隐（前端 blur/Escape 调用）。
+#[tauri::command]
+fn quick_panel_hide(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("quick") {
+        let _ = w.hide();
+    }
+}
+
+/// v4.10.0：从快捷面板打开主界面（PIN 门/未就绪提示的「打开主界面」按钮）。
+#[tauri::command]
+fn quick_panel_open_main(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+    if let Some(w) = app.get_webview_window("quick") {
+        let _ = w.hide();
+    }
+}
+
+/// v4.10.0：设置「关闭主窗 = 最小化到托盘」开关（前端启动/保存设置时同步，默认开）。
+#[tauri::command]
+fn set_tray_mode(app: AppHandle, enabled: bool) {
+    if let Some(t) = app.try_state::<CloseToTray>() {
+        t.0.store(enabled, Ordering::Relaxed);
+    }
 }
 
 /// 备份快照文件元信息（v2.2.0 自动备份）
@@ -1153,6 +1306,28 @@ mod windows_hello {
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // v4.10.0：快捷面板小窗点关闭 = 隐藏（不销毁，Alt+P 再唤出）
+                if window.label() == "quick" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    return;
+                }
+                // v4.10.0：主窗关闭默认最小化到托盘（设置可改为直接退出）
+                if window.label() == "main" {
+                    let to_tray = window
+                        .app_handle()
+                        .try_state::<CloseToTray>()
+                        .map(|t| t.0.load(Ordering::Relaxed))
+                        .unwrap_or(true);
+                    if to_tray {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                }
+            }
+        })
         .setup(|app| {
             // 应用数据根目录：优先 PASSBOOK_DATA_DIR 环境变量；
             // 桌面端未设置时默认用 exe 所在目录（便携式，不写 C 盘）；
@@ -1208,6 +1383,90 @@ pub fn run() {
                 Err(e) => { eprintln!("[passbook] window build error: {e}"); return Err(e.to_string().into()); }
             }
 
+            // v4.10.0：系统托盘（桌面专属）——左键点图标开主界面；菜单：打开 / 快捷面板 / 记一条 / 锁定 / 退出
+            #[cfg(desktop)]
+            {
+                use tauri::menu::{Menu, MenuItem};
+                use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
+                let open = MenuItem::with_id(app, "open", "打开密码本", true, None::<&str>)?;
+                let quick = MenuItem::with_id(app, "quick", "快捷面板 (Alt+P)", true, None::<&str>)?;
+                let note = MenuItem::with_id(app, "note", "记一条（剪贴板）", true, None::<&str>)?;
+                let lock = MenuItem::with_id(app, "lock", "锁定", true, None::<&str>)?;
+                let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&open, &quick, &note, &lock, &quit])?;
+
+                let tray = TrayIconBuilder::with_id("main-tray")
+                    .icon(app.default_window_icon().cloned().ok_or("无应用图标")?)
+                    .tooltip("密码本")
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| match event.id().as_ref() {
+                        "open" => {
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.unminimize();
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                        "quick" => quick_panel_toggle(app),
+                        "note" => {
+                            // 与随手记快捷键同管线：读剪贴板 → 弹主窗 → 前端确认入库
+                            use tauri_plugin_clipboard_manager::ClipboardExt;
+                            #[cfg(windows)]
+                            {
+                                use base64::Engine as _;
+                                let text = app.clipboard().read_text().ok().unwrap_or_default();
+                                if text.trim().is_empty() {
+                                    if let Some(w) = app.get_webview_window("main") {
+                                        let _ = w.show();
+                                        let _ = w.set_focus();
+                                    }
+                                } else {
+                                    if let Some(w) = app.get_webview_window("main") {
+                                        let _ = w.unminimize();
+                                        let _ = w.show();
+                                        let _ = w.set_focus();
+                                    }
+                                    let b64 = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+                                    let _ = app.emit("quicknote-clip", b64);
+                                }
+                            }
+                            #[cfg(not(windows))]
+                            {
+                                if let Some(w) = app.get_webview_window("main") {
+                                    let _ = w.show();
+                                    let _ = w.set_focus();
+                                }
+                            }
+                        }
+                        "lock" => {
+                            let _ = app.emit("pb-lock", ()); // 前端 doAutoLock（未启用 PIN 则无操作）
+                        }
+                        "quit" => {
+                            app.exit(0);
+                        }
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            let app = tray.app_handle().clone();
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.unminimize();
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                    })
+                    .build(app)?;
+                tray.set_visible(true).ok();
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1235,6 +1494,10 @@ pub fn run() {
             read_pending_notes,
             read_pending_files,
             set_quicknote_shortcut,
+            set_quickpanel_shortcut,
+            quick_panel_hide,
+            quick_panel_open_main,
+            set_tray_mode,
             get_files_store_dir,
             store_blob_write_b64,
             store_blob_read_b64,
@@ -1258,6 +1521,13 @@ pub fn run() {
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     let builder = builder.manage(PendingUpdate(std::sync::Mutex::new(None)));
+
+    // v4.10.0：托盘/快捷面板状态（CloseToTray 全平台托管，移动端命令为 no-op；默认最小化到托盘）
+    let builder = builder.manage(CloseToTray(AtomicBool::new(true)));
+    #[cfg(windows)]
+    let builder = builder.manage(RegisteredShortcuts(std::sync::Mutex::new(
+        std::collections::HashMap::new(),
+    )));
 
     // v4.3.0：桌面随手记——全局快捷键 + 剪贴板读取（仅 Windows 桌面构建）
     #[cfg(windows)]

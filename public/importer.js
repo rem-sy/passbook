@@ -160,6 +160,34 @@
     };
   }
 
+  /* ---------- 粘贴文本行解析（v4.10.0 快捷面板复用；与主窗粘贴导入同规则） ---------- */
+
+  /**
+   * 按行解析粘贴文本 → 条目数组。
+   * 每行「所属, 账户, 密码[, 网址][, 备注]」，分隔符容错：英文逗号/中文逗号/斜杠/制表符/空格；
+   * 跳过空行、# 注释与表头行（所属/账户/账号/用户名/owner/account 开头）。
+   */
+  function parseLines(text) {
+    var rows = [];
+    var lines = String(text == null ? '' : text).split(/\r?\n/);
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (!line || line.charAt(0) === '#') continue;
+      if (/^(所属|账户|账号|用户名|owner|account)[,，/\t ]/.test(line)) continue; // 表头
+      var parts = line.split(',').map(function (s) { return s.trim(); });
+      if (parts.length < 3) parts = line.split('，').map(function (s) { return s.trim(); });
+      if (parts.length < 3) parts = line.split('/').map(function (s) { return s.trim(); });
+      if (parts.length < 3) parts = line.split(/\t+/).map(function (s) { return s.trim(); });
+      if (parts.length < 3) parts = line.split(/\s+/).map(function (s) { return s.trim(); });
+      if (parts.length < 3) continue;
+      rows.push({
+        owner: parts[0], account: parts[1], password: parts[2],
+        url: parts[3] || '', category: '', note: parts[4] || '',
+      });
+    }
+    return rows;
+  }
+
   return {
     parseCsv: parseCsv,
     detectColumns: detectColumns,
@@ -167,6 +195,7 @@
     siteKey: siteKey,
     dupKey: dupKey,
     parseBrowserCsv: parseBrowserCsv,
+    parseLines: parseLines,
     FORMAT_LABELS: FORMAT_LABELS,
   };
 });

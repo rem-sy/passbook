@@ -1,10 +1,20 @@
 # 密码本 Roadmap（v4.7+ 一体化时代）
 
 > 维护约定：每完成一个版本更新此文件并归档旧版到 docs/archive/（archive 不入 git）。
-> 当前已发布：**v4.8.1**（… → v4.8 AI 助手全库化 → v4.8.1 UI 对齐应用图标）。
+> 当前已发布：**v4.9.1**（… → v4.9 自动更新 → v4.9.1 公开仓直链补丁）。
 > v4.7 调研：[RESEARCH-v4.7-p0.md](RESEARCH-v4.7-p0.md)；v4.9 调研：[RESEARCH-v4.9-autoupdate.md](RESEARCH-v4.9-autoupdate.md)。
 
-## v4.9.0（进行中）：自动更新（GitHub Release 分发）
+## v4.10.0（已完成，待用户验收）：托盘 + Alt+P 快捷面板 + AI 渠道检测
+
+**目标：桌面常驻托盘，全局 Alt+P 唤出简易面板（搜密码复制 / 生成 / 导入）；设置页 AI 渠道可拉模型列表、检测可用性（桌面+手机通用）。**
+
+- 托盘（桌面 Windows）：图标常驻；左键开主界面；菜单 打开/快捷面板/记一条(剪贴板)/锁定/退出；主窗关闭默认最小化到托盘（设置可改直接退出）
+- 全局快捷键重构：`register_named_shortcut` 登记表按名注销，两个快捷键（随手记 Ctrl+Alt+N、快捷面板 Alt+P）互不干扰；**设置页改录入模式**（shortcut-input.js：点按钮→按组合键，Esc 取消，白名单 A-Z/0-9/F1-F12 + 必带修饰键）
+- 快捷面板小窗（quick.html/quick.js + quick-core.js）：无边框置顶、鼠标附近定位、失焦/Esc 自隐；三 Tab——搜索（多词过滤主窗内存库，复制密码/账号/TOTP 实时码）、生成（复用主窗偏好，存入）、导入（粘贴文本合并）；PIN 门与主窗共享解锁状态（面板解锁即两边解锁）；数据主权在主窗（quick-request/quick-response 窗口事件，面板不开库）
+- AI 渠道检测（agent-check.js，双端）：设置页「获取模型列表」（/models → datalist 下拉选）+「检测渠道可用性」（最小探活，401/404/429 分级报因）；网络走 agentFetch 三路分发
+- 锁定策略：托盘期间沿用现有自动锁定（hidden/闲置即锁，面板唤出先过 PIN）
+
+## v4.9.0（已完成）：自动更新（GitHub Release 分发）
 
 **目标：桌面全自动更新（官方 updater 插件）；Android 应用内下载 APK 半自动；每版发 GitHub Release。设计细节见 [RESEARCH-v4.9-autoupdate.md](RESEARCH-v4.9-autoupdate.md)。**
 

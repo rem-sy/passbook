@@ -14,6 +14,7 @@ public/agent-config.local.js
 
 # Rust / Tauri 构建产物
 src-tauri/target/
+src-tauri/target-check/
 
 # Android 生成工程：跟踪源配置（含定制 manifest/mipmap/gradle），
 # 忽略本机路径与构建产物

@@ -42,6 +42,8 @@ const DEFAULT_SETTINGS = {
   backup: { enabled: true, keep: 5, intervalMin: 60 }, // 自动备份快照（v2.2.0）
   favicons: false, // 站点图标（v2.7.0）：联网经 DuckDuckGo 图标服务，默认关
   quickNoteShortcut: 'Ctrl+Alt+N', // v4.3.0：桌面随手记全局快捷键
+  quickPanelShortcut: 'Alt+P', // v4.10.0：桌面快捷面板全局快捷键（设置里录入模式修改）
+  closeToTray: true, // v4.10.0：关闭主窗 = 最小化到托盘（false = 直接退出）
   agentFileContent: true, // v4.7.0：允许 AI 检索文件正文（关闭后 search_files 仅元数据命中）
   autoUpdate: true, // v4.9.0：启动时自动检查更新
   updateProxy: '', // v4.9.0：更新请求代理（空=直连；网络失败自动回退 127.0.0.1:7890）
@@ -3228,10 +3230,21 @@ function openSettingsModal() {
         <input id="set-agent-url" type="url" placeholder="如：https://api.deepseek.com/v1" value="${escapeHtml(agent.baseUrl)}" />
       </div>
       <div class="field"><span>AI 模型名</span>
-        <input id="set-agent-model" type="text" placeholder="如：deepseek-chat" value="${escapeHtml(agent.model)}" />
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input id="set-agent-model" list="agent-model-list" type="text" placeholder="如：deepseek-chat（可点右侧获取）" value="${escapeHtml(agent.model)}" style="flex:1;min-width:160px" />
+          <datalist id="agent-model-list"></datalist>
+          <button class="btn" id="btn-agent-models" type="button">获取模型列表</button>
+        </div>
+        <p class="hint" id="agent-models-hint">按当前接口地址 + Key 拉取 /models；获取后点输入框即可下拉选择。</p>
       </div>
       <div class="field"><span>API Key（本地保存）</span>
         <input id="set-agent-key" type="password" placeholder="sk-…" value="${escapeHtml(agent.apiKey)}" autocomplete="off" />
+      </div>
+      <div class="field"><span>渠道检测</span>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn" id="btn-agent-check" type="button">检测渠道可用性</button>
+          <span class="hint" id="agent-check-result">用当前填写的地址 + Key + 模型名发一条最小探活消息。</span>
+        </div>
       </div>
       <div class="field"><span>允许 AI 检索文件正文</span>
         <div class="chk-group" style="padding-top:2px">
@@ -3269,11 +3282,28 @@ function openSettingsModal() {
           <div style="margin-top:6px"><button class="btn" id="btn-favicon-refresh" type="button" style="padding:6px 12px;font-size:12.5px">↻ 重试加载全部图标</button><span class="hint" style="margin-left:8px">跳过缓存重新请求（图标未显示/异常时用）</span></div>
         </div>
       </div>`;
-  // v4.3.0：桌面随手记全局快捷键
+  // v4.10.0：桌面区——托盘 + 快捷面板 + 随手记快捷键（录入模式，不再手敲文本）
   const quickNoteField = (IS_TAURI && !IS_ANDROID) ? `
+      <div class="field"><span>系统托盘（关闭主窗 = 最小化到托盘，Alt+P 快捷面板随时唤出）</span>
+        <div class="chk-group" style="padding-top:2px">
+          <label><input type="checkbox" id="set-close-to-tray" ${s.closeToTray !== false ? 'checked' : ''} /> 关闭主窗口时最小化到托盘（不勾选则直接退出）</label>
+        </div>
+      </div>
+      <div class="field"><span>快捷面板全局快捷键（任意界面按组合键唤出：搜密码复制 / 生成 / 导入）</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="set-quickpanel-key" type="hidden" value="${escapeHtml(s.quickPanelShortcut || 'Alt+P')}" />
+          <button class="btn" id="btn-record-quickpanel" type="button" style="min-width:150px">${escapeHtml(s.quickPanelShortcut || 'Alt+P')}</button>
+          <button class="btn" id="btn-reset-quickpanel" type="button" title="恢复默认 Alt+P">默认</button>
+        </div>
+        <p class="hint">点按钮后直接按下组合键录入（Esc 取消）；需搭配 Ctrl / Alt / Win 修饰键。</p>
+      </div>
       <div class="field"><span>随手记全局快捷键（读取剪贴板 → 确认后存为便签）</span>
-        <input id="set-quicknote-key" type="text" placeholder="如 Ctrl+Alt+N" value="${escapeHtml(s.quickNoteShortcut || 'Ctrl+Alt+N')}" />
-        <p class="hint">修改保存后生效；格式如 Ctrl+Alt+N / CommandOrControl+Shift+N。</p>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="set-quicknote-key" type="hidden" value="${escapeHtml(s.quickNoteShortcut || 'Ctrl+Alt+N')}" />
+          <button class="btn" id="btn-record-quicknote" type="button" style="min-width:150px">${escapeHtml(s.quickNoteShortcut || 'Ctrl+Alt+N')}</button>
+          <button class="btn" id="btn-reset-quicknote" type="button" title="恢复默认 Ctrl+Alt+N">默认</button>
+        </div>
+        <p class="hint">录入方式同上；两个快捷键不可相同。</p>
       </div>` : '';
   const backupField = currentMode === 'local' ? `
       <div class="field"><span>自动备份快照（${IS_TAURI ? '存于应用数据目录 backups\\' : '存于本机浏览器存储'}，加密库快照保持密文）<button class="hint-btn" type="button" data-hint="snap" title="自动备份快照说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></span>
@@ -3459,6 +3489,36 @@ function openSettingsModal() {
     syncBioUi();
   });
   syncBioUi();
+  // v4.10.0：快捷键录入模式（点按钮 → 按组合键；Esc 取消；「默认」一键还原）
+  const bindRecorder = (btnId, inputId, resetId, dflt) => {
+    const btn = $(btnId), input = $(inputId);
+    if (!btn || !input) return;
+    PassShortcut.bindShortcutRecorder(btn, input);
+    input.addEventListener('change', () => { btn.textContent = input.value; });
+    $(resetId)?.addEventListener('click', () => {
+      input.value = dflt;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  };
+  bindRecorder('#btn-record-quickpanel', '#set-quickpanel-key', '#btn-reset-quickpanel', 'Alt+P');
+  bindRecorder('#btn-record-quicknote', '#set-quicknote-key', '#btn-reset-quicknote', 'Ctrl+Alt+N');
+  // v4.10.0：AI 渠道检测（读取弹窗当前填写值，不必先保存）
+  $('#btn-agent-models')?.addEventListener('click', (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    fetchAgentModels($('#set-agent-url').value.trim(), $('#set-agent-key').value.trim())
+      .finally(() => { btn.disabled = false; });
+  });
+  $('#btn-agent-check')?.addEventListener('click', (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    agentChannelCheck($('#set-agent-url').value.trim(), $('#set-agent-key').value.trim(), $('#set-agent-model').value.trim())
+      .finally(() => { btn.disabled = false; });
+  });
+  // 模型输入框双击：快捷再次拉取列表后自动展开下拉（datalist 聚焦行为各端不一，双击兜底）
+  $('#set-agent-model')?.addEventListener('dblclick', () => {
+    fetchAgentModels($('#set-agent-url').value.trim(), $('#set-agent-key').value.trim());
+  });
   $('#btn-settings-save').addEventListener('click', async () => {
     const ns = { ...loadSettings() };
     if (!IS_TAURI) ns.storageMode = $('#set-mode').value;
@@ -3483,13 +3543,29 @@ function openSettingsModal() {
     if (auEl) ns.autoUpdate = auEl.checked;
     const upEl = $('#set-update-proxy');
     if (upEl) ns.updateProxy = upEl.value.trim();
-    const qnEl = $('#set-quicknote-key'); // v4.3.0：随手记全局快捷键（桌面）
-    if (qnEl && qnEl.value.trim()) {
-      ns.quickNoteShortcut = qnEl.value.trim();
-      if (IS_TAURI && !IS_ANDROID) {
+    // v4.10.0：托盘 + 快捷面板快捷键；v4.3.0：随手记快捷键（均为录入模式取值）
+    const qnEl = $('#set-quicknote-key');
+    const qpEl = $('#set-quickpanel-key');
+    const trayEl = $('#set-close-to-tray');
+    if (qnEl && qnEl.value.trim()) ns.quickNoteShortcut = qnEl.value.trim();
+    if (qpEl && qpEl.value.trim()) ns.quickPanelShortcut = qpEl.value.trim();
+    if (qnEl && qpEl && ns.quickNoteShortcut === ns.quickPanelShortcut) {
+      return toast('两个全局快捷键不能相同，请重新录入', true);
+    }
+    if (trayEl) ns.closeToTray = !!trayEl.checked;
+    if (IS_TAURI && !IS_ANDROID) {
+      if (qpEl && qpEl.value.trim() && qpEl.value.trim() !== (s.quickPanelShortcut || 'Alt+P')) {
+        tauriInvoke('set_quickpanel_shortcut', { accel: ns.quickPanelShortcut })
+          .then(() => toast('快捷面板快捷键已更新'))
+          .catch((err) => toast('快捷面板快捷键注册失败: ' + err, true));
+      }
+      if (trayEl) {
+        tauriInvoke('set_tray_mode', { enabled: ns.closeToTray }).catch(() => {});
+      }
+      if (qnEl && qnEl.value.trim() && qnEl.value.trim() !== (s.quickNoteShortcut || 'Ctrl+Alt+N')) {
         tauriInvoke('set_quicknote_shortcut', { accel: ns.quickNoteShortcut })
-          .then(() => toast('全局快捷键已更新'))
-          .catch((err) => toast('快捷键注册失败: ' + err, true));
+          .then(() => toast('随手记快捷键已更新'))
+          .catch((err) => toast('随手记快捷键注册失败: ' + err, true));
       }
     }
     saveSettings(ns);
@@ -3834,8 +3910,61 @@ async function agentFetch(url, opts = {}) {
   return fetch(url, opts);
 }
 
-/** 流式网络出口：返回 { ok, status, text() }，并按块回调原始 SSE 文本 */
-async function agentFetchStream(url, opts = {}, onChunk) {
+/* ---------- AI 渠道检测（v4.10.0）：设置页「获取模型列表 / 检测渠道可用性」 ----------
+ * 网络走 agentFetch 三路分发（Rust 代理 / 服务器 /api/agent/proxy / PWA 直连），
+ * 纯逻辑（URL 拼接/解析/判定）在 agent-check.js（Node 可测）。桌面与手机同一套。 */
+async function fetchAgentModels(baseUrl, apiKey) {
+  const hint = (msg, isErr) => {
+    const el = $('#agent-models-hint');
+    if (el) { el.textContent = msg; el.style.color = isErr ? 'var(--danger)' : ''; }
+  };
+  if (!PassAgentCheck.trimBase(baseUrl)) { hint('请先填写接口地址', true); return null; }
+  hint('获取中…');
+  try {
+    const r = await agentFetch(PassAgentCheck.modelsUrl(baseUrl), {
+      method: 'GET',
+      headers: PassAgentCheck.authHeaders(apiKey),
+    });
+    const text = await r.text();
+    const p = PassAgentCheck.parseModels(text);
+    if (!r.ok || !p.ok) {
+      hint('获取失败：HTTP ' + r.status + (p.error && p.error !== '响应不是合法 JSON' ? ' · ' + p.error : PassAgentCheck.briefError(text) ? ' · ' + PassAgentCheck.briefError(text) : ''), true);
+      return null;
+    }
+    const dl = $('#agent-model-list');
+    if (dl) dl.innerHTML = p.models.map((m) => `<option value="${escapeHtml(m)}"></option>`).join('');
+    hint(`已获取 ${p.total} 个模型${p.total > p.models.length ? `（展示前 ${p.models.length} 个）` : ''}，点模型名输入框下拉选择`);
+    return p.models;
+  } catch (e) {
+    hint('网络失败：' + (e.message || e), true);
+    return null;
+  }
+}
+
+async function agentChannelCheck(baseUrl, apiKey, model) {
+  const el = $('#agent-check-result');
+  const show = (msg, isErr) => { if (el) { el.textContent = msg; el.style.color = isErr ? 'var(--danger)' : 'var(--ok, #2a9d4a)'; } };
+  if (!PassAgentCheck.trimBase(baseUrl)) { show('请先填写接口地址', true); return false; }
+  if (!model) { show('请先填写模型名（或点「获取模型列表」选择）', true); return false; }
+  show('检测中…');
+  const t0 = Date.now();
+  try {
+    const r = await agentFetch(PassAgentCheck.chatUrl(baseUrl), {
+      method: 'POST',
+      headers: PassAgentCheck.authHeaders(apiKey, { 'Content-Type': 'application/json' }),
+      body: PassAgentCheck.buildPingBody(model),
+    });
+    const text = await r.text();
+    const verdict = PassAgentCheck.evalPing(r.status, text, Date.now() - t0);
+    show(verdict.message, !verdict.ok);
+    return verdict.ok;
+  } catch (e) {
+    show('网络失败：' + (e.message || e), true);
+    return false;
+  }
+}
+
+/** 流式网络出口：返回 { ok, status, text() }，并按块回调原始 SSE 文本 */async function agentFetchStream(url, opts = {}, onChunk) {
   const method = opts.method || 'POST';
   const headers = opts.headers || {};
   const body = opts.body ?? null;
@@ -4953,6 +5082,77 @@ async function setupQuickNoteShortcut() {
   } catch (e) { console.warn('[passbook] 全局快捷键不可用', e); }
 }
 
+/* ---------- 桌面快捷面板（v4.10.0）：主窗侧桥 ----------
+ * 面板小窗（quick.html/quick.js）不直接开库，所有操作经 quick-request 事件
+ * 由主窗在内存权威库上代执行，结果 emitTo 回 quick 窗口（id 配对）。 */
+let vaultReady = false; // initStore 完成后置 true（gate 据此判断面板可否进入）
+
+async function handleQuickAction(action, payload) {
+  const s = loadSettings();
+  if (action === 'gate') {
+    return { ready: vaultReady, available: true, needsPin: !!s.pinHash, unlocked };
+  }
+  if (action === 'unlock') {
+    if (!s.pinHash) return { ok: true };
+    if (payload && payload.hash === s.pinHash) {
+      unlocked = true;
+      document.querySelectorAll('.lock-mask').forEach((m) => m.remove()); // 同步撤掉主窗锁层
+      return { ok: true };
+    }
+    return { ok: false };
+  }
+  if (action === 'search') {
+    const q = String((payload && payload.q) || '').trim();
+    let items;
+    if (currentMode === 'server') {
+      items = (await store.list({ q })).items || [];
+    } else {
+      const all = (await store.list({})).items || [];
+      items = q && window.PassSearch ? PassSearch.searchEntries(all, q) : all;
+    }
+    return { items: items.slice(0, 30) };
+  }
+  if (action === 'save') {
+    const row = payload && payload.row;
+    if (!row || !row.owner) throw new Error('所属不能为空');
+    const r = await store.importItems([{
+      owner: row.owner, account: row.account || '', password: row.password || '',
+      url: '', category: '', note: '',
+    }], 'merge');
+    if (!document.hidden) refreshList();
+    return r;
+  }
+  if (action === 'import') {
+    const rows = (payload && payload.rows) || [];
+    if (!rows.length) throw new Error('没有可导入的数据');
+    const r = await store.importItems(rows, 'merge');
+    if (!document.hidden) { refreshChips(); refreshList(); }
+    else { refreshChips(); } // 隐藏时也刷分类计数，回到主窗即新
+    return r;
+  }
+  throw new Error('未知操作: ' + action);
+}
+
+async function setupQuickPanelBridge() {
+  if (!(IS_TAURI && !IS_ANDROID)) return;
+  const evt = window.__TAURI__.event;
+  try {
+    await tauriInvoke('set_quickpanel_shortcut', { accel: loadSettings().quickPanelShortcut || 'Alt+P' });
+  } catch (e) { console.warn('[passbook] 快捷面板快捷键不可用', e); }
+  try {
+    await tauriInvoke('set_tray_mode', { enabled: loadSettings().closeToTray !== false });
+  } catch { /* 尽力而为（旧版本命令缺失等） */ }
+  await evt.listen('quick-request', async (ev) => {
+    const req = ev.payload || {};
+    let r;
+    try { r = { ok: true, data: await handleQuickAction(req.action, req.payload) }; }
+    catch (e) { r = { ok: false, error: String(e && e.message || e) }; }
+    try { await evt.emitTo('quick', 'quick-response', { id: req.id, ...r }); } catch { /* 窗口已关 */ }
+  });
+  // 托盘菜单「锁定」：与自动锁定同一管线（未启用 PIN 则无锁可上）
+  await evt.listen('pb-lock', () => doAutoLock());
+}
+
 function openQuickNoteConfirm(text) {
   const preview = PassNotes.previewText(text);
   openModal(`
@@ -5817,6 +6017,7 @@ async function injectShotDemo() {
     // 先过启动锁（PIN），再自动解锁加密库（本机密钥，无感），最后加载数据渲染
     await showLockIfNeeded();
     await initStore();
+    vaultReady = true; // v4.10.0：快捷面板 gate 依据（初始化完才放行面板操作）
     await refreshChips();
     // v4.3.0：恢复上次停留页（默认密码页）
     let startView = 'pass';
@@ -5828,6 +6029,7 @@ async function injectShotDemo() {
     await consumePendingFiles();
     await injectShotDemo(); // 截图深链演示注入（非截图场景为 no-op）
     setupQuickNoteShortcut();
+    setupQuickPanelBridge(); // v4.10.0：快捷面板（Alt+P）+ 托盘模式同步
     // v4.9.0 启动静默检查更新（桌面每次启动；手机 24h 节流；失败静默不打扰）
     if (IS_TAURI) {
       const sUpd = loadSettings();

@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "quick",
+  "description": "快捷面板小窗权限：事件收发（与主窗通信）+ 面板显隐/打开主窗命令",
+  "windows": ["quick"],
+  "permissions": [
+    "core:default"
+  ]
+}
