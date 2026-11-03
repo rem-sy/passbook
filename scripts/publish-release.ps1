@@ -62,6 +62,13 @@ try {
 # 2) 传资产（重名先删：同 tag 重发场景幂等）。latest.json 为 build-desktop 生成的公开直链版
 #    （platforms.url 指向 github.com/releases/download/...，公开仓免认证可用；
 #     私有仓 assets API 兼容方案已随仓库转公开移除，历史实现见 v4.9.0 tag）
+#    v4.10.0 坑：Invoke-RestMethod（无论走代理与否）传大资产会长时间挂起或 408/连接重置——
+#    资产上传一律改 curl 直连（--noproxy）+ 失败重试 + 资产列表校验；API 调用仍走 $irm。
+$curlExe = "$env:SystemRoot\System32\curl.exe"
+function Test-AssetUploaded([string]$name) {
+  $rel2 = & $irm Get "https://api.github.com/repos/$repo/releases/tags/$Tag"
+  return @($rel2.assets | Where-Object { $_.name -eq $name }).Count -gt 0
+}
 foreach ($a in $assets) {
   $exist = @($rel.assets | Where-Object { $_.name -eq $a.Name })
   foreach ($e in $exist) {
@@ -69,7 +76,15 @@ foreach ($a in $assets) {
     Write-Host "  删旧资产 $($a.Name)"
   }
   $up = "https://uploads.github.com/repos/$repo/releases/$($rel.id)/assets?name=$([uri]::EscapeDataString($a.Name))"
-  & $irm Post $up $null $a.Path $a.Type | Out-Null
+  $done = $false
+  for ($i = 1; $i -le 5 -and -not $done; $i++) {
+    if ($i -gt 1) { Write-Host "  重试 $i/5：$($a.Name)"; Start-Sleep -Seconds 3 }
+    & $curlExe -sS --noproxy '*' --connect-timeout 15 --max-time 1800 -X POST `
+      -H "Authorization: Bearer $token" -H "Content-Type: $($a.Type)" `
+      --data-binary "@$($a.Path)" $up -o "$env:TEMP\pb-up-resp.json" -w '' 2>$null
+    $done = Test-AssetUploaded $a.Name
+  }
+  if (-not $done) { throw "资产上传失败（已重试 5 次）：$($a.Name)" }
   Write-Host ("  已上传 {0}（{1:N1} MB）" -f $a.Name, ((Get-Item $a.Path).Length / 1MB))
 }
 Write-Host "完成：https://github.com/$repo/releases/tag/$Tag"
