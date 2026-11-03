@@ -301,6 +301,8 @@ fn quick_panel_hide(app: AppHandle) {
 #[tauri::command]
 fn quick_panel_open_main(app: AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
+        // unminimize 为桌面专属 API（移动端无最小化概念，Android 编译不通过）
+        #[cfg(desktop)]
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();

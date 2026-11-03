@@ -1,9 +1,9 @@
-﻿# 密码本桌面版双版本构建：正式版（无渠道，无后缀，对外发布）+ 预置渠道版（-preset，仅本机）
-# 用法：powershell -ExecutionPolicy Bypass -File scripts\build-desktop.ps1 [-SkipPreset] [-SkipClean]
-# 预置渠道来自 public\agent-config.local.js（不入库，本机文件）；
-# 正式版构建时该文件被临时移出，产物不带任何渠道；预置版绝不上传 GitHub。
+﻿# 密码本桌面版构建：正式版（无渠道，无后缀，对外发布）
+# 用法：powershell -ExecutionPolicy Bypass -File scripts\build-desktop.ps1 [-Preset]
+# v4.10.0 起默认只构建正式版（用户决定预置版停用）；确需预置版时显式加 -Preset
+# （预置渠道来自 public\agent-config.local.js，不入库，本机文件；预置版绝不上传 GitHub）。
 # 产物统一复制到 D:\hobby\产物\密码本\
-param([switch]$SkipPreset, [switch]$SkipOfficial)
+param([switch]$Preset, [switch]$SkipOfficial)
 
 $ErrorActionPreference = 'Stop'
 $proj = 'D:\hobby\源码\密码本'
@@ -76,5 +76,5 @@ function Build-One([string]$name, [string]$suffix, [switch]$official) {
 }
 
 if (!$SkipOfficial) { Build-One '正式版（无预置渠道，对外发布）' '' -official }
-if (!$SkipPreset) { Build-One '预置渠道版（-preset，仅本机）' '-preset' }
+if ($Preset) { Write-Host '==> 预置渠道版（-Preset 显式指定）'; Build-One '预置渠道版（-preset，仅本机）' '-preset' }
 Write-Host '全部完成'
