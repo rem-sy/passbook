@@ -320,6 +320,42 @@ fn set_tray_mode(app: AppHandle, enabled: bool) {
     }
 }
 
+/* ---------- v4.11.0：开机自启动（桌面） ---------- */
+
+/// 查询开机自启动当前状态（注册表/启动项实际值，不依赖本地存储）。
+#[cfg(desktop)]
+#[tauri::command]
+fn get_autostart(app: AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+fn get_autostart(_app: AppHandle) -> Result<bool, String> {
+    Ok(false) // 桌面专属；移动端无此概念
+}
+
+/// 设置/取消开机自启动（Windows 写当前用户注册表 Run 项，免管理员）。
+#[cfg(desktop)]
+#[tauri::command]
+fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let al = app.autolaunch();
+    if enabled {
+        al.enable().map_err(|e| format!("启用开机自启动失败: {e}"))?;
+    } else {
+        al.disable().map_err(|e| format!("取消开机自启动失败: {e}"))?;
+    }
+    al.is_enabled().map_err(|e| e.to_string())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+fn set_autostart(_app: AppHandle, _enabled: bool) -> Result<bool, String> {
+    Ok(false) // 桌面专属；移动端无此概念
+}
+
 /// 备份快照文件元信息（v2.2.0 自动备份）
 #[derive(serde::Serialize)]
 struct BackupFileInfo {
@@ -1500,6 +1536,8 @@ pub fn run() {
             quick_panel_hide,
             quick_panel_open_main,
             set_tray_mode,
+            get_autostart,
+            set_autostart,
             get_files_store_dir,
             store_blob_write_b64,
             store_blob_read_b64,
@@ -1523,6 +1561,13 @@ pub fn run() {
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     let builder = builder.manage(PendingUpdate(std::sync::Mutex::new(None)));
+
+    // v4.11.0：开机自启动（仅桌面；Windows 写当前用户注册表 Run 项）
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_autostart::init(
+        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+        None,
+    ));
 
     // v4.10.0：托盘/快捷面板状态（CloseToTray 全平台托管，移动端命令为 no-op；默认最小化到托盘）
     let builder = builder.manage(CloseToTray(AtomicBool::new(true)));

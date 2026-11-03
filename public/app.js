@@ -3193,7 +3193,13 @@ $('#wt-findings').addEventListener('click', (e) => {
 })();
 
 /* ---------------- 设置 ---------------- */
-function openSettingsModal() {
+/** v4.11.0：开机自启动当前状态（读系统注册表/启动项实际值；非桌面恒 false） */
+async function getAutoStartState() {
+  if (!(IS_TAURI && !IS_ANDROID)) return false;
+  try { return !!(await tauriInvoke('get_autostart')); } catch { return false; }
+}
+
+async function openSettingsModal() {
   const s = loadSettings();
   const modeField = IS_TAURI ? `
       <label class="field"><span>存储模式</span>
@@ -3287,6 +3293,11 @@ function openSettingsModal() {
       <div class="field"><span>系统托盘（关闭主窗 = 最小化到托盘，Alt+P 快捷面板随时唤出）</span>
         <div class="chk-group" style="padding-top:2px">
           <label><input type="checkbox" id="set-close-to-tray" ${s.closeToTray !== false ? 'checked' : ''} /> 关闭主窗口时最小化到托盘（不勾选则直接退出）</label>
+        </div>
+      </div>
+      <div class="field"><span>开机自启动</span>
+        <div class="chk-group" style="padding-top:2px">
+          <label><input type="checkbox" id="set-autostart" ${await getAutoStartState() ? 'checked' : ''} /> 开机自动启动密码本（启动后常驻托盘，Alt+P 随时唤出）</label>
         </div>
       </div>
       <div class="field"><span>快捷面板全局快捷键（任意界面按组合键唤出：搜密码复制 / 生成 / 导入）</span>
@@ -3561,6 +3572,16 @@ function openSettingsModal() {
       }
       if (trayEl) {
         tauriInvoke('set_tray_mode', { enabled: ns.closeToTray }).catch(() => {});
+      }
+      // v4.11.0：开机自启动（系统级开关，状态不落 localStorage，以注册表为准）
+      const asEl = $('#set-autostart');
+      if (asEl) {
+        const prev = await getAutoStartState();
+        if (asEl.checked !== prev) {
+          tauriInvoke('set_autostart', { enabled: asEl.checked })
+            .then((now) => toast(now ? '已开启开机自启动' : '已取消开机自启动'))
+            .catch((err) => toast(String(err && err.message || err), true));
+        }
       }
       if (qnEl && qnEl.value.trim() && qnEl.value.trim() !== (s.quickNoteShortcut || 'Ctrl+Alt+N')) {
         tauriInvoke('set_quicknote_shortcut', { accel: ns.quickNoteShortcut })
