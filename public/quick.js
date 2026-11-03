@@ -81,18 +81,25 @@
   /* ---------- PIN 门 / 视图状态 ---------- */
   let gateState = null; // 最近一次 gate 结果（含 settings 快照）
 
+  const SVG_LOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
+  const SVG_STAR = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17.25 6.16 20.4l1.26-6.5-4.72-4.6 6.53-.95L12 2.75l2.77 5.6 6.53.95-4.72 4.6 1.26 6.5Z"/></svg>';
+  const SVG_COPY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+
   function renderGateBox(view) {
     const box = $('q-gate-box');
     if (view === 'loading') {
-      box.innerHTML = '<h3>⏳ 主界面初始化中…</h3><p class="q-hint">正在解锁数据库，稍候片刻后自动进入。<br />若长时间无响应，请打开主界面查看。</p><button class="btn" id="q-gate-open">打开主界面</button>';
+      box.innerHTML = '<div class="q-spinner"></div>' +
+        '<h3 class="q-gate-title">主界面初始化中</h3>' +
+        '<p class="q-hint">正在解锁数据库，稍候片刻后自动进入。<br />若长时间无响应，请打开主界面查看。</p>' +
+        '<button class="btn" id="q-gate-open">打开主界面</button>';
     } else if (view === 'pin') {
-      box.innerHTML = '<h3>🔒 密码本已锁定</h3>' +
+      box.innerHTML = '<h3 class="q-gate-title">' + SVG_LOCK + ' 密码本已锁定</h3>' +
         '<input id="q-pin" type="password" placeholder="输入 PIN" autocomplete="current-password" />' +
         '<p class="q-err" id="q-pin-err"></p>' +
         '<button class="btn primary" id="q-pin-go">解锁</button>' +
         '<p class="q-gate-hint">与主界面启动锁为同一把锁，解锁后两边同时解锁。</p>';
     } else {
-      box.innerHTML = '<h3>快捷面板不可用</h3><p class="q-hint">请从桌面应用主界面使用。</p>';
+      box.innerHTML = '<h3 class="q-gate-title">快捷面板不可用</h3><p class="q-hint">请从桌面应用主界面使用。</p>';
     }
     $('q-pin')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') tryPinUnlock(); });
     $('q-pin-go')?.addEventListener('click', tryPinUnlock);
@@ -190,11 +197,11 @@
         ? '<button class="q-totp" data-copy-totp="' + esc(it.id) + '" title="复制动态验证码"><span data-totp="' + esc(it.id) + '">······</span></button>'
         : '';
       return '<div class="q-item">' +
-        '<div class="q-it-main"><div class="q-it-owner">' + esc(it.owner) + (it.fav ? ' ⭐' : '') + '</div>' +
+        '<div class="q-it-main"><div class="q-it-owner">' + esc(it.owner) + (it.fav ? ' <span class="q-fav">' + SVG_STAR + '</span>' : '') + '</div>' +
         '<div class="q-it-account">' + esc(it.account) + (it.note ? ' · ' + esc(it.note) : '') + '</div></div>' +
         '<div class="q-btns">' + totp +
         '<button data-copy-ac="' + esc(it.id) + '">账号</button>' +
-        '<button data-copy-pw="' + esc(it.id) + '" class="q-copy-pw">密码</button>' +
+        '<button data-copy-pw="' + esc(it.id) + '" class="q-copy-pw">' + SVG_COPY + ' 密码</button>' +
         '</div></div>';
     }).join('');
   }

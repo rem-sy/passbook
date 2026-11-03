@@ -6,76 +6,143 @@
   <title>快捷面板 · 密码本</title>
   <link rel="stylesheet" href="style.css" />
   <style>
-    /* 快捷面板紧凑样式（基于主 style.css 的 CSS 变量） */
+    /* ============ 快捷面板（v4.10.1 重设计：无 emoji，线性图标，简洁高级） ============ */
+    :root {
+      --q-accent: #1d4a80;
+      --q-hover: rgba(29, 74, 128, 0.06);
+      --q-shadow: 0 16px 48px rgba(15, 23, 42, 0.16), 0 2px 8px rgba(15, 23, 42, 0.06);
+      --q-radius: 12px;
+    }
+    html.dark {
+      --q-accent: #8fb0e8;
+      --q-hover: rgba(143, 176, 232, 0.08);
+      --q-shadow: 0 16px 48px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.35);
+    }
+
     html, body.quick-body { height: auto; }
     body.quick-body {
       margin: 0; padding: 0; overflow: hidden;
-      background: var(--bg, #f6f7f9); color: var(--text, #222);
-      font-family: inherit; font-size: 14px;
+      background: var(--bg); color: var(--text);
+      font-family: inherit; font-size: 13.5px; line-height: 1.45;
+      border: 1px solid var(--line);
+      box-shadow: var(--q-shadow);
       -webkit-user-select: none; user-select: none;
     }
-    .q-gate { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; background: var(--bg, #f6f7f9); }
-    .q-gate .q-gate-box { width: 82%; max-width: 320px; text-align: center; }
-    .q-gate h3 { margin: 0 0 14px; font-size: 15px; display: flex; align-items: center; justify-content: center; gap: 6px; }
+    svg { width: 15px; height: 15px; flex-shrink: 0; }
+
+    /* ---------- 锁定 / 加载 门 ---------- */
+    .q-gate { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; background: var(--bg); }
+    .q-gate-box { width: 80%; max-width: 300px; text-align: center; }
+    .q-gate-title { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; font-weight: 600; margin: 0 0 16px; color: var(--text); }
+    .q-gate-title svg { width: 16px; height: 16px; color: var(--muted); }
     .q-gate input {
-      width: 100%; box-sizing: border-box; border: 1px solid var(--line, #d8dce2); border-radius: 10px;
-      padding: 12px; font-size: 16px; letter-spacing: 4px; text-align: center; outline: none;
-      background: var(--card, #fff); color: var(--text, #222);
+      width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: var(--q-radius);
+      padding: 11px 12px; font-size: 15px; letter-spacing: 4px; text-align: center; outline: none;
+      background: var(--card); color: var(--text); transition: border-color 0.15s;
     }
-    .q-gate .q-err { color: var(--danger, #d43); font-size: 12.5px; min-height: 18px; margin: 8px 0; }
-    .q-gate .btn { width: 100%; margin-top: 4px; }
-    .q-gate .q-gate-hint { margin-top: 14px; font-size: 12px; color: var(--muted, #888); }
-    .q-gate .q-gate-hint a { cursor: pointer; text-decoration: underline; }
+    .q-gate input:focus { border-color: var(--q-accent); }
+    .q-gate .q-err { color: var(--danger); font-size: 12px; min-height: 17px; margin: 8px 0; }
+    .q-gate .btn { width: 100%; margin-top: 2px; }
+    .q-gate-hint { margin-top: 16px; font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+    .q-gate-hint a { cursor: pointer; text-decoration: none; color: var(--q-accent); border-bottom: 1px solid transparent; }
+    .q-gate-hint a:hover { border-bottom-color: var(--q-accent); }
+    .q-spinner { width: 22px; height: 22px; margin: 0 auto 14px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--q-accent); animation: q-spin 0.8s linear infinite; }
+    @keyframes q-spin { to { transform: rotate(360deg); } }
 
+    /* ---------- 主体 ---------- */
     .q-app { display: flex; flex-direction: column; height: 100vh; }
-    .q-tabs { display: flex; gap: 4px; padding: 10px 10px 0; }
+
+    /* 分段式 Tab */
+    .q-tabs { display: flex; gap: 2px; margin: 12px 12px 0; padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
     .q-tabs button {
-      flex: 1; border: 1px solid var(--line, #d8dce2); border-bottom: none; border-radius: 10px 10px 0 0;
-      background: var(--card, #fff); color: var(--muted, #888); padding: 8px 0; font-size: 13px; cursor: pointer;
+      flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+      border: none; border-radius: 8px; background: transparent; color: var(--muted);
+      padding: 7px 0; font-size: 12.5px; font-family: inherit; cursor: pointer;
+      transition: background 0.15s, color 0.15s;
     }
-    .q-tabs button.on { color: var(--text, #222); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent, #3b82f6); }
-    .q-body { flex: 1; overflow-y: auto; border-top: 1px solid var(--line, #d8dce2); padding: 10px; display: flex; flex-direction: column; gap: 10px; }
-    .q-body input[type="text"], .q-body input[type="number"], .q-body textarea {
-      width: 100%; box-sizing: border-box; border: 1px solid var(--line, #d8dce2); border-radius: 10px;
-      padding: 10px 12px; font-size: 14px; outline: none; background: var(--card, #fff); color: var(--text, #222);
-    }
-    .q-body textarea { height: 130px; resize: none; font-size: 13px; -webkit-user-select: text; user-select: text; }
-    .q-hint { font-size: 12px; color: var(--muted, #888); line-height: 1.5; }
-    .q-msg { font-size: 12.5px; color: var(--ok, #2a9d4a); min-height: 17px; }
-    .q-msg.err { color: var(--danger, #d43); }
+    .q-tabs button svg { width: 13px; height: 13px; }
+    .q-tabs button:hover { color: var(--text); }
+    .q-tabs button.on { background: var(--bg); color: var(--text); font-weight: 600; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1); }
+    html.dark .q-tabs button.on { background: var(--bg); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35); }
 
+    .q-body { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+
+    input[type="text"], input[type="number"], textarea {
+      width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: var(--q-radius);
+      padding: 10px 12px; font-size: 13.5px; font-family: inherit; outline: none;
+      background: var(--card); color: var(--text); transition: border-color 0.15s;
+    }
+    input:focus, textarea:focus { border-color: var(--q-accent); }
+    input[type="number"] { width: 76px; text-align: center; }
+    input[type="checkbox"] { accent-color: var(--q-accent); }
+    textarea { height: 132px; resize: none; font-size: 12.5px; line-height: 1.6; -webkit-user-select: text; user-select: text; }
+
+    .q-hint { font-size: 11.5px; color: var(--muted); line-height: 1.6; margin: 0; }
+    .q-msg { font-size: 12px; color: var(--ok); min-height: 17px; margin: 0; }
+    .q-msg.err { color: var(--danger); }
+    .q-msg.pre { white-space: pre-wrap; -webkit-user-select: text; user-select: text; }
+
+    /* 搜索结果卡片 */
+    #q-results { display: flex; flex-direction: column; gap: 6px; }
     .q-item {
-      border: 1px solid var(--line, #d8dce2); border-radius: 10px; background: var(--card, #fff);
-      padding: 8px 10px; display: flex; align-items: center; gap: 8px;
+      display: flex; align-items: center; gap: 10px;
+      border: 1px solid var(--line); border-radius: var(--q-radius); background: var(--card);
+      padding: 9px 9px 9px 12px; transition: border-color 0.15s, background 0.15s;
     }
-    .q-item .q-it-main { flex: 1; min-width: 0; cursor: default; }
-    .q-item .q-it-owner { font-weight: 600; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .q-item .q-it-account { font-size: 12px; color: var(--muted, #888); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .q-item .q-btns { display: flex; gap: 6px; flex-shrink: 0; }
-    .q-item .q-btns button {
-      border: 1px solid var(--line, #d8dce2); background: transparent; color: var(--text, #222);
-      border-radius: 8px; padding: 5px 9px; font-size: 12px; cursor: pointer; white-space: nowrap;
+    .q-item:hover { border-color: var(--q-accent); background: var(--q-hover); }
+    .q-it-main { flex: 1; min-width: 0; }
+    .q-it-owner { font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 5px; white-space: nowrap; overflow: hidden; }
+    .q-it-owner .q-fav { color: #d9a521; display: inline-flex; }
+    .q-it-owner .q-fav svg { width: 12px; height: 12px; }
+    .q-it-account { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+    .q-btns { display: flex; gap: 4px; flex-shrink: 0; }
+    .q-btns button {
+      display: inline-flex; align-items: center; gap: 4px;
+      border: 1px solid transparent; background: transparent; color: var(--muted);
+      border-radius: 8px; padding: 5px 9px; font-size: 11.5px; font-family: inherit; cursor: pointer;
+      white-space: nowrap; transition: color 0.15s, background 0.15s;
     }
-    .q-item .q-btns button:hover { border-color: var(--accent, #3b82f6); color: var(--accent, #3b82f6); }
-    .q-item .q-btns button.q-totp { color: var(--accent, #3b82f6); font-variant-numeric: tabular-nums; }
-    .q-empty { text-align: center; color: var(--muted, #888); padding: 26px 0; font-size: 13px; }
+    .q-btns button svg { width: 12px; height: 12px; }
+    .q-btns button:hover { color: var(--q-accent); background: var(--q-hover); }
+    .q-btns .q-copy-pw { color: var(--q-accent); border-color: var(--line); background: var(--card); font-weight: 600; }
+    .q-btns .q-copy-pw:hover { border-color: var(--q-accent); background: var(--q-hover); }
+    .q-btns .q-totp { font-variant-numeric: tabular-nums; letter-spacing: 0.5px; }
+    .q-empty { text-align: center; color: var(--muted); padding: 28px 0; font-size: 12.5px; }
 
+    /* 生成器 */
+    .q-gen-row { display: flex; gap: 8px; align-items: stretch; }
+    .q-gen-row .btn { flex: 1; }
+    .q-chk { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+    .q-chk label { display: flex; align-items: center; gap: 5px; cursor: pointer; transition: color 0.15s; }
+    .q-chk label:hover { color: var(--text); }
     .q-gen-out code {
       display: block; word-break: break-all; -webkit-user-select: text; user-select: text;
-      font-size: 14.5px; background: var(--card, #fff); border: 1px dashed var(--line, #d8dce2);
-      border-radius: 10px; padding: 12px; text-align: center; letter-spacing: .5px;
+      font-size: 14px; font-family: ui-monospace, Consolas, monospace; letter-spacing: 0.5px;
+      background: var(--card); border: 1px solid var(--line); border-radius: var(--q-radius);
+      padding: 13px 12px; text-align: center; color: var(--text);
     }
     .q-actions { display: flex; gap: 8px; }
     .q-actions .btn { flex: 1; }
-    .q-chk { display: flex; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--muted, #888); }
-    .q-chk label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
-    .q-save-form { display: flex; flex-direction: column; gap: 8px; border-top: 1px dashed var(--line, #d8dce2); padding-top: 10px; }
-    .q-foot { padding: 6px 12px; font-size: 11.5px; color: var(--muted, #aaa); display: flex; justify-content: space-between; }
-    .q-foot a { cursor: pointer; text-decoration: underline; }
-    /* 深色由 html.dark 全局换 CSS 变量（theme.js），无需逐条覆盖 */
-    body.quick-body { box-shadow: 0 12px 36px rgba(0,0,0,.18); }
-    html.dark body.quick-body { box-shadow: 0 12px 36px rgba(0,0,0,.5); }
-    .q-msg.pre { white-space: pre-wrap; -webkit-user-select: text; user-select: text; }
+    .q-save-form { display: flex; flex-direction: column; gap: 8px; border-top: 1px dashed var(--line); padding-top: 10px; }
+
+    /* 按钮基线（借 style.css .btn，补齐面板内观感） */
+    .btn { transition: filter 0.15s, border-color 0.15s; }
+    .btn:hover { filter: brightness(1.04); }
+    .btn.primary { background: var(--q-accent); border-color: var(--q-accent); color: #fff; }
+    html.dark .btn.primary { color: #10141c; }
+
+    /* 底栏 */
+    .q-foot {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 7px 14px; border-top: 1px solid var(--line);
+      font-size: 11px; color: var(--muted);
+    }
+    .q-foot kbd {
+      font-family: inherit; font-size: 10px; padding: 1px 5px; border: 1px solid var(--line);
+      border-bottom-width: 2px; border-radius: 4px; background: var(--card); color: var(--muted);
+    }
+    .q-foot a { cursor: pointer; text-decoration: none; color: var(--q-accent); }
+    .q-foot a:hover { text-decoration: underline; }
   </style>
 </head>
 <body class="quick-body">
@@ -85,28 +152,37 @@
   </div>
 
   <div id="q-app" class="q-app hidden">
-    <div class="q-tabs">
-      <button data-tab="search" class="on">🔍 搜索</button>
-      <button data-tab="gen">✨ 生成</button>
-      <button data-tab="import">📥 导入</button>
+    <div class="q-tabs" id="q-tabs">
+      <button data-tab="search" class="on">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        搜索
+      </button>
+      <button data-tab="gen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/><path d="m14 7 3 3"/><path d="M5 6v4"/><path d="M19 14v4"/><path d="M10 2v2"/><path d="M7 8H3"/><path d="M21 16h-4"/><path d="M11 3H9"/></svg>
+        生成
+      </button>
+      <button data-tab="import">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+        导入
+      </button>
     </div>
     <div class="q-body">
       <!-- 搜索 -->
       <div id="tab-search" style="display:flex;flex-direction:column;gap:10px">
         <input id="q-search" type="text" placeholder="搜索 所属 / 账户 / 网址 / 备注" autocomplete="off" />
-        <div id="q-results" style="display:flex;flex-direction:column;gap:8px"></div>
+        <div id="q-results"></div>
       </div>
       <!-- 生成 -->
       <div id="tab-gen" class="hidden" style="display:flex;flex-direction:column;gap:10px">
-        <div style="display:flex;gap:8px;align-items:center">
-          <input id="q-gen-len" type="number" min="4" max="128" value="16" style="width:80px" />
-          <button class="btn primary" id="q-gen-go" style="flex:1">生成强密码</button>
+        <div class="q-gen-row">
+          <input id="q-gen-len" type="number" min="4" max="128" value="16" title="密码长度" />
+          <button class="btn primary" id="q-gen-go">生成强密码</button>
         </div>
         <div class="q-chk">
           <label><input type="checkbox" id="q-gen-upper" checked />A-Z</label>
           <label><input type="checkbox" id="q-gen-lower" checked />a-z</label>
           <label><input type="checkbox" id="q-gen-digit" checked />0-9</label>
-          <label><input type="checkbox" id="q-gen-symbol" checked />符号</label>
+          <label><input type="checkbox" id="q-gen-symbol" checked />!@#</label>
         </div>
         <div id="q-gen-block" class="hidden" style="display:flex;flex-direction:column;gap:10px">
           <div class="q-gen-out"><code id="q-gen-pw"></code></div>
@@ -128,13 +204,13 @@
       <!-- 导入 -->
       <div id="tab-import" class="hidden" style="display:flex;flex-direction:column;gap:10px">
         <textarea id="q-import-text" placeholder="粘贴文本导入（每行一条）：&#10;微信,13800138000,P@ssw0rd1&#10;GitHub,user@example.com,Abc12345,https://github.com,主账号"></textarea>
-        <div class="q-hint">格式：所属, 账户, 密码[, 网址][, 备注]；也认 中文逗号 / 斜杠 / Tab / 空格 分隔。导入走合并模式，自动跳过重复。</div>
+        <p class="q-hint">格式：所属, 账户, 密码[, 网址][, 备注]；也认中文逗号 / 斜杠 / Tab / 空格分隔。导入走合并模式，自动跳过重复。</p>
         <div class="q-msg pre" id="q-import-preview"></div>
         <button class="btn primary" id="q-import-go">导入（合并）</button>
       </div>
     </div>
     <div class="q-foot">
-      <span>Alt+P 呼出 / Esc 隐藏</span>
+      <span><kbd>Alt P</kbd> 呼出 &nbsp;·&nbsp; <kbd>Esc</kbd> 隐藏</span>
       <a id="q-open-main">打开主界面</a>
     </div>
   </div>
