@@ -81,7 +81,7 @@ foreach ($a in $assets) {
     if ($i -gt 1) { Write-Host "  重试 $i/5：$($a.Name)"; Start-Sleep -Seconds 3 }
     & $curlExe -sS --noproxy '*' --connect-timeout 15 --max-time 1800 -X POST `
       -H "Authorization: Bearer $token" -H "Content-Type: $($a.Type)" `
-      --data-binary "@$($a.Path)" $up -o "$env:TEMP\pb-up-resp.json" -w '' 2>$null
+      --data-binary "@$($a.Path)" $up -o "$env:TEMP\pb-up-resp.json" 2>$null
     $done = Test-AssetUploaded $a.Name
   }
   if (-not $done) { throw "资产上传失败（已重试 5 次）：$($a.Name)" }
