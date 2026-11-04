@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "主窗口权限：核心 API 与对话框",
+  "description": "主窗口权限：核心 API 与对话框。注意：原生 window.confirm 被 dialog 插件接管且默认 ACL 不含 allow-confirm（2.7.1 调 plugin:dialog|confirm），且其返回 Promise 破坏同步判断——应用内一律用自建 uiConfirm 弹窗，不依赖原生 confirm",
   "windows": ["main"],
   "permissions": [
     "core:default",

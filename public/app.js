@@ -112,6 +112,41 @@ function toast(msg, isError = false) {
   setTimeout(() => el.remove(), 2600);
 }
 
+/* ---------------- 确认弹窗（v4.11.3） ----------------
+ * 原生 confirm 在 Tauri 桌面被 dialog 插件接管为异步 invoke 且默认 ACL 不放行
+ * （报 plugin:dialog|confirm not allowed），返回的 Promise 还会让同步 if(!confirm()) 失真——
+ * 危险操作实际跳过确认。故全部改用本自建弹窗：Promise<boolean>，Enter=确定 / Esc=取消。 */
+function uiConfirm(message, opts = {}) {
+  return new Promise((resolve) => {
+    const mask = document.createElement('div');
+    mask.className = 'modal-mask';
+    mask.style.zIndex = '660'; // 自建弹窗层规范（DEVELOPGUIDE §7）
+    mask.innerHTML = `
+      <div class="modal" style="max-width:360px">
+        <div class="modal-head"><h3>${escapeHtml(opts.title || '请确认')}</h3><span></span></div>
+        <div class="modal-body"><p style="white-space:pre-wrap;word-break:break-word;font-size:13.5px;line-height:1.7;margin:0">${escapeHtml(message)}</p></div>
+        <div class="modal-foot">
+          <button class="btn" data-r="0">取消</button>
+          <button class="btn ${opts.danger ? 'danger' : 'primary'}" data-r="1">${escapeHtml(opts.okText || '确定')}</button>
+        </div>
+      </div>`;
+    const done = (r) => {
+      mask.remove();
+      document.removeEventListener('keydown', onKey, true);
+      resolve(r);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.stopPropagation(); done(false); }
+      else if (e.key === 'Enter') { e.stopPropagation(); done(true); }
+    };
+    mask.addEventListener('click', (e) => { if (e.target === mask) done(false); });
+    mask.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => done(b.dataset.r === '1')));
+    document.addEventListener('keydown', onKey, true);
+    document.body.appendChild(mask);
+    mask.querySelector('[data-r="1"]')?.focus();
+  });
+}
+
 /* ---------------- 弹窗 ---------------- */
 let pbSuppressPop = false; // 按钮主动关闭时置位，让随后的 popstate 不再重复处理
 function openModal(html, wide = false) {
@@ -1314,7 +1349,7 @@ $('#entry-list').addEventListener('click', async (e) => {
   } else if (act === 'del') {
     const item = (await store.list({})).items.find((x) => x.id === id);
     if (!item) return;
-    if (confirm(`确定删除「${item.owner} / ${item.account}」吗？`)) {
+    if (await uiConfirm(`确定删除「${item.owner} / ${item.account}」吗？`, { danger: true, okText: '删除' })) {
       try {
         await store.remove(id);
         state.selectedIds.delete(id); // v4.1.1：单删也同步勾选集合，多选计数不残留
@@ -1524,7 +1559,7 @@ async function openCatManageModal() {
         if (!nn || nn.trim() === cat) return;
         const t = nn.trim();
         const conflict = counts.has(t); // v4.6.0：并集口径（含便签/文件标签）
-        if (conflict && !confirm(`已存在分类「${t}」，重命名将把两者合并为「${t}」，继续？`)) return;
+        if (conflict && !(await uiConfirm(`已存在分类「${t}」，重命名将把两者合并为「${t}」，继续？`, { okText: '合并' }))) return;
         const n = await applyTo((arr) => {
           if (!arr.includes(cat)) return null;
           return arr.map((c) => (c === cat ? t : c));
@@ -2184,7 +2219,7 @@ function openEditModal(item = null, prefillPw = '') {
       const aid = Number(row?.dataset.aid);
       const aname = row?.dataset.aname || 'attachment';
       if (btn.dataset.aact === 'del') {
-        if (!confirm(`删除附件 ${aname}？`)) return;
+        if (!(await uiConfirm(`删除附件 ${aname}？`, { danger: true, okText: '删除' }))) return;
         try { await store.attachments.remove(aid); await renderAttachList(); }
         catch (err) { toast('删除失败：' + err.message, true); }
       } else {
@@ -2218,7 +2253,7 @@ function openEditModal(item = null, prefillPw = '') {
   });
   $('#btn-del-from-modal')?.addEventListener('click', async () => {
     if (!item) return;
-    if (confirm(`确定删除「${item.owner} / ${item.account}」吗？`)) {
+    if (await uiConfirm(`确定删除「${item.owner} / ${item.account}」吗？`, { danger: true, okText: '删除' })) {
       try {
         await store.remove(item.id);
         closeModal();
@@ -2721,7 +2756,7 @@ function openImportModal() {
       return toast('没有可导入的数据', true);
     }
     const mode = $('#import-mode').value;
-    if (mode === 'replace' && !confirm('覆盖模式会清空现有全部密码记录，确定继续？')) return;
+    if (mode === 'replace' && !(await uiConfirm('覆盖模式会清空现有全部密码记录，确定继续？', { danger: true, okText: '覆盖导入' }))) return;
     try {
       const r = await store.importItems(rows, mode);
       closeModal();
@@ -3437,7 +3472,7 @@ async function openSettingsModal() {
       actions.appendChild(mkBtn('启用加密', 'primary', async () => {
         try {
           if (!DbCrypto.hasWebCrypto()) return toast('当前环境不支持加密（需应用内或 HTTPS 打开）', true);
-          if (!confirm('启用后数据库文件将以 AES-256 加密保存，密钥由应用自动生成并仅保存在本机。确定启用？')) return;
+          if (!await uiConfirm('启用后数据库文件将以 AES-256 加密保存，密钥由应用自动生成并仅保存在本机。确定启用？')) return;
           const key = await LocalStore.enableEncryption();
           toast('已启用加密，数据库文件已加密');
           showKeyBackup(key);
@@ -3452,7 +3487,7 @@ async function openSettingsModal() {
       }));
       actions.appendChild(mkBtn('关闭加密', 'danger', async () => {
         try {
-          if (!confirm('关闭后数据库文件将以明文保存，确定继续？')) return;
+          if (!await uiConfirm('关闭后数据库文件将以明文保存，确定继续？', { danger: true, okText: '关闭加密' })) return;
           await LocalStore.disableEncryption();
           toast('已关闭加密');
           refreshEncSection();
@@ -3542,7 +3577,7 @@ async function openSettingsModal() {
       }
     } else {
       // 停用状态下：确认后移除 PIN
-      if (ns.pinHash && !confirm('确定停用启动锁吗？停用后下次启动不再需要 PIN。')) return;
+      if (ns.pinHash && !await uiConfirm('确定停用启动锁吗？停用后下次启动不再需要 PIN。')) return;
       ns.pinHash = '';
     }
     ns.bioUnlock = !!bioEnabled && !!ns.pinHash; // 生物识别依赖启动锁（v2.6.0）
@@ -3662,11 +3697,11 @@ async function openSettingsModal() {
       const name = item?.dataset.name;
       if (!name) return;
       if (btn.dataset.bact === 'del') {
-        if (!confirm(`删除快照 ${PassBackup.formatBackupLabel(name)}？`)) return;
+        if (!await uiConfirm(`删除快照 ${PassBackup.formatBackupLabel(name)}？`, { danger: true, okText: '删除' })) return;
         try { await BackupAdapter.remove(name); await renderBackupList(); }
         catch (err) { toast('删除失败：' + err.message, true); }
       } else if (btn.dataset.bact === 'restore') {
-        if (!confirm(`用快照 ${PassBackup.formatBackupLabel(name)} 覆盖当前数据库并重启应用？\n当前未保存的修改将丢失。`)) return;
+        if (!await uiConfirm(`用快照 ${PassBackup.formatBackupLabel(name)} 覆盖当前数据库并重启应用？\n当前未保存的修改将丢失。`, { danger: true, okText: '覆盖并重启' })) return;
         try {
           const bytes = await BackupAdapter.read(name);
           if (!bytes || !bytes.byteLength) throw new Error('快照为空');
@@ -5010,7 +5045,7 @@ function openNoteDetail(note) {
   });
   $('#btn-nd-edit').addEventListener('click', () => openNoteModal(note));
   $('#btn-nd-del').addEventListener('click', async () => {
-    if (!confirm('确定删除这条便签？')) return;
+    if (!await uiConfirm('确定删除这条便签？', { danger: true, okText: '删除' })) return;
     try {
       await LocalStore.noteRemove(note.id);
       closeModal();
@@ -5062,7 +5097,7 @@ function openNoteModal(note) {
     } catch (e) { toast('保存失败: ' + e.message, true); }
   });
   $('#btn-note-del')?.addEventListener('click', async () => {
-    if (!confirm('确定删除这条便签？')) return;
+    if (!await uiConfirm('确定删除这条便签？', { danger: true, okText: '删除' })) return;
     try {
       await LocalStore.noteRemove(note.id);
       closeModal();
@@ -5224,7 +5259,7 @@ $('#note-search')?.addEventListener('input', debounce((e) => {
   state.noteQ = e.target.value.trim();
   refreshNotesList();
 }, 200));
-$('#note-list')?.addEventListener('click', (e) => {
+$('#note-list')?.addEventListener('click', async (e) => {
   const card = e.target.closest('.note-card');
   const id = Number(card?.dataset.id);
   if (!(currentMode === 'local' && id)) return;
@@ -5233,7 +5268,7 @@ $('#note-list')?.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-note-act]');
   if (!btn) { openNoteDetail(note); return; } // v4.3.1：点卡片本体看全文详情
   if (btn.dataset.noteAct === 'del') {
-    if (!confirm('确定删除这条便签？')) return;
+    if (!await uiConfirm('确定删除这条便签？', { danger: true, okText: '删除' })) return;
     LocalStore.noteRemove(note.id).then(() => { toast('便签已删除'); refreshNotesList(); }).catch((err) => toast(err.message, true));
   } else {
     openNoteModal(note);
@@ -5496,7 +5531,7 @@ function openFileDetail(file) {
     const rows = LocalStore.filesList() || [];
     const same = rows.filter((r) => r.sha256 === file.sha256).length;
     const lastRef = same <= 1;
-    if (!confirm(lastRef ? '确定删除该文件？这是此内容的最后一份引用，删除后加密存储将一并清除。' : `确定删除该文件？该内容还有 ${same - 1} 份引用，加密本体将保留。`)) return;
+    if (!await uiConfirm(lastRef ? '确定删除该文件？这是此内容的最后一份引用，删除后加密存储将一并清除。' : `确定删除该文件？该内容还有 ${same - 1} 份引用，加密本体将保留。`, { danger: true, okText: '删除' })) return;
     try {
       await vaultRemove(file.id);
       closeModal();
