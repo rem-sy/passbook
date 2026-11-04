@@ -312,6 +312,82 @@ fn quick_panel_open_main(app: AppHandle) {
     }
 }
 
+/// v4.11.4：复制 PNG 图片到系统剪贴板（桌面 Windows）。
+/// WebView 的 navigator.clipboard.write(ClipboardItem) 在 Tauri 下不稳：CSP connect-src 拦截
+/// data: fetch、await 后丢 transient user activation——改走 Win32 剪贴板，PNG 原始格式 + CF_DIB 双写
+/// （PNG 格式供聊天软件/浏览器识别，DIB 供画图等传统软件识别）。
+#[cfg(windows)]
+#[tauri::command]
+fn clipboard_write_png(png_b64: String) -> Result<(), String> {
+    use base64::Engine as _;
+    use windows::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatA, SetClipboardData,
+    };
+    use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    use windows::Win32::System::Ole::CF_DIB;
+    use windows::core::s;
+
+    fn put(fmt: u32, bytes: &[u8]) -> Result<(), String> {
+        unsafe {
+            let h = GlobalAlloc(GMEM_MOVEABLE, bytes.len()).map_err(|e| e.to_string())?;
+            let dst = GlobalLock(h);
+            if dst.is_null() {
+                return Err("GlobalLock 失败".into());
+            }
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst as *mut u8, bytes.len());
+            let _ = GlobalUnlock(h);
+            let handle = windows::Win32::Foundation::HANDLE(h.0);
+            SetClipboardData(fmt, Some(handle)).map_err(|e| e.to_string())?;
+            Ok(())
+        }
+    }
+
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(png_b64.trim())
+        .map_err(|e| format!("base64 解码失败: {e}"))?;
+    let img = image::load_from_memory(&png)
+        .map_err(|e| format!("PNG 解码失败: {e}"))?
+        .to_rgba8();
+    let (w, h) = img.dimensions();
+
+    // CF_DIB：BITMAPINFOHEADER(40B) + BGRA 像素（biHeight 取负 = top-down，免翻转）
+    let mut dib: Vec<u8> = Vec::with_capacity(40 + (w * h * 4) as usize);
+    dib.extend_from_slice(&40u32.to_le_bytes());            // biSize
+    dib.extend_from_slice(&(w as i32).to_le_bytes());       // biWidth
+    dib.extend_from_slice(&(-(h as i32)).to_le_bytes());    // biHeight（负 = top-down）
+    dib.extend_from_slice(&1u16.to_le_bytes());             // biPlanes
+    dib.extend_from_slice(&32u16.to_le_bytes());            // biBitCount
+    dib.extend_from_slice(&0u32.to_le_bytes());             // biCompression = BI_RGB
+    dib.extend_from_slice(&((w * h * 4) as u32).to_le_bytes()); // biSizeImage
+    dib.extend_from_slice(&[0u8; 16]);                      // 分辨率/颜色表全 0
+    for p in img.pixels() {
+        dib.extend_from_slice(&[p[2], p[1], p[0], p[3]]);   // RGBA → BGRA
+    }
+
+    unsafe {
+        if !OpenClipboard(None).is_ok() {
+            return Err("无法打开剪贴板（被其他程序占用）".into());
+        }
+        let result = (|| -> Result<(), String> {
+            EmptyClipboard().map_err(|e| e.to_string())?;
+            put(CF_DIB.0 as u32, &dib)?;
+            let png_fmt = RegisterClipboardFormatA(s!("PNG"));
+            if png_fmt != 0 {
+                let _ = put(png_fmt, &png); // 失败不致命（DIB 已写入）
+            }
+            Ok(())
+        })();
+        let _ = CloseClipboard();
+        result
+    }
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+fn clipboard_write_png(_png_b64: String) -> Result<(), String> {
+    Err("此平台不支持复制图片到剪贴板".into())
+}
+
 /// v4.10.0：设置「关闭主窗 = 最小化到托盘」开关（前端启动/保存设置时同步，默认开）。
 #[tauri::command]
 fn set_tray_mode(app: AppHandle, enabled: bool) {
@@ -1542,6 +1618,7 @@ pub fn run() {
             quick_panel_hide,
             quick_panel_open_main,
             set_tray_mode,
+            clipboard_write_png,
             get_autostart,
             set_autostart,
             get_files_store_dir,

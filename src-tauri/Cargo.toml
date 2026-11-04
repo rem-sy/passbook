@@ -1,6 +1,6 @@
 [package]
 name = "passbook-desktop"
-version = "4.11.3"
+version = "4.11.4"
 description = "密码本桌面端：强密码生成与密码管理"
 authors = ["passbook"]
 edition = "2021"
@@ -27,7 +27,9 @@ tauri-plugin-updater = "2"
 tauri-plugin-autostart = "2"
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = ["Security_Credentials_UI"] }
+windows = { version = "0.61", features = ["Security_Credentials_UI", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole"] }
+# v4.11.4 复制图片到剪贴板：PNG 解码为 DIB（仅 png 特性，最小体积）
+image = { version = "0.25", default-features = false, features = ["png"] }
 # v4.3.0 随手记：全局快捷键 + 剪贴板读取（仅桌面 Windows 构建）
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-clipboard-manager = "2"

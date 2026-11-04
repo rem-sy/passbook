@@ -2754,10 +2754,11 @@ dependencies = [
 
 [[package]]
 name = "passbook-desktop"
-version = "4.11.2"
+version = "4.11.3"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
+ "image",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

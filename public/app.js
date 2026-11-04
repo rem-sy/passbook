@@ -6522,10 +6522,22 @@ async function openEntryQrModal(item) {
   });
   $('#qr-copy').addEventListener('click', async () => {
     try {
-      const blob = await (await fetch($('#qr-preview').src)).blob();
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-      toast('图片已复制');
-    } catch { toast('此环境不支持复制图片，请用保存图片'); }
+      // v4.11.4：不再 fetch(dataUrl)——桌面 CSP connect-src 不含 data: 会拦，且 await 丢用户激活；
+      // 直接 atob 同步构造字节。桌面走 Rust Win32 剪贴板（PNG+DIB 双格式），浏览器才用 ClipboardItem。
+      const dataUrl = $('#qr-preview').src;
+      const bin = atob(dataUrl.split(',')[1]);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      if (IS_TAURI && !IS_ANDROID) {
+        await tauriInvoke('clipboard_write_png', { pngB64: bytesToBase64(bytes) });
+        toast('图片已复制');
+      } else {
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': new Blob([bytes], { type: 'image/png' }) })]);
+        toast('图片已复制');
+      }
+    } catch (e) {
+      toast('复制图片失败' + (e && e.message ? '：' + e.message : '') + '，可用「保存图片」', true);
+    }
   });
 }
 
