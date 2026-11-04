@@ -1131,10 +1131,16 @@ async fn update_download_install(
         guard.take().ok_or("没有待安装的更新（请先检查更新）")?
     };
     let app2 = app.clone();
+    // v4.11.2 修复：updater 插件的 on_chunk 回调传的是「单分片长度」（updater.rs:735 on_chunk(chunk.len(), …)），
+    // 不是累计下载量——此前直接透传导致进度条永远 0%、下载完跳 100%。这里自行累加后再发事件。
+    let mut downloaded: u64 = 0;
     update
         .download_and_install(
-            |downloaded, total| {
-                let _ = app2.emit("update-progress", serde_json::json!({ "downloaded": downloaded, "total": total }));
+            move |chunk_len, total| {
+                downloaded += chunk_len as u64;
+                let show_total = total.unwrap_or(0);
+                let show_done = if show_total > 0 { downloaded.min(show_total) } else { downloaded };
+                let _ = app2.emit("update-progress", serde_json::json!({ "downloaded": show_done, "total": show_total }));
             },
             || {},
         )
