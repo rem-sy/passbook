@@ -324,14 +324,8 @@
     }
   });
 
-  // 失焦自隐（切到别的窗口即收起；延时避开 WebView 内部焦点抖动）
-  window.addEventListener('blur', () => {
-    setTimeout(() => {
-      if (!document.hasFocus() && IS_TAURI) {
-        window.__TAURI__.core.invoke('quick_panel_hide').catch(() => {});
-      }
-    }, 250);
-  });
+  // v4.11.1：取消「失焦自隐」——点击其他窗口时面板保持打开（用户反馈），
+  // 收起方式 = Esc / 再按一次 Alt+P / 面板内「打开主界面」
 
   // 每次重新显示（Alt+P 唤出）都重查锁定态：托盘期间主窗可能已自动上锁
   window.addEventListener('focus', () => refreshGate());

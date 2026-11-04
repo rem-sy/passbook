@@ -28,19 +28,23 @@
     return 'ready';
   }
 
-  /** 搜索结果裁剪：最多 limit 条，字段收敛到面板渲染所需（密码完整返回——复制在本机完成） */
+  /** 搜索结果裁剪：最多 limit 条，字段收敛到面板渲染所需（密码完整返回——复制在本机完成）。
+   *  容错：主窗若传来 PassSearch 的 {entry,score,fields} 包装（v4.11.1 前的 bug 形态），自动解包取 entry。 */
   function trimResults(items, limit = 30) {
-    return (items || []).slice(0, limit).map((it) => ({
-      id: it.id,
-      owner: it.owner || '',
-      account: it.account || '',
-      password: it.password || '',
-      url: it.url || '',
-      note: it.note || '',
-      category: it.category || '',
-      totp_secret: it.totp_secret || '',
-      fav: !!it.fav,
-    }));
+    return (items || []).slice(0, limit).map((raw) => {
+      const it = raw && raw.entry ? raw.entry : raw || {};
+      return {
+        id: it.id,
+        owner: it.owner || '',
+        account: it.account || '',
+        password: it.password || '',
+        url: it.url || '',
+        note: it.note || '',
+        category: it.category || '',
+        totp_secret: it.totp_secret || '',
+        fav: !!it.fav,
+      };
+    });
   }
 
   /** 导入预览文案（脱敏）：解析条数 + 前 12 条「所属 | 账户 | ***」 */

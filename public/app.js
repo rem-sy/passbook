@@ -5129,7 +5129,14 @@ async function handleQuickAction(action, payload) {
       items = (await store.list({ q })).items || [];
     } else {
       const all = (await store.list({})).items || [];
-      items = q && window.PassSearch ? PassSearch.searchEntries(all, q) : all;
+      if (q && window.PassSearch) {
+        // v4.11.1 修复：searchEntries 返回 [{entry,score,fields}] 包装（空查询返回 null），
+        // 此前直接当条目数组透传 → 快捷面板卡片字段全空（空白卡片）
+        const res = PassSearch.searchEntries(all, q);
+        items = (res || []).map((x) => x.entry);
+      } else {
+        items = all;
+      }
     }
     return { items: items.slice(0, 30) };
   }

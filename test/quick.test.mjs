@@ -52,6 +52,16 @@ test('trimResults：空输入与缺字段容错', () => {
   assert.equal(a.password, '');
 });
 
+test('trimResults：兼容解包 PassSearch 的 {entry} 包装（v4.11.1 回归防护）', () => {
+  const wrapped = [{ entry: { id: 9, owner: '微信', account: '138', password: 'p', fav: 1 }, score: 100, fields: {} }];
+  const [a] = Q.trimResults(wrapped);
+  assert.equal(a.owner, '微信');
+  assert.equal(a.account, '138');
+  assert.equal(a.password, 'p');
+  assert.equal(a.fav, true);
+  assert.equal('score' in a, false); // 包装字段不透传
+});
+
 /* ---------------- PassQuick.importPreview：导入预览脱敏 ---------------- */
 test('importPreview：空 → 提示；正常 → 条数 + 脱敏行；超限 → 省略号', () => {
   assert.equal(Q.importPreview([]), '未解析出任何记录');
