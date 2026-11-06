@@ -14,8 +14,10 @@ if (-not $Tag) { throw '未指定 -Tag 且无法从 git 取最新 tag' }
 $ver = $Tag -replace '^v',''
 Write-Host "发布 $Tag（版本 $ver）"
 
-$tokenFile = Join-Path $env:TEMP 'gh-token.txt'
-if (-not (Test-Path $tokenFile)) { throw "缺少 $tokenFile（GitHub Token，contents 写权限）" }
+# v4.12.0：token 持久位置优先（signing 目录，与 jks/updater.key 同管，不随 TEMP 清理丢失），%TEMP% 兜底
+$tokenFile = 'D:\hobby\产物\密码本\signing\gh-token.txt'
+if (-not (Test-Path $tokenFile)) { $tokenFile = Join-Path $env:TEMP 'gh-token.txt' }
+if (-not (Test-Path $tokenFile)) { throw "缺少 $tokenFile（GitHub Token，contents 写权限；推荐放 signing 目录）" }
 $token = (Get-Content $tokenFile -Raw).Trim()
 if (-not $token) { throw 'gh-token.txt 为空' }
 

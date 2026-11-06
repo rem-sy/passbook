@@ -8,7 +8,7 @@
 - Tauri v2（Rust lib.rs）+ WebView 前端（public/ 单页）+ SQLite（整库加密）+ files-store 分桶密文本体
 - 仓库：github.com/rem-sy/passbook（私有，main）；本地 `D:\hobby\源码\密码本`；产物 `D:\hobby\产物\密码本\`
 - 环境：Windows + PowerShell 5.1；Node 测试；Android SDK/JDK 在 `D:\hobby\.android-dev\`；代理 `http://127.0.0.1:7890`（GitHub 必须走；**代理进程可能没起，失败改直连**：`git -c http.https://github.com.proxy= -c http.proxy= push`）
-- token：`$env:TEMP\gh-token.txt`；curl 用 `$env:SystemRoot\System32\curl.exe`
+- token：`D:\hobby\产物\密码本\signing\gh-token.txt`（v4.12.0 起持久位置，与 jks 同管不随 TEMP 清理丢失；publish-release 优先读它，`%TEMP%\gh-token.txt` 兜底）；curl 用 `$env:SystemRoot\System32\curl.exe`
 
 ## 当前状态（交接时点）
 - HEAD = tag **v4.9.0**（自动更新：桌面 tauri-plugin-updater 全自动 + Android 应用内下载 APK + 每版发 GitHub Release）；对外里程碑 Release 停在 v4.1.0
