@@ -24,19 +24,48 @@ const ITEMS = [
   { id: 3, owner: '网银', account: '张三', password: 'Bank#Safe', url: '', note: '工资卡', category: '财务', totp_secret: '', fav: 1 },
 ];
 
-// mock 注入：quick.js 需要的 __TAURI__（event.emit/listen + core.invoke）
+// mock 注入：quick.js 需要的 __TAURI__（event.emit/listen + core.invoke + agent_http_stream 事件流模拟）
 const MOCK = `<script>
 window.__ITEMS = ${JSON.stringify(ITEMS)};
+window.__evtCbs = [];
+window.__streamRound = 0;
 window.__TAURI__ = {
-  core: { invoke: async (cmd) => { window.__mockInvokes = (window.__mockInvokes||[]).concat(cmd); return null; } },
+  core: {
+    invoke: async (cmd, args) => {
+      window.__mockInvokes = (window.__mockInvokes||[]).concat(cmd);
+      if (cmd === 'agent_http_stream') { window.__mockStream(args); return null; }
+      return null;
+    },
+  },
   event: {
     emit: (event, payload) => {
-      if (event !== 'quick-request') return;
-      const r = window.__mockHandle(payload);
-      setTimeout(() => { (window.__respCbs || []).forEach((cb) => cb({ event: 'quick-response', payload: r })); }, 0);
+      if (event === 'quick-request') {
+        const r = (window.__mockHandle || (() => ({ ok: false, error: 'no mock' })))(payload);
+        setTimeout(() => { (window.__evtCbs || []).forEach((it) => { if (it.event === 'quick-response') { try { it.cb({ event: 'quick-response', payload: r }); } catch (e) {} } }); }, 0);
+        return;
+      }
+      for (const it of (window.__evtCbs || [])) if (it.event === event) { try { it.cb({ event, payload }); } catch (e) {} }
     },
-    listen: async (event, cb) => { if (event === 'quick-response') (window.__respCbs = window.__respCbs || []).push(cb); return () => {}; },
+    listen: async (event, cb) => {
+      window.__evtCbs = window.__evtCbs || [];
+      const it = { event, cb };
+      window.__evtCbs.push(it);
+      return () => { const i = window.__evtCbs.indexOf(it); if (i >= 0) window.__evtCbs.splice(i, 1); };
+    },
   },
+};
+// 模拟 OpenAI SSE：第 1 轮返回 tool_calls（search_passwords），第 2 轮返回最终文本
+// 注意：payload 一律在页面端 JSON.stringify 构造——Node 模板字符串里手写嵌套 JSON 的三层转义必错
+window.__mockStream = function (args) {
+  const round = ++window.__streamRound;
+  const post = (fn, ms) => setTimeout(fn, ms);
+  const toolRound = { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'search_passwords', arguments: JSON.stringify({ keyword: '微信' }) } }] } }] };
+  const textRound = { choices: [{ delta: { content: '找到了微信的账号，密码在下方卡片里，点密码即可复制。' } }] };
+  const obj = round === 1 ? toolRound : textRound;
+  const sse = 'data: ' + JSON.stringify(obj) + '\\n\\n';
+  post(() => window.__TAURI__.event.emit('agent-stream-status', 200), 5);
+  post(() => window.__TAURI__.event.emit('agent-stream-chunk', sse), 20);
+  post(() => window.__TAURI__.event.emit('agent-stream-done'), 40);
 };
 window.__mockHandle = function (req) {
   const { id, action, payload } = req || {};
@@ -53,6 +82,21 @@ window.__mockHandle = function (req) {
   }
   if (action === 'save') return { id, ok: true, data: { imported: 1, skipped: 0 } };
   if (action === 'import') return { id, ok: true, data: { imported: (payload.rows || []).length, skipped: 0 } };
+  if (action === 'agent:exec') {
+    const { name, args } = payload;
+    if (name === 'search_passwords') {
+      const kw = String((args || {}).keyword || '');
+      const items = window.__ITEMS.filter((x) => (x.owner + x.account).includes(kw));
+      return { id, ok: true, data: { result: { items: items.map((x) => ({ owner: x.owner, account: x.account, password: '***masked***' })) }, displays: items.length ? [{ kind: 'passwords', items }] : [] } };
+    }
+    if (name === 'save_password') {
+      return { id, ok: true, data: { result: { ok: true, saved: { owner: args.owner, account: args.account } }, displays: [] } };
+    }
+    if (name === 'generate_password') {
+      return { id, ok: true, data: { result: { password: 'Ab3$defgHijkL9mno', entropy: 96, label: '极强' }, displays: [] } };
+    }
+    return { id, ok: false, error: 'mock 不支持的工具 ' + name };
+  }
   if (action === 'unlock') return { id, ok: true, data: { ok: true } };
   return { id, ok: false, error: '未知操作 ' + action };
 };
@@ -109,6 +153,8 @@ try {
   log('打开 mock 快捷面板…');
   await send('Page.navigate', { url: `http://127.0.0.1:${PORT}/__quick.html` });
   await sleep(1800);
+  log('探针 __TAURI__: ' + await ev("typeof window.__TAURI__") + ' / evtCbs: ' + await ev("(window.__evtCbs||[]).length"));
+  log('探针 agent-core: ' + await ev("typeof AgentCore"));
 
   assert(await ev("document.getElementById('q-app') && !document.getElementById('q-app').classList.contains('hidden')"), 'gate 通过进入面板');
   log('q-results 内容: ' + await ev("document.getElementById('q-results').innerHTML.slice(0, 300)"));
@@ -168,7 +214,34 @@ try {
   const impMsg = await ev("document.getElementById('q-import-preview').textContent");
   assert(/导入完成/.test(impMsg), '导入回执: ' + impMsg);
 
+  // —— AI 对话全链路（mock SSE 工具调用轮 + 文本轮；渠道配置注入 localStorage） ——
+  await ev("localStorage.setItem('passbook-agent', JSON.stringify({baseUrl:'https://mock.example/v1', apiKey:'sk-test', model:'mock-model'}))");
+  await ev("document.querySelector('.q-tabs [data-tab=ai]').click()");
+  await sleep(120);
+  await ev("document.getElementById('ai-input').value='微信的密码是多少'");
+  await ev("document.getElementById('ai-send').click()");
+  await sleep(1500);
+  log('探针 streamRound: ' + await ev("window.__streamRound || 0") + ' / evtCbs: ' + await ev("(window.__evtCbs||[]).map(c=>c.event).join(',')"));
+  log('探针 emit链路: ' + await ev("(async function(){ var full=''; await window.__TAURI__.event.listen('agent-stream-chunk', function(e){ full += e.payload; }); window.__TAURI__.event.emit('agent-stream-chunk', 'data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}'); return JSON.stringify(full); })()"));
+  log('探针 invoke: ' + await ev("(async function(){ try { var r = await window.__TAURI__.core.invoke('agent_http_stream', {url:'u', method:'POST', headers:{}, body:'b'}); return 'ok ' + JSON.stringify(r); } catch(e) { return 'ERR ' + e.message; } })()"));
+  const logHtml = await ev("document.getElementById('ai-log').innerText.slice(0, 400)");
+  log('AI 对话记录: ' + JSON.stringify(logHtml.slice(0, 180)));
+  assert(await ev("Array.from(document.querySelectorAll('.ai-msg.user')).some(e=>e.textContent.includes('微信'))"), '用户消息上屏');
+  assert(await ev("!!document.querySelector('.ai-tool')"), '工具执行提示行出现');
+  assert(await ev("Array.from(document.querySelectorAll('.ai-msg.assistant')).some(e=>e.textContent.includes('找到了微信'))"), 'AI 最终回复上屏');
+  assert(await ev("!!document.querySelector('[data-ai-pw]')"), '查询结果卡片含真实密码复制按钮（隐私分级：打码+主动复制）');
+  const cardPw = await ev("(document.querySelector('[data-ai-pw]')||{}).dataset ? document.querySelector('[data-ai-pw]').dataset.aiPw : ''");
+  assert(cardPw === 'Wx#2024happy', '卡片密码值正确（' + cardPw + '）');
+  // 未配置渠道时的提示（清掉配置再发一轮）
+  await ev("localStorage.removeItem('passbook-agent')");
+  await ev("document.getElementById('ai-input').value='在吗'");
+  await ev("document.getElementById('ai-send').click()");
+  await sleep(300);
+  assert(await ev("Array.from(document.querySelectorAll('.ai-msg.assistant.error')).some(e=>e.textContent.includes('渠道未配置'))"), '未配置渠道给出引导提示');
+
   // —— 截图存证 ——
+  await ev("document.querySelector('.q-tabs [data-tab=search]').click()");
+  await sleep(300);
   const shot = await send('Page.captureScreenshot', { format: 'png' });
   writeFileSync(join(PROJ, 'data', 'quick-e2e.png'), Buffer.from(shot.result.data, 'base64'));
   log('截图: data/quick-e2e.png');

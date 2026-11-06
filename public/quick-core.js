@@ -61,5 +61,36 @@
     return [0, 15, 30].includes(v) ? v * 1000 : 0;
   }
 
-  return { gateView, trimResults, importPreview, clearDelayMs };
+  /* ---------- v4.12.0：AI 对话辅助（纯逻辑，可测） ---------- */
+
+  /** 工具执行提示文案：TOOL_LABELS 为函数式（需 args），兼容字符串值与未知工具 */
+  function aiToolLabel(name, args) {
+    const labels = (typeof AgentCore !== 'undefined' && AgentCore.TOOL_LABELS) || {};
+    const l = labels[name];
+    try {
+      if (typeof l === 'function') return String(l(args || {}));
+      if (typeof l === 'string' && l) return l;
+    } catch { /* label 异常时回退原名 */ }
+    return String(name || '工具');
+  }
+
+  /**
+   * AI 错误信息分类文案（渠道/网络/中止三类，其余透传原文截断）。
+   * @param {string} raw 原始错误消息
+   * @returns {string} 面向用户的短文案
+   */
+  function fmtAgentError(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return '请求失败，请重试';
+    if (/已停止/.test(s)) return '已停止生成';
+    if (/超时/.test(s)) return '主窗口响应超时，请打开主界面确认状态后重试';
+    if (/渠道返回\s*401|API Key|无效/.test(s)) return '渠道鉴权失败（401）：请检查 API Key';
+    if (/渠道返回\s*404/.test(s)) return '渠道 404：接口地址或模型名不存在';
+    if (/渠道返回\s*429/.test(s)) return '渠道限流（429）：请求过于频繁或额度不足';
+    if (/渠道返回/.test(s)) return s.slice(0, 160);
+    if (/Failed to fetch|NetworkError|network|fetch failed/i.test(s)) return '网络失败：请检查网络或代理设置';
+    return s.slice(0, 160);
+  }
+
+  return { gateView, trimResults, importPreview, clearDelayMs, aiToolLabel, fmtAgentError };
 });

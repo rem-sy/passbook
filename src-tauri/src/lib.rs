@@ -210,7 +210,8 @@ fn set_quickpanel_shortcut(_app: AppHandle, _accel: String) -> Result<(), String
 }
 
 /// v4.10.0：切换快捷面板小窗（Alt+P / 托盘菜单共用入口）。
-/// 已存在则切换显隐；不存在则创建（无边框、置顶、不进任务栏，位于鼠标附近）。
+/// 已存在则切换显隐；不存在则创建（无边框、置顶、不进任务栏、可缩放，位于鼠标附近）。
+/// v4.12.0：尺寸/位置记忆（数据根目录 quick-window.json），创建时恢复上次尺寸。
 #[cfg(desktop)]
 fn quick_panel_toggle(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("quick") {
@@ -225,24 +226,52 @@ fn quick_panel_toggle(app: &AppHandle) {
         .map(|r| r.0.join("webview2"))
         .unwrap_or_else(|| PathBuf::from("webview2"));
     let _ = fs::create_dir_all(&wv_dir);
-    match tauri::WebviewWindowBuilder::new(
+    let pref = quick_pref_size(app);
+    let mut wb = tauri::WebviewWindowBuilder::new(
         app,
         "quick",
         tauri::WebviewUrl::App("quick.html".into()),
     )
     .title("快捷面板")
-    .inner_size(430.0, 560.0)
-    .resizable(false)
+    .inner_size(pref.0, pref.1)
+    .resizable(true)
     .decorations(false)
     .always_on_top(true)
     .skip_taskbar(true)
+    .min_inner_size(360.0, 420.0)
     .visible(false)
-    .data_directory(wv_dir) // 与主窗同 profile：共享 localStorage（设置/生成器偏好/PIN 哈希）
-    .build()
+    .data_directory(wv_dir); // 与主窗同 profile：共享 localStorage（设置/生成器偏好/PIN 哈希）
+    #[cfg(windows)]
+    {
+        // v4.12.0：右下角自定义缩放手柄语义（阴影由 CSS 画，这里只保留原生边框以支持拖拽缩放）
+        wb = wb.shadow(true);
+    }
+    match wb.build()
     {
         Ok(w) => quick_panel_show(app, &w),
         Err(e) => eprintln!("[passbook] quick panel build error: {e}"),
     }
+}
+
+/// v4.12.0：快捷面板尺寸记忆文件路径（<数据根>/quick-window.json）
+#[cfg(desktop)]
+fn quick_pref_path(app: &AppHandle) -> PathBuf {
+    app.try_state::<DataRoot>()
+        .map(|r| r.0.join("quick-window.json"))
+        .unwrap_or_else(|| PathBuf::from("quick-window.json"))
+}
+
+/// 读取记忆尺寸（缺失/损坏时回退默认 430x560；下限 360x420）
+#[cfg(desktop)]
+fn quick_pref_size(app: &AppHandle) -> (f64, f64) {
+    if let Ok(text) = fs::read_to_string(quick_pref_path(app)) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+            let w = v.get("w").and_then(|x| x.as_f64()).unwrap_or(430.0).clamp(360.0, 1600.0);
+            let h = v.get("h").and_then(|x| x.as_f64()).unwrap_or(560.0).clamp(420.0, 1200.0);
+            return (w, h);
+        }
+    }
+    (430.0, 560.0)
 }
 
 /// 显示并定位快捷面板：优先放在鼠标所在位置附近，回退主显示器居中偏上。
@@ -295,6 +324,46 @@ fn quick_panel_hide(app: AppHandle) {
     if let Some(w) = app.get_webview_window("quick") {
         let _ = w.hide();
     }
+}
+
+/// v4.12.0：应用快捷面板尺寸（前端右下角自定义缩放手柄的 pointermove 里逐帧调用；
+/// 系统原生 start_resize_dragging 在 WebviewWindow 上未公开，故走前端自定义 resize + Rust set_size）。
+#[cfg(desktop)]
+#[tauri::command]
+async fn quick_panel_apply_size(app: AppHandle, w: f64, h: f64) -> Result<(), String> {
+    let w = w.clamp(360.0, 1600.0);
+    let h = h.clamp(420.0, 1200.0);
+    if let Some(win) = app.get_webview_window("quick") {
+        win.set_size(tauri::LogicalSize::new(w, h)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+async fn quick_panel_apply_size(_app: AppHandle, _w: f64, _h: f64) -> Result<(), String> {
+    Ok(())
+}
+
+/// v4.12.0：保存快捷面板记忆尺寸（前端 resize 手柄松手时调用；写 <数据根>/quick-window.json）
+#[cfg(desktop)]
+#[tauri::command]
+async fn quick_panel_save_size(app: AppHandle, w: f64, h: f64) -> Result<(), String> {
+    let w = w.clamp(360.0, 1600.0);
+    let h = h.clamp(420.0, 1200.0);
+    let path = quick_pref_path(&app);
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    fs::write(&path, serde_json::json!({ "w": w, "h": h }).to_string())
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[cfg(not(desktop))]
+#[tauri::command]
+async fn quick_panel_save_size(_app: AppHandle, _w: f64, _h: f64) -> Result<(), String> {
+    Ok(())
 }
 
 /// v4.10.0：从快捷面板打开主界面（PIN 门/未就绪提示的「打开主界面」按钮）。
@@ -1617,6 +1686,8 @@ pub fn run() {
             set_quickpanel_shortcut,
             quick_panel_hide,
             quick_panel_open_main,
+            quick_panel_apply_size,
+            quick_panel_save_size,
             set_tray_mode,
             clipboard_write_png,
             get_autostart,

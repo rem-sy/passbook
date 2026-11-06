@@ -6,7 +6,7 @@
   <title>快捷面板 · 密码本</title>
   <link rel="stylesheet" href="style.css" />
   <style>
-    /* ============ 快捷面板（v4.10.1 重设计：无 emoji，线性图标，简洁高级） ============ */
+    /* ============ 快捷面板（v4.12.0 重设计：AI 对话 + 可拖可缩放 + 分段 Tab） ============ */
     :root {
       --q-accent: #1d4a80;
       --q-hover: rgba(29, 74, 128, 0.06);
@@ -19,43 +19,44 @@
       --q-shadow: 0 16px 48px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.35);
     }
 
-    html, body.quick-body { height: auto; }
+    html, body.quick-body { height: 100%; }
     body.quick-body {
       margin: 0; padding: 0; overflow: hidden;
       background: var(--bg); color: var(--text);
       font-family: inherit; font-size: 13.5px; line-height: 1.45;
-      border: 1px solid var(--line);
-      box-shadow: var(--q-shadow);
+      box-shadow: 0 0 0 1px var(--line), var(--q-shadow);
+      display: flex; flex-direction: column;
       -webkit-user-select: none; user-select: none;
     }
     svg { width: 15px; height: 15px; flex-shrink: 0; }
 
-    /* ---------- 锁定 / 加载 门 ---------- */
-    .q-gate { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; background: var(--bg); }
-    .q-gate-box { width: 80%; max-width: 300px; text-align: center; }
-    .q-gate-title { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; font-weight: 600; margin: 0 0 16px; color: var(--text); }
-    .q-gate-title svg { width: 16px; height: 16px; color: var(--muted); }
-    .q-gate input {
-      width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: var(--q-radius);
-      padding: 11px 12px; font-size: 15px; letter-spacing: 4px; text-align: center; outline: none;
-      background: var(--card); color: var(--text); transition: border-color 0.15s;
+    /* ---------- 顶部拖动条（无边框窗口的拖动实现；按钮区 no-drag） ---------- */
+    .q-drag {
+      -webkit-app-region: drag; app-region: drag;
+      display: flex; align-items: center; gap: 8px;
+      padding: 9px 8px 9px 14px; cursor: default;
     }
-    .q-gate input:focus { border-color: var(--q-accent); }
-    .q-gate .q-err { color: var(--danger); font-size: 12px; min-height: 17px; margin: 8px 0; }
-    .q-gate .btn { width: 100%; margin-top: 2px; }
-    .q-gate-hint { margin-top: 16px; font-size: 11.5px; color: var(--muted); line-height: 1.6; }
-    .q-gate-hint a { cursor: pointer; text-decoration: none; color: var(--q-accent); border-bottom: 1px solid transparent; }
-    .q-gate-hint a:hover { border-bottom-color: var(--q-accent); }
-    .q-spinner { width: 22px; height: 22px; margin: 0 auto 14px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--q-accent); animation: q-spin 0.8s linear infinite; }
-    @keyframes q-spin { to { transform: rotate(360deg); } }
+    .q-drag .q-title {
+      font-size: 12.5px; font-weight: 650; color: var(--text);
+      display: flex; align-items: center; gap: 7px; min-width: 0;
+    }
+    .q-drag .q-title svg { width: 14px; height: 14px; color: var(--q-accent); }
+    .q-drag .q-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .q-drag .q-drag-btns { margin-left: auto; display: flex; gap: 2px; -webkit-app-region: no-drag; app-region: no-drag; }
+    .q-drag .q-drag-btns button {
+      border: none; background: transparent; color: var(--muted);
+      width: 26px; height: 26px; border-radius: 7px; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center;
+      transition: background 0.15s, color 0.15s;
+    }
+    .q-drag .q-drag-btns button:hover { background: var(--q-hover); color: var(--q-accent); }
+    .q-drag .q-drag-btns button svg { width: 13px; height: 13px; }
+    .q-drag .q-drag-btns .q-min { color: var(--muted); }
 
-    /* ---------- 主体 ---------- */
-    .q-app { display: flex; flex-direction: column; height: 100vh; }
-
-    /* 分段式 Tab */
-    .q-tabs { display: flex; gap: 2px; margin: 12px 12px 0; padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+    /* ---------- 分段式 Tab ---------- */
+    .q-tabs { display: flex; gap: 2px; margin: 0 12px; padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
     .q-tabs button {
-      flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+      flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;
       border: none; border-radius: 8px; background: transparent; color: var(--muted);
       padding: 7px 0; font-size: 12.5px; font-family: inherit; cursor: pointer;
       transition: background 0.15s, color 0.15s;
@@ -63,9 +64,9 @@
     .q-tabs button svg { width: 13px; height: 13px; }
     .q-tabs button:hover { color: var(--text); }
     .q-tabs button.on { background: var(--bg); color: var(--text); font-weight: 600; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.1); }
-    html.dark .q-tabs button.on { background: var(--bg); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35); }
+    html.dark .q-tabs button.on { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35); }
 
-    .q-body { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+    .q-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 
     input[type="text"], input[type="number"], textarea {
       width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: var(--q-radius);
@@ -75,14 +76,14 @@
     input:focus, textarea:focus { border-color: var(--q-accent); }
     input[type="number"] { width: 76px; text-align: center; }
     input[type="checkbox"] { accent-color: var(--q-accent); }
-    textarea { height: 132px; resize: none; font-size: 12.5px; line-height: 1.6; -webkit-user-select: text; user-select: text; }
+    textarea { height: 118px; resize: none; font-size: 12.5px; line-height: 1.6; -webkit-user-select: text; user-select: text; }
 
     .q-hint { font-size: 11.5px; color: var(--muted); line-height: 1.6; margin: 0; }
     .q-msg { font-size: 12px; color: var(--ok); min-height: 17px; margin: 0; }
     .q-msg.err { color: var(--danger); }
     .q-msg.pre { white-space: pre-wrap; -webkit-user-select: text; user-select: text; }
 
-    /* 搜索结果卡片 */
+    /* ---------- 搜索结果卡片 ---------- */
     #q-results { display: flex; flex-direction: column; gap: 6px; }
     .q-item {
       display: flex; align-items: center; gap: 10px;
@@ -109,7 +110,7 @@
     .q-btns .q-totp { font-variant-numeric: tabular-nums; letter-spacing: 0.5px; }
     .q-empty { text-align: center; color: var(--muted); padding: 28px 0; font-size: 12.5px; }
 
-    /* 生成器 */
+    /* ---------- 生成器 ---------- */
     .q-gen-row { display: flex; gap: 8px; align-items: stretch; }
     .q-gen-row .btn { flex: 1; }
     .q-chk { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
@@ -125,17 +126,51 @@
     .q-actions .btn { flex: 1; }
     .q-save-form { display: flex; flex-direction: column; gap: 8px; border-top: 1px dashed var(--line); padding-top: 10px; }
 
-    /* 按钮基线（借 style.css .btn，补齐面板内观感） */
-    .btn { transition: filter 0.15s, border-color 0.15s; }
-    .btn:hover { filter: brightness(1.04); }
-    .btn.primary { background: var(--q-accent); border-color: var(--q-accent); color: #fff; }
-    html.dark .btn.primary { color: #10141c; }
+    /* ---------- AI 对话 ---------- */
+    #tab-ai { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+    #ai-log { flex: 1; min-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px; }
+    .ai-msg { max-width: 92%; font-size: 12.5px; line-height: 1.65; padding: 8px 11px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; -webkit-user-select: text; user-select: text; }
+    .ai-msg.user { align-self: flex-end; background: var(--q-accent); color: #fff; border-bottom-right-radius: 4px; }
+    html.dark .ai-msg.user { color: #10141c; }
+    .ai-msg.assistant { align-self: flex-start; background: var(--card); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+    .ai-msg.assistant.error { border-color: var(--danger); color: var(--danger); }
+    .ai-msg .ai-caret { display: inline-block; width: 7px; height: 13px; background: var(--q-accent); border-radius: 2px; margin-left: 3px; vertical-align: -2px; animation: q-blink 0.9s steps(2) infinite; }
+    @keyframes q-blink { 50% { opacity: 0; } }
+    .ai-tool {
+      align-self: flex-start; font-size: 11px; color: var(--muted);
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 9px; border: 1px dashed var(--line); border-radius: 999px;
+      max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .ai-tool svg { width: 11px; height: 11px; }
+    .ai-open .q-actions { margin-top: 10px; }
+    .ai-input-row { display: flex; gap: 8px; align-items: flex-end; padding-top: 10px; }
+    .ai-input-row textarea { height: 40px; min-height: 40px; max-height: 96px; flex: 1; }
 
-    /* 底栏 */
+    /* ---------- PIN 门 / 加载 ---------- */
+    .q-gate { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; background: var(--bg); }
+    .q-gate-box { width: 80%; max-width: 300px; text-align: center; }
+    .q-gate-title { display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; font-weight: 600; margin: 0 0 16px; color: var(--text); }
+    .q-gate-title svg { width: 16px; height: 16px; color: var(--muted); }
+    .q-gate input {
+      width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: var(--q-radius);
+      padding: 11px 12px; font-size: 15px; letter-spacing: 4px; text-align: center; outline: none;
+      background: var(--card); color: var(--text); transition: border-color 0.15s;
+    }
+    .q-gate input:focus { border-color: var(--q-accent); }
+    .q-gate .q-err { color: var(--danger); font-size: 12px; min-height: 17px; margin: 8px 0; }
+    .q-gate .btn { width: 100%; margin-top: 2px; }
+    .q-gate-hint { margin-top: 16px; font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+    .q-gate-hint a { cursor: pointer; text-decoration: none; color: var(--q-accent); border-bottom: 1px solid transparent; }
+    .q-gate-hint a:hover { border-bottom-color: var(--q-accent); }
+    .q-spinner { width: 22px; height: 22px; margin: 0 auto 14px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--q-accent); animation: q-spin 0.8s linear infinite; }
+    @keyframes q-spin { to { transform: rotate(360deg); } }
+
+    /* ---------- 底栏 + 右下缩放角（无边框窗口 resize 手柄） ---------- */
     .q-foot {
       display: flex; justify-content: space-between; align-items: center;
-      padding: 7px 14px; border-top: 1px solid var(--line);
-      font-size: 11px; color: var(--muted);
+      padding: 6px 14px; border-top: 1px solid var(--line);
+      font-size: 11px; color: var(--muted); flex: none;
     }
     .q-foot kbd {
       font-family: inherit; font-size: 10px; padding: 1px 5px; border: 1px solid var(--line);
@@ -143,6 +178,19 @@
     }
     .q-foot a { cursor: pointer; text-decoration: none; color: var(--q-accent); }
     .q-foot a:hover { text-decoration: underline; }
+    .q-rsz {
+      position: fixed; right: 0; bottom: 0; width: 18px; height: 18px;
+      cursor: nwse-resize; z-index: 120;
+      -webkit-app-region: no-drag; app-region: no-drag;
+      touch-action: none;
+    }
+    .q-rsz::after {
+      content: ''; position: absolute; right: 4px; bottom: 4px;
+      width: 8px; height: 8px;
+      border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+      border-bottom-right-radius: 4px; opacity: 0.6;
+    }
+    .q-rsz:hover::after { opacity: 1; border-color: var(--q-accent); }
   </style>
 </head>
 <body class="quick-body">
@@ -151,7 +199,20 @@
     <div class="q-gate-box" id="q-gate-box"></div>
   </div>
 
-  <div id="q-app" class="q-app hidden">
+  <div id="q-app" class="q-app hidden" style="display:flex;flex-direction:column;flex:1;min-height:0">
+    <!-- 顶部拖动条：标题 + 最小化/收起（无边框窗口的拖动区） -->
+    <div class="q-drag">
+      <div class="q-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        <span>快捷面板</span>
+      </div>
+      <div class="q-drag-btns">
+        <button class="q-min" id="q-min" title="收起面板（Alt+P 再唤出）">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></svg>
+        </button>
+      </div>
+    </div>
+
     <div class="q-tabs" id="q-tabs">
       <button data-tab="search" class="on">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
@@ -164,6 +225,10 @@
       <button data-tab="import">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
         导入
+      </button>
+      <button data-tab="ai">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a5 5 0 0 1 5 5v1a4 4 0 0 1 0 8H7a4 4 0 0 1 0-8V8a5 5 0 0 1 5-5Z"/><path d="M12 8v8"/><circle cx="12" cy="5" r="0.5"/></svg>
+        AI
       </button>
     </div>
     <div class="q-body">
@@ -208,18 +273,35 @@
         <div class="q-msg pre" id="q-import-preview"></div>
         <button class="btn primary" id="q-import-go">导入（合并）</button>
       </div>
+      <!-- AI 对话 -->
+      <div id="tab-ai" class="hidden">
+        <div id="ai-log"></div>
+        <div id="ai-empty" class="ai-open" style="display:flex;flex-direction:column;gap:8px;padding-top:6px">
+          <p class="q-hint">对 AI 说：帮我查 GitHub 的密码 / 存一条 / 生成 16 位强密码。查询结果密码打码，真实值点搜索结果复制。</p>
+        </div>
+        <div class="ai-input-row">
+          <textarea id="ai-input" placeholder="说人话即可（Enter 发送，Shift+Enter 换行）" rows="1"></textarea>
+          <button class="btn primary" id="ai-send" style="width:auto;padding:10px 14px">发送</button>
+          <button class="btn hidden" id="ai-stop" style="width:auto;padding:10px 14px">停止</button>
+        </div>
+      </div>
     </div>
     <div class="q-foot">
-      <span><kbd>Alt P</kbd> 呼出 &nbsp;·&nbsp; <kbd>Esc</kbd> 隐藏</span>
+      <span><kbd>Alt P</kbd> 呼出 · <kbd>Esc</kbd> 收起 · 可拖动 / 右下角缩放</span>
       <a id="q-open-main">打开主界面</a>
     </div>
   </div>
 
+  <!-- 右下角缩放手柄（无边框窗口） -->
+  <div id="q-rsz" class="q-rsz hidden" title="拖动缩放"></div>
+
   <script src="theme.js"></script>
   <script src="generator.js"></script>
+  <script src="search.js"></script>
   <script src="totp.js"></script>
   <script src="quick-core.js"></script>
   <script src="importer.js"></script>
+  <script src="agent-core.js"></script>
   <script src="quick.js"></script>
 </body>
 </html>

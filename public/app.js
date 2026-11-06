@@ -3374,62 +3374,88 @@ async function openSettingsModal() {
       <button class="modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
     <div class="modal-body">
-      ${modeField}
-      ${dbPathField}
-      ${encField}
-      ${backupField}
-      ${faviconField}
-      ${quickNoteField}
-      ${agentField}
-      ${updateField}
-      <div class="field"><span>安全体检</span>
-        <div class="chk-group" style="padding-top:2px">
-          <label><input type="checkbox" id="set-wt-hibp" ${loadWtSettings().hibp ? 'checked' : ''} /> 联网检查泄露密码（仅上传 SHA-1 前 5 位，密码不出本机）</label>
+      <div class="set-group">
+        <div class="set-group-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg><span>存储与数据</span></div>
+        <div class="set-card">
+          ${modeField}
+          ${dbPathField}
+          ${encField}
+          ${backupField}
         </div>
       </div>
-      <label class="field"><span>陈旧密码提醒阈值</span>
-        <select id="set-wt-stale">
-          <option value="6" ${loadWtSettings().staleMonths === 6 ? 'selected' : ''}>6 个月未修改即提醒</option>
-          <option value="12" ${loadWtSettings().staleMonths === 12 ? 'selected' : ''}>12 个月未修改即提醒</option>
-          <option value="24" ${loadWtSettings().staleMonths === 24 ? 'selected' : ''}>24 个月未修改即提醒</option>
-          <option value="0" ${loadWtSettings().staleMonths === 0 ? 'selected' : ''}>不检查</option>
-        </select>
-      </label>
-      <div class="field"><span>启动锁（可选，仅本地拦截，不加密数据）</span>
-        <div class="lock-toggle">
-          <button class="btn ${s.pinHash ? '' : 'primary'}" id="btn-lock-toggle" type="button">${s.pinHash ? '停用' : '启用'}</button>
-          <span class="lock-state" id="lock-state">${s.pinHash ? '已启用' : '未启用'}</span>
+      <div class="set-group">
+        <div class="set-group-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span>安全与锁定</span></div>
+        <div class="set-card">
+          <div class="field"><span>启动锁（可选，仅本地拦截，不加密数据）</span>
+            <div class="lock-toggle">
+              <button class="btn ${s.pinHash ? '' : 'primary'}" id="btn-lock-toggle" type="button">${s.pinHash ? '停用' : '启用'}</button>
+              <span class="lock-state" id="lock-state">${s.pinHash ? '已启用' : '未启用'}</span>
+            </div>
+            <input id="set-pin" type="password" placeholder="${s.pinHash ? '留空保持不变，输入新 PIN 可更换' : '设置 4-12 位 PIN'}" autocomplete="new-password" ${s.pinHash ? '' : 'disabled'} />
+          </div>
+          <div class="field" id="bio-field"><span>生物识别解锁（指纹 / 面容，需已启用启动锁且设备支持）</span>
+            <div class="lock-toggle">
+              <button class="btn ${(s.bioUnlock !== false && s.pinHash) ? '' : 'primary'}" id="btn-bio-toggle" type="button">${(s.bioUnlock !== false && s.pinHash) ? '停用' : '启用'}</button>
+              <span class="lock-state" id="bio-state">${(s.bioUnlock !== false && s.pinHash) ? '已启用' : '未启用'}</span>
+            </div>
+          </div>
+          <label class="field"><span>自动锁定（需已启用启动锁）</span>
+            <select id="set-autolock">
+              <option value="never" ${(s.lock?.autoLock || 'never') === 'never' ? 'selected' : ''}>永不</option>
+              <option value="60" ${s.lock?.autoLock === '60' ? 'selected' : ''}>无操作 1 分钟后</option>
+              <option value="300" ${s.lock?.autoLock === '300' ? 'selected' : ''}>无操作 5 分钟后</option>
+              <option value="hidden" ${s.lock?.autoLock === 'hidden' ? 'selected' : ''}>切到后台立即锁定</option>
+            </select>
+          </label>
+          <label class="field"><span>复制后自动清空剪贴板</span>
+            <select id="set-clipclear">
+              <option value="0" ${(s.lock?.clipboard || 0) === 0 ? 'selected' : ''}>关闭</option>
+              <option value="15" ${s.lock?.clipboard === 15 ? 'selected' : ''}>15 秒后（推荐）</option>
+              <option value="30" ${s.lock?.clipboard === 30 ? 'selected' : ''}>30 秒后</option>
+            </select>
+          </label>
+          <div class="field"><span>安全体检</span>
+            <div class="chk-group" style="padding-top:2px">
+              <label><input type="checkbox" id="set-wt-hibp" ${loadWtSettings().hibp ? 'checked' : ''} /> 联网检查泄露密码（仅上传 SHA-1 前 5 位，密码不出本机）</label>
+            </div>
+          </div>
+          <label class="field"><span>陈旧密码提醒阈值</span>
+            <select id="set-wt-stale">
+              <option value="6" ${loadWtSettings().staleMonths === 6 ? 'selected' : ''}>6 个月未修改即提醒</option>
+              <option value="12" ${loadWtSettings().staleMonths === 12 ? 'selected' : ''}>12 个月未修改即提醒</option>
+              <option value="24" ${loadWtSettings().staleMonths === 24 ? 'selected' : ''}>24 个月未修改即提醒</option>
+              <option value="0" ${loadWtSettings().staleMonths === 0 ? 'selected' : ''}>不检查</option>
+            </select>
+          </label>
         </div>
-        <input id="set-pin" type="password" placeholder="${s.pinHash ? '留空保持不变，输入新 PIN 可更换' : '设置 4-12 位 PIN'}" autocomplete="new-password" ${s.pinHash ? '' : 'disabled'} />
       </div>
-      <div class="field" id="bio-field"><span>生物识别解锁（指纹 / 面容，需已启用启动锁且设备支持）</span>
-        <div class="lock-toggle">
-          <button class="btn ${(s.bioUnlock !== false && s.pinHash) ? '' : 'primary'}" id="btn-bio-toggle" type="button">${(s.bioUnlock !== false && s.pinHash) ? '停用' : '启用'}</button>
-          <span class="lock-state" id="bio-state">${(s.bioUnlock !== false && s.pinHash) ? '已启用' : '未启用'}</span>
+      <div class="set-group">
+        <div class="set-group-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg><span>AI 助理</span></div>
+        <div class="set-card">
+          ${agentField}
         </div>
       </div>
-      <label class="field"><span>自动锁定（需已启用启动锁）</span>
-        <select id="set-autolock">
-          <option value="never" ${(s.lock?.autoLock || 'never') === 'never' ? 'selected' : ''}>永不</option>
-          <option value="60" ${s.lock?.autoLock === '60' ? 'selected' : ''}>无操作 1 分钟后</option>
-          <option value="300" ${s.lock?.autoLock === '300' ? 'selected' : ''}>无操作 5 分钟后</option>
-          <option value="hidden" ${s.lock?.autoLock === 'hidden' ? 'selected' : ''}>切到后台立即锁定</option>
-        </select>
-      </label>
-      <label class="field"><span>复制后自动清空剪贴板</span>
-        <select id="set-clipclear">
-          <option value="0" ${(s.lock?.clipboard || 0) === 0 ? 'selected' : ''}>关闭</option>
-          <option value="15" ${s.lock?.clipboard === 15 ? 'selected' : ''}>15 秒后（推荐）</option>
-          <option value="30" ${s.lock?.clipboard === 30 ? 'selected' : ''}>30 秒后</option>
-        </select>
-      </label>
-      <label class="field"><span>外观</span>
-        <select id="set-theme">
-          <option value="auto" ${(s.theme || 'auto') === 'auto' ? 'selected' : ''}>跟随系统</option>
-          <option value="light" ${s.theme === 'light' ? 'selected' : ''}>浅色</option>
-          <option value="dark" ${s.theme === 'dark' ? 'selected' : ''}>深色</option>
-        </select>
-      </label>
+      ${quickNoteField ? `
+      <div class="set-group">
+        <div class="set-group-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M10 9h4"/><path d="M12 7v4"/><path d="M8 1v4"/><path d="M16 1v4"/></svg><span>桌面集成（托盘 · 快捷键 · 自启动）</span></div>
+        <div class="set-card">
+          ${quickNoteField}
+        </div>
+      </div>` : ''}
+      <div class="set-group">
+        <div class="set-group-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg><span>更新与外观</span></div>
+        <div class="set-card">
+          ${updateField}
+          <label class="field"><span>外观（跟随系统 / 浅色 / 深色）</span>
+            <select id="set-theme">
+              <option value="auto" ${(s.theme || 'auto') === 'auto' ? 'selected' : ''}>跟随系统</option>
+              <option value="light" ${s.theme === 'light' ? 'selected' : ''}>浅色</option>
+              <option value="dark" ${s.theme === 'dark' ? 'selected' : ''}>深色</option>
+            </select>
+          </label>
+          ${faviconField}
+        </div>
+      </div>
       <p class="hint">PIN 仅阻止他人直接打开界面。AI 查询结果已打码（真实密码只在应用卡片内展示/复制）；存、改密码时内容仍会发送给你配置的模型渠道，请只填自己信任的接口。</p>
     </div>
     <div class="modal-foot">
@@ -5192,6 +5218,21 @@ async function handleQuickAction(action, payload) {
     if (!document.hidden) { refreshChips(); refreshList(); }
     else { refreshChips(); } // 隐藏时也刷分类计数，回到主窗即新
     return r;
+  }
+  if (action === 'agent:exec') {
+    // v4.12.0：快捷面板 AI 对话的工具执行转发。onDisplay 收集真实结果（含明文）
+    // 随响应带回面板渲染卡片——不回传 AI 渠道；删除确认卡在面板只提示（真删在主窗确认）。
+    const name = String((payload && payload.name) || '');
+    const args = (payload && payload.args) || {};
+    const displays = [];
+    const exec = AgentCore.createExecutor(
+      store, PassGen,
+      () => { try { refreshChips(); refreshList(); } catch { /* 面板触发时主窗可能未渲染 */ } },
+      (d) => displays.push(d),
+      getAgentHub(),
+    );
+    const result = await exec(name, args);
+    return { result, displays };
   }
   throw new Error('未知操作: ' + action);
 }

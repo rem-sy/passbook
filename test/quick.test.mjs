@@ -7,6 +7,7 @@ const fs = await import('node:fs');
 (0, eval)(fs.readFileSync(new URL('../public/quick-core.js', import.meta.url), 'utf8'));
 (0, eval)(fs.readFileSync(new URL('../public/shortcut-input.js', import.meta.url), 'utf8'));
 (0, eval)(fs.readFileSync(new URL('../public/importer.js', import.meta.url), 'utf8'));
+(0, eval)(fs.readFileSync(new URL('../public/agent-core.js', import.meta.url), 'utf8'));
 const Q = globalThis.window.PassQuick;
 const S = globalThis.window.PassShortcut;
 const I = globalThis.window.PassImporter;
@@ -138,4 +139,25 @@ test('parseLines：五种分隔符 + 表头/注释/空行跳过 + 第四五段�
   assert.equal(rows[3].owner, 'GitHub');
   assert.equal(rows[3].url, '主账号'); // 第 4 段进网址、第 5 段才进备注（与主窗同规则）
   assert.equal(rows[4].password, '中文逗号密码');
+});
+
+/* ---------------- v4.12.0：AI 辅助纯函数 ---------------- */
+test('aiToolLabel：TOOL_LABELS 函数式（带 args）+ 字符串兼容 + 未知回退', () => {
+  assert.equal(Q.aiToolLabel('search_passwords', { keyword: '微信' }), '搜索「微信」');
+  assert.equal(Q.aiToolLabel('save_password', { owner: 'GitHub', account: 'me' }), '保存 GitHub / me');
+  assert.equal(Q.aiToolLabel('list_recent_passwords', {}), '列出最近条目');
+  assert.equal(Q.aiToolLabel('unknown_tool', {}), 'unknown_tool');
+  assert.equal(Q.aiToolLabel(null, {}), '工具');
+});
+
+test('fmtAgentError：中止/超时/401/404/429/渠道/网络/原文 分类文案', () => {
+  assert.equal(Q.fmtAgentError('已停止'), '已停止生成');
+  assert.ok(Q.fmtAgentError('主窗口响应超时').includes('超时'));
+  assert.ok(Q.fmtAgentError('渠道返回 401：Unauthorized').includes('API Key'));
+  assert.ok(Q.fmtAgentError('渠道返回 404：Not Found').includes('接口地址或模型名'));
+  assert.ok(Q.fmtAgentError('渠道返回 429：Too Many').includes('限流'));
+  assert.ok(Q.fmtAgentError('Failed to fetch').includes('网络失败'));
+  assert.ok(Q.fmtAgentError('渠道返回 500：boom').includes('500'));
+  assert.equal(Q.fmtAgentError('其他错误').slice(0, 4), '其他错误');
+  assert.equal(Q.fmtAgentError(''), '请求失败，请重试');
 });

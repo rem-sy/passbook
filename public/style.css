@@ -196,6 +196,25 @@ body {
 .gen-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px 22px; }
 .field { display: flex; flex-direction: column; gap: 7px; }
 .field > span { font-size: 12.5px; color: var(--muted); font-weight: 550; }
+
+/* v4.12.0 设置页分组卡片：标题行（图标+组名）+ 卡片容器，条目间 12px 呼吸 */
+.set-group { margin-bottom: 16px; }
+.set-group-title {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 12.5px; font-weight: 650; color: var(--text);
+  margin: 0 2px 8px; letter-spacing: 0.02em;
+}
+.set-group-title svg { width: 15px; height: 15px; color: var(--primary); flex: none; }
+.set-card {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--card); padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.set-card .field + .field { padding-top: 13px; border-top: 1px dashed var(--line); }
+.set-card .chk-group { display: flex; flex-direction: column; gap: 8px; }
+.set-card .chk-group label { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; line-height: 1.55; color: var(--text); }
+.set-card .hint { margin: 0; }
+.set-card input[type="checkbox"] { accent-color: var(--primary); margin-top: 2px; flex: none; }
 .field input:not([type="checkbox"]):not([type="radio"]), .field select, .field textarea {
   border: 1px solid var(--line);
   border-radius: 9px;
@@ -817,7 +836,8 @@ html.dark ::-webkit-scrollbar-thumb:hover { background: #414a5d; }
 }
 
 /* ---------------- 分类侧栏 / 收藏 / 站点图标（v2.7.0） ---------------- */
-/* 侧栏：≥900px 常驻左侧；<900px 抽屉（汉堡开关） */
+/* 侧栏：≥900px 常驻左侧；<900px 抽屉（汉堡开关）
+   v4.12.0 视觉对齐：与应用卡片风统一——圆角胶囊项、主色软底高亮（替代 inset 硬条）、计数徽章化 */
 .sidebar {
   position: fixed;
   top: calc(56px + env(safe-area-inset-top, 0px));
@@ -831,26 +851,34 @@ html.dark ::-webkit-scrollbar-thumb:hover { background: #414a5d; }
   z-index: 60;
 }
 .side-head {
-  font-size: 12px; font-weight: 650; color: var(--muted);
-  padding: 2px 10px 8px; letter-spacing: 0.12em;
+  font-size: 11px; font-weight: 650; color: var(--muted);
+  padding: 2px 12px 10px; letter-spacing: 0.14em;
 }
-.side-sep { height: 1px; background: var(--line); margin: 8px 10px; }
+.side-sep { height: 1px; background: var(--line); margin: 10px 12px; }
 .side-item {
   display: flex; align-items: center; gap: 9px;
-  width: 100%; padding: 8px 10px; border-radius: 10px;
+  width: 100%; padding: 7px 11px; margin-bottom: 2px; border-radius: 9px;
   border: none; background: none; cursor: pointer;
   font-size: 13.5px; color: var(--text); text-align: left;
+  transition: background 0.15s, color 0.15s;
 }
-.side-item svg { width: 16px; height: 16px; color: var(--muted); flex: none; }
+.side-item svg { width: 16px; height: 16px; color: var(--muted); flex: none; transition: color 0.15s; }
 .side-item em {
-  margin-left: auto; font-style: normal; font-size: 12px;
+  margin-left: auto; font-style: normal; font-size: 11px;
   color: var(--muted); font-variant-numeric: tabular-nums;
+  background: var(--bg); border-radius: 999px; padding: 1px 8px;
+  min-width: 22px; text-align: center; line-height: 1.6;
 }
-.side-item .side-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .side-item:hover { background: var(--bg); }
-.side-item.active { background: var(--bg); font-weight: 650; box-shadow: inset 3px 0 0 var(--accent, #1d4a80); }
-.side-item.active svg { color: var(--accent, #1d4a80); }
-.side-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; margin: 0 3px; }
+.side-item:hover em { background: var(--card); }
+.side-item.active { background: var(--primary-soft, rgba(29, 74, 128, 0.09)); color: var(--primary, #1d4a80); font-weight: 600; }
+.side-item.active svg { color: var(--primary, #1d4a80); }
+.side-item.active em { background: var(--primary, #1d4a80); color: #fff; }
+html.dark .side-item.active { background: rgba(125, 156, 208, 0.14); color: #a9c3ee; }
+html.dark .side-item.active svg { color: #a9c3ee; }
+html.dark .side-item.active em { background: #7d9cd0; color: #10141c; }
+.side-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; margin: 0 3px; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06); }
+.side-item .side-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 遮罩（手机抽屉） */
 .side-mask {
@@ -906,7 +934,7 @@ html.dark .entry-fav.active { color: #ffc45e; }
 
 /* 深色适配 */
 html.dark .sidebar { background: #1c202b; }
-html.dark .side-item:hover, html.dark .side-item.active { background: #232733; }
+html.dark .side-item:hover, html.dark .side-item.active { background: rgba(255, 255, 255, 0.05); }
 
 /* 导入弹窗（v3.0.5）：主文案单行，手机端文案更短 */
 .file-drop-main { white-space: nowrap; }
