@@ -128,6 +128,12 @@
 
     /* ---------- AI 对话 ---------- */
     #tab-ai { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+    .q-clear {
+      border: 1px solid var(--line); background: transparent; color: var(--muted);
+      border-radius: 999px; padding: 4px 12px; font-size: 11px; cursor: pointer;
+      transition: color .15s, border-color .15s;
+    }
+    .q-clear:hover { color: var(--danger); border-color: var(--danger); }
     #ai-log { flex: 1; min-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px; }
     .ai-msg { max-width: 92%; font-size: 12.5px; line-height: 1.65; padding: 8px 11px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; -webkit-user-select: text; user-select: text; }
     .ai-msg.user { align-self: flex-end; background: var(--q-accent); color: #fff; border-bottom-right-radius: 4px; }
@@ -275,6 +281,9 @@
       </div>
       <!-- AI 对话 -->
       <div id="tab-ai" class="hidden">
+        <div style="display:flex;justify-content:flex-end;padding-bottom:2px">
+          <button class="q-clear" id="ai-clear" title="清空对话记录">清空对话</button>
+        </div>
         <div id="ai-log"></div>
         <div id="ai-empty" class="ai-open" style="display:flex;flex-direction:column;gap:8px;padding-top:6px">
           <p class="q-hint">对 AI 说：帮我查 GitHub 的密码 / 存一条 / 生成 16 位强密码。查询结果密码打码，真实值点搜索结果复制。</p>

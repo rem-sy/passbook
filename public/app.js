@@ -5168,6 +5168,7 @@ async function setupQuickNoteShortcut() {
  * 面板小窗（quick.html/quick.js）不直接开库，所有操作经 quick-request 事件
  * 由主窗在内存权威库上代执行，结果 emitTo 回 quick 窗口（id 配对）。 */
 let vaultReady = false; // initStore 完成后置 true（gate 据此判断面板可否进入）
+const quickStreams = new Map(); // sid → AbortController（面板 AI 流的停止通道）
 
 async function handleQuickAction(action, payload) {
   const s = loadSettings();
@@ -5234,6 +5235,34 @@ async function handleQuickAction(action, payload) {
     const result = await exec(name, args);
     return { result, displays };
   }
+  if (action === 'agent:http-stream') {
+    // v4.12.1：快捷面板 AI 流式通道——面板只发请求，主窗用自己的 agentFetchStream 发起
+    // （与主窗 AI 完全同源），chunk/status/error/done 按 sid 定向 emitTo 回 quick 窗口。
+    const { sid, url, method, headers, body } = payload || {};
+    if (!sid || !url) throw new Error('参数缺失');
+    const evt = window.__TAURI__.event;
+    const ac = new AbortController();
+    quickStreams.set(sid, ac);
+    const send = async (kind, data) => {
+      try { await evt.emitTo('quick', 'quick-ai-stream', { sid, kind, data }); } catch { /* 窗口已关 */ }
+    };
+    try {
+      const resp = await agentFetchStream(url, {
+        method: method || 'POST',
+        headers: headers || {},
+        body,
+        signal: ac.signal,
+      }, (raw) => send('chunk', raw));
+      await send('status', resp.status);
+      if (!resp.ok) await send('error', (await resp.text()).slice(0, 300));
+    } catch (e) {
+      await send('error', String((e && e.message) || e));
+    } finally {
+      quickStreams.delete(sid);
+      await send('done');
+    }
+    return { started: true }; // 立即返回；数据走 quick-ai-stream 事件
+  }
   throw new Error('未知操作: ' + action);
 }
 
@@ -5252,6 +5281,12 @@ async function setupQuickPanelBridge() {
     try { r = { ok: true, data: await handleQuickAction(req.action, req.payload) }; }
     catch (e) { r = { ok: false, error: String(e && e.message || e) }; }
     try { await evt.emitTo('quick', 'quick-response', { id: req.id, ...r }); } catch { /* 窗口已关 */ }
+  });
+  // v4.12.1：面板 AI 流停止（面板 abort 后调用；中止主窗侧底层请求）
+  await evt.listen('quick-ai-abort', (ev) => {
+    const sid = ev.payload && ev.payload.sid;
+    const ac = sid && quickStreams.get(sid);
+    if (ac) { try { ac.abort(); } catch { /* 忽略 */ } }
   });
   // 托盘菜单「锁定」：与自动锁定同一管线（未启用 PIN 则无锁可上）
   await evt.listen('pb-lock', () => doAutoLock());

@@ -24,7 +24,7 @@ const ITEMS = [
   { id: 3, owner: '网银', account: '张三', password: 'Bank#Safe', url: '', note: '工资卡', category: '财务', totp_secret: '', fav: 1 },
 ];
 
-// mock 注入：quick.js 需要的 __TAURI__（event.emit/listen + core.invoke + agent_http_stream 事件流模拟）
+// mock 注入：quick.js 需要的 __TAURI__（event.emit/listen + core.invoke + agent:http-stream 转发模拟）
 const MOCK = `<script>
 window.__ITEMS = ${JSON.stringify(ITEMS)};
 window.__evtCbs = [];
@@ -33,17 +33,28 @@ window.__TAURI__ = {
   core: {
     invoke: async (cmd, args) => {
       window.__mockInvokes = (window.__mockInvokes||[]).concat(cmd);
-      if (cmd === 'agent_http_stream') { window.__mockStream(args); return null; }
       return null;
     },
   },
   event: {
     emit: (event, payload) => {
       if (event === 'quick-request') {
+        const req = payload || {};
+        if (req.action === 'agent:http-stream') {
+          // v4.12.1 化 mock：真正跑 __mockStream 并按 sid 定向回推 quick-ai-stream（镜像主窗转发逻辑）
+          // 同时立即 respond（镜像主窗 await 整流后 return，但 done 先于 return；这里加速 respond 模拟 quick-response 快速返回也行，关键是事件流）
+          window.__mockStream(req.payload || {});
+          // 给 callMain 发响应的 pending —— mock 的 handle 只处理非流式 action；流式由事件驱动，
+          // 但 quick.js 会等 callMain resolve 才进入后续逻辑（round2 的 agent:exec 才能发生），见下
+          window.__streamReqs = window.__streamReqs || {};
+          window.__streamReqs[req.payload && req.payload.sid] = req.id;
+          return;
+        }
         const r = (window.__mockHandle || (() => ({ ok: false, error: 'no mock' })))(payload);
         setTimeout(() => { (window.__evtCbs || []).forEach((it) => { if (it.event === 'quick-response') { try { it.cb({ event: 'quick-response', payload: r }); } catch (e) {} } }); }, 0);
         return;
       }
+      if (event === 'quick-ai-abort') { window.__mockAbort = payload.sid; return; }
       for (const it of (window.__evtCbs || [])) if (it.event === event) { try { it.cb({ event, payload }); } catch (e) {} }
     },
     listen: async (event, cb) => {
@@ -54,18 +65,28 @@ window.__TAURI__ = {
     },
   },
 };
-// 模拟 OpenAI SSE：第 1 轮返回 tool_calls（search_passwords），第 2 轮返回最终文本
-// 注意：payload 一律在页面端 JSON.stringify 构造——Node 模板字符串里手写嵌套 JSON 的三层转义必错
-window.__mockStream = function (args) {
+// 模拟主窗 agent:http-stream：按 sid 做 SSE 流并回推 quick-ai-stream（第 1 轮 tool_calls，第 2 轮文本）
+window.__mockStream = function (p) {
+  const sid = p.sid;
   const round = ++window.__streamRound;
-  const post = (fn, ms) => setTimeout(fn, ms);
+  const post = (kind, data, ms) => setTimeout(() => {
+    if (window.__mockAbort === sid) return;
+    (window.__evtCbs || []).forEach((it) => { if (it.event === 'quick-ai-stream') { try { it.cb({ event: 'quick-ai-stream', payload: { sid, kind, data } }); } catch (e) {} } });
+  }, ms);
   const toolRound = { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'search_passwords', arguments: JSON.stringify({ keyword: '微信' }) } }] } }] };
   const textRound = { choices: [{ delta: { content: '找到了微信的账号，密码在下方卡片里，点密码即可复制。' } }] };
   const obj = round === 1 ? toolRound : textRound;
   const sse = 'data: ' + JSON.stringify(obj) + '\\n\\n';
-  post(() => window.__TAURI__.event.emit('agent-stream-status', 200), 5);
-  post(() => window.__TAURI__.event.emit('agent-stream-chunk', sse), 20);
-  post(() => window.__TAURI__.event.emit('agent-stream-done'), 40);
+  post('status', 200, 5);
+  post('chunk', sse, 20);
+  post('done', '', 40);
+  // 镜像真实主窗：await 整个流结束才 resolve（callMain 需要它才进入 round2 的 agent:exec）
+  setTimeout(() => {
+    const id = window.__streamReqs && window.__streamReqs[sid];
+    if (id) {
+      (window.__evtCbs || []).forEach((it) => { if (it.event === 'quick-response') { try { it.cb({ event: 'quick-response', payload: { id, ok: true, data: { started: true } } }); } catch (e) {} } });
+    }
+  }, 60);
 };
 window.__mockHandle = function (req) {
   const { id, action, payload } = req || {};
@@ -214,16 +235,15 @@ try {
   const impMsg = await ev("document.getElementById('q-import-preview').textContent");
   assert(/导入完成/.test(impMsg), '导入回执: ' + impMsg);
 
-  // —— AI 对话全链路（mock SSE 工具调用轮 + 文本轮；渠道配置注入 localStorage） ——
+  // —— AI 对话全链路（mock 经主窗转发的 SSE：工具调用轮 + 文本轮；渠道配置注入 localStorage） ——
   await ev("localStorage.setItem('passbook-agent', JSON.stringify({baseUrl:'https://mock.example/v1', apiKey:'sk-test', model:'mock-model'}))");
   await ev("document.querySelector('.q-tabs [data-tab=ai]').click()");
   await sleep(120);
   await ev("document.getElementById('ai-input').value='微信的密码是多少'");
   await ev("document.getElementById('ai-send').click()");
-  await sleep(1500);
-  log('探针 streamRound: ' + await ev("window.__streamRound || 0") + ' / evtCbs: ' + await ev("(window.__evtCbs||[]).map(c=>c.event).join(',')"));
-  log('探针 emit链路: ' + await ev("(async function(){ var full=''; await window.__TAURI__.event.listen('agent-stream-chunk', function(e){ full += e.payload; }); window.__TAURI__.event.emit('agent-stream-chunk', 'data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}'); return JSON.stringify(full); })()"));
-  log('探针 invoke: ' + await ev("(async function(){ try { var r = await window.__TAURI__.core.invoke('agent_http_stream', {url:'u', method:'POST', headers:{}, body:'b'}); return 'ok ' + JSON.stringify(r); } catch(e) { return 'ERR ' + e.message; } })()"));
+  await sleep(1800);
+  log('探针 streamRound: ' + await ev("window.__streamRound || 0"));
+  log('AI err 探针: ' + await ev("(function(){ var el=document.querySelector('.ai-msg.error'); return el ? el.textContent.slice(0,160) : ''; })()"));
   const logHtml = await ev("document.getElementById('ai-log').innerText.slice(0, 400)");
   log('AI 对话记录: ' + JSON.stringify(logHtml.slice(0, 180)));
   assert(await ev("Array.from(document.querySelectorAll('.ai-msg.user')).some(e=>e.textContent.includes('微信'))"), '用户消息上屏');
@@ -238,6 +258,13 @@ try {
   await ev("document.getElementById('ai-send').click()");
   await sleep(300);
   assert(await ev("Array.from(document.querySelectorAll('.ai-msg.assistant.error')).some(e=>e.textContent.includes('渠道未配置'))"), '未配置渠道给出引导提示');
+  // 清空会话按钮：UI 存在且功能可用
+  await ev("localStorage.setItem('passbook-agent', JSON.stringify({baseUrl:'https://mock.example/v1', apiKey:'sk-test', model:'mock-model'}))");
+  await ev("(function(){ var log=document.getElementById('ai-log'); log.innerHTML='<div>dummy</div>'; window.__aiStateRef = null; })()");
+  await ev("document.getElementById('ai-clear').click()");
+  await sleep(200);
+  assert(await ev("!!document.getElementById('ai-clear')"), '清空对话按钮存在');
+  assert(await ev("document.getElementById('ai-log').children.length === 0"), '清空后对话记录为空');
 
   // —— 截图存证 ——
   await ev("document.querySelector('.q-tabs [data-tab=search]').click()");

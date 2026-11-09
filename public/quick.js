@@ -329,43 +329,45 @@
     } catch (e) { msg(e.message, true, 'q-import-preview'); }
   });
 
-  /* ================= AI 对话（v4.12.0） ================= */
+  /* ================= AI 对话（v4.12.0 / v4.12.1 通道重构） ================= */
   const aiState = { messages: [], busy: false, abort: null };
 
-  /** 流式网络出口：Rust agent_http_stream + agent-stream-* 事件（与主窗同一通道） */
+  /** v4.12.1：AI 流式通道改经主窗转发（与主窗 AI 完全同源）。
+   * 此前面板窗口直接 invoke agent_http_stream：大请求体（system+tools ~20KB）跨窗口 IPC
+   * 与主窗路径存在实现差异，且 agent-stream-* 事件全局广播、两窗互相收对方 chunk。
+   * 现面板只发 agent:http-stream 请求 → 主窗用自己的 agentFetchStream 发起，
+   * chunk 由主窗按流 id 定向 emitTo('quick','quick-ai-stream') 回面板。 */
   async function aiChannelFetch(url, opts, onChunk) {
     if (!IS_TAURI) throw new Error('AI 对话需在桌面应用内使用');
-    const evt = window.__TAURI__.event;
     const signal = opts.signal || null;
     if (signal && signal.aborted) throw new Error('已停止');
+    const sid = 's' + (++seq);
     let status = 0;
     let full = '';
     let err = null;
     let resolveDone;
     const done = new Promise((res) => { resolveDone = res; });
-    const unlisteners = [];
+    const unlisten = await window.__TAURI__.event.listen('quick-ai-stream', (ev) => {
+      const p = ev.payload || {};
+      if (!p || p.sid !== sid) return;
+      if (p.kind === 'status') status = Number(p.data) || 0;
+      else if (p.kind === 'chunk') { full += p.data; if (onChunk) onChunk(p.data); }
+      else if (p.kind === 'error') err = new Error(String(p.data).slice(0, 300) || '渠道流式错误');
+      else if (p.kind === 'done') resolveDone();
+    });
     const onAbort = () => {
       err = new Error('已停止');
-      try { tauriInvokeQ('agent_abort'); } catch { /* 忽略 */ }
       resolveDone();
+      if (IS_TAURI) window.__TAURI__.event.emit('quick-ai-abort', { sid }).catch?.(() => {});
+      try { window.__TAURI__.event.emit('quick-ai-abort', { sid }); } catch { /* 尽力而为 */ }
     };
     if (signal) signal.addEventListener('abort', onAbort);
-    unlisteners.push(await evt.listen('agent-stream-status', (e) => { status = Number(e.payload); }));
-    unlisteners.push(await evt.listen('agent-stream-chunk', (e) => {
-      full += e.payload;
-      if (onChunk) onChunk(e.payload);
-    }));
-    unlisteners.push(await evt.listen('agent-stream-error', (e) => {
-      err = new Error(String(e.payload).slice(0, 300) || '渠道流式错误');
-      resolveDone();
-    }));
-    unlisteners.push(await evt.listen('agent-stream-done', () => resolveDone()));
     try {
-      await tauriInvokeQ('agent_http_stream', { url, method: opts.method || 'POST', headers: opts.headers || {}, body: opts.body });
-    } catch (e) { err = e; resolveDone(); }
+      await callMain('agent:http-stream', { sid, url, method: opts.method || 'POST', headers: opts.headers || {}, body: opts.body }, 300000);
+    } catch (e) { if (!err) err = e; }
     await done;
-    if (signal) signal.removeEventListener('abort', onAbort);
-    unlisteners.forEach((u) => { try { u(); } catch { /* 忽略 */ } });
+    signal?.removeEventListener('abort', onAbort);
+    try { unlisten(); } catch { /* 忽略 */ }
     if (err) throw err;
     return {
       ok: status >= 200 && status < 300,
@@ -504,9 +506,14 @@
   }
 
   $('ai-send').addEventListener('click', aiSend);
+  $('ai-clear').addEventListener('click', () => {
+    if (aiState.busy) { if (aiState.abort) aiState.abort.abort(); }
+    aiState.messages.length = 0;
+    $('ai-log').innerHTML = '';
+    $('ai-input').value = '';
+  });
   $('ai-stop').addEventListener('click', () => {
-    if (aiState.abort) aiState.abort.abort();
-    if (IS_TAURI) tauriInvokeQ('agent_abort').catch(() => {});
+    if (aiState.abort) aiState.abort.abort(); // abort → onAbort → 主窗 quick_ai_stream_abort（中止主窗侧底层流）
   });
   $('ai-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
