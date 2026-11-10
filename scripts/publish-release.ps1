@@ -1,6 +1,6 @@
 ﻿# 密码本 · 发布 GitHub Release（v4.9.0 起每版必跑：自动更新依赖 Release 产物）
 # 用法：powershell -ExecutionPolicy Bypass -File scripts\publish-release.ps1 [-Tag v4.9.0]
-# 前提：tag 已 push；%TEMP%\gh-token.txt 有 GitHub Token（repo contents 写权限）
+# 前提：%TEMP%\gh-token.txt 有 GitHub Token（repo contents 写权限）
 # 只挂正式产物：setup / portable / 正式 APK / latest.json。预置版（-preset）绝不上传。
 param([string]$Tag = '')
 
@@ -71,8 +71,12 @@ if (Test-Path $notesPath) {
     $noteBody = $Matches[1].Trim()
     if ($noteBody) {
       try {
-        & $irm Patch "https://api.github.com/repos/$repo/releases/$($rel.id)" (@{ body = $noteBody } | ConvertTo-Json) | Out-Null
-        Write-Host "Release 正文已写入（$($noteBody.Length) 字符）"
+        # v4.12.4 乱码修复：PS 5.1 Invoke-RestMethod 把字符串 Body 按单字节（Latin-1 类）编码发送，
+        # 中文全部变成「?」（手机端公告乱码根因，桌面端 latest.json 不走此路径故正常）。
+        # 改为把 JSON 编成 UTF-8 字节数组再传——byte[] Body 原样上传，不做任何编码转换。
+        $bodyJsonBytes = [System.Text.Encoding]::UTF8.GetBytes((@{ body = $noteBody } | ConvertTo-Json))
+        & $irm Patch "https://api.github.com/repos/$repo/releases/$($rel.id)" $bodyJsonBytes | Out-Null
+        Write-Host "Release 正文已写入（$($noteBody.Length) 字符，UTF-8 字节直传）"
       } catch { Write-Warning "Release 正文写入失败：$($_.Exception.Message)" }
       # 补写 latest.json（桌面 updater 的 notes 字段；手机走 Release body 上面已写）
       $ljPath = Join-Path $prod 'latest.json'
