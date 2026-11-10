@@ -513,6 +513,7 @@
     aiState.abort = controller;
     const bubble = aiBubble('', 'assistant');
     let shown = '';
+    aiState.lastUsage = null;
     try {
       await AgentCore.chatStream({
         messages: aiState.messages,
@@ -521,6 +522,7 @@
         headers: cfg.apiKey ? { Authorization: 'Bearer ' + cfg.apiKey } : {},
         model: cfg.model,
         exec: aiExec,
+        onUsage: (u) => { aiState.lastUsage = u; },
         onEvent: (type, p) => { if (type === 'tool') aiToolLine(p.name, p.args); },
         onDelta: (t) => {
           shown = t;
@@ -532,6 +534,12 @@
       bubble.querySelector('.ai-caret')?.remove();
       if (!shown) bubble.textContent = '（无回复内容）';
       else bubble.innerHTML = aiMd(shown);
+      // v4.12.4：token 用量（同主窗 agentUsageLabel 口径）
+      const usage = aiState.lastUsage;
+      const label = (usage && (usage.prompt_tokens != null || usage.completion_tokens != null))
+        ? `↑${usage.prompt_tokens ?? '?'} ↓${usage.completion_tokens ?? '?'} token`
+        : `≈↑↓${Math.round((text.length + (shown || '').length) / 2)} token`;
+      bubble.insertAdjacentHTML('beforeend', `<span style="font-size:10px;color:var(--muted);float:right;margin-left:8px">${label}</span>`);
     } catch (e) {
       bubble.querySelector('.ai-caret')?.remove();
       bubble.classList.add('error');

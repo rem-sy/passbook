@@ -303,7 +303,7 @@
 6.【标签】用户要给某条密码/便签/文件打标签（可跨类型多项）→ 调用 tag_items；摘标签用 remove_tag；跨类型重命名标签用 rename_tag。逐项返回结果如实汇报（未找到的要说明）。
 7.【盘点】没有具体关键词的盘点类问题（「有没有/有多少/最近」）→ 先调 list_items 或 vault_overview，不要硬猜关键词去 search。
 8.【看详情】用户要看某条便签全文/某个文件是什么 → get_note / get_file（get_file 的 summary 只是正文前 200 字摘要）；提醒用户点应用卡片可看全文与文件详情。
-9.【改便签】update_note 前先确认定位对象；多条匹配时不改，让用户选。
+9.【改便签】update_note 前先确认定位对象；多条匹配时不改，让用户选。禁止向用户索要"便签 id"——id 由工具自己查（search_notes / get_note / list_items 的返回都带 id），应用展示的便签卡片上也标有 #id。
 10.【删除】delete_note / delete_file 只发起删除请求：应用会弹确认卡片，必须提醒用户去点「确认删除」，在用户确认前禁止说"已删除"；密码条目不提供 AI 删除。
 11. 服务器存储模式下随手记/文件仓不可用（工具会返回"仅本地模式支持"），如实转述即可。
 12. 回复用简体中文，简洁友好。数据只存在用户本机，不要输出与管理无关的推广或说教。
@@ -683,7 +683,7 @@
   async function chat(opts) {
     const {
       messages, channelFetch, url, headers, model, exec,
-      onEvent = () => {}, maxRounds = 8,
+      onEvent = () => {}, maxRounds = 8, onUsage = () => {},
     } = opts;
     for (let round = 0; round < maxRounds; round++) {
       const resp = await channelFetch(url, {
@@ -704,6 +704,7 @@
         throw new Error(`渠道返回 ${resp.status}：${errText.slice(0, 300)}`);
       }
       const data = await resp.json();
+      if (data.usage) onUsage(data.usage); // v4.12.4：token 用量（prompt/completion/total）
       const msg = data.choices && data.choices[0] && data.choices[0].message;
       if (!msg) throw new Error('渠道响应格式异常（缺少 choices[0].message）');
       messages.push(msg);
@@ -742,7 +743,7 @@
   async function chatStream(opts) {
     const {
       messages, channelFetch, url, headers, model, exec,
-      onEvent = () => {}, onDelta = () => {}, maxRounds = 8, signal,
+      onEvent = () => {}, onDelta = () => {}, maxRounds = 8, signal, onUsage = () => {},
     } = opts;
     const baseOpts = () => ({
       method: 'POST',
@@ -757,14 +758,17 @@
         tools: TOOLS,
         tool_choice: 'auto',
         stream: true,
+        // v4.12.4：请求 token 用量（末 chunk 的 usage 字段；不支持的渠道会忽略该选项）
+        stream_options: { include_usage: true },
       }),
     });
 
-    /** 增量 SSE 解析器：喂入原始块，产出 {text, toolCalls} 累积结果 */
+    /** 增量 SSE 解析器：喂入原始块，产出 {text, toolCalls, usage} 累积结果 */
     function makeParser() {
       let buf = '';
       let text = '';
       let toolCalls = null; // [{id,type,function:{name,arguments}}]
+      let usage = null; // v4.12.4：末 chunk 的 usage（include_usage）
       const idxMap = new Map();
       return {
         push(raw) {
@@ -779,6 +783,7 @@
             if (!payload || payload === '[DONE]') continue;
             let obj;
             try { obj = JSON.parse(payload); } catch { continue; }
+            if (obj.usage) usage = obj.usage; // 通常在 choices 为空的末 chunk
             const choice = obj.choices && obj.choices[0];
             if (!choice || !choice.delta) continue;
             const delta = choice.delta;
@@ -807,6 +812,7 @@
         },
         get text() { return text; },
         get toolCalls() { return toolCalls; },
+        get usage() { return usage; },
       };
     }
 
@@ -821,6 +827,7 @@
         const errText = await resp.text().catch(() => '');
         throw new Error(`渠道返回 ${resp.status}：${errText.slice(0, 300)}`);
       }
+      if (parser.usage) onUsage(parser.usage); // v4.12.4：本轮 token 用量（多轮工具循环时为最近一轮）
 
       if (parser.toolCalls && parser.toolCalls.length) {
         const toolCalls = parser.toolCalls.map((t) => ({

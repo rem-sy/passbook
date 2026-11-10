@@ -61,6 +61,37 @@ try {
   Write-Host "Release 已存在，复用 id=$($rel.id)"
 }
 
+# 1.5) v4.12.4 更新公告管线：从 docs/RELEASE-NOTES.md 取当前 tag 段落 →
+#      写入 Release 正文 + 补写产物 latest.json 的 notes（桌面更新弹窗展示）
+$notesPath = Join-Path $proj 'docs\RELEASE-NOTES.md'
+if (Test-Path $notesPath) {
+  $ver4notes = $Tag -replace '^v',''
+  $raw = [System.IO.File]::ReadAllText($notesPath, [System.Text.Encoding]::UTF8)
+  if ($raw -match ("(?ms)^##\s+" + [regex]::Escape($Tag) + "\s*\r?\n(.*?)(?=^##\s+|\z)")) {
+    $noteBody = $Matches[1].Trim()
+    if ($noteBody) {
+      try {
+        & $irm Patch "https://api.github.com/repos/$repo/releases/$($rel.id)" (@{ body = $noteBody } | ConvertTo-Json) | Out-Null
+        Write-Host "Release 正文已写入（$($noteBody.Length) 字符）"
+      } catch { Write-Warning "Release 正文写入失败：$($_.Exception.Message)" }
+      # 补写 latest.json（桌面 updater 的 notes 字段；手机走 Release body 上面已写）
+      $ljPath = Join-Path $prod 'latest.json'
+      if (Test-Path $ljPath) {
+        try {
+          $lj = [System.IO.File]::ReadAllText($ljPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+          $lj.notes = $noteBody
+          [System.IO.File]::WriteAllText($ljPath, ($lj | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
+          Write-Host 'latest.json 的 notes 已补写'
+        } catch { Write-Warning "latest.json notes 补写失败：$($_.Exception.Message)" }
+      }
+    }
+  } else {
+    Write-Warning "RELEASE-NOTES.md 中未找到 ## $Tag 段落（$notesPath）——Release 正文与 latest.json notes 将为空"
+  }
+} else {
+  Write-Warning "缺少 $notesPath——更新公告为空"
+}
+
 # 2) 传资产（重名先删：同 tag 重发场景幂等）。latest.json 为 build-desktop 生成的公开直链版
 #    （platforms.url 指向 github.com/releases/download/...，公开仓免认证可用；
 #     私有仓 assets API 兼容方案已随仓库转公开移除，历史实现见 v4.9.0 tag）

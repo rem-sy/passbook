@@ -3234,6 +3234,42 @@ async function getAutoStartState() {
   try { return !!(await tauriInvoke('get_autostart')); } catch { return false; }
 }
 
+/* ---------------- v4.12.4：更新后首启公告 ----------------
+ * 比较上次运行版本（localStorage）与当前版本，不同则弹"已更新到 vX"公告
+ * （内容来自内置 changelog.js，离线可用）。用户点「知道了」记录版本不再打扰。 */
+const CHANGELOG_LAST_LS = 'passbook-changelog-last';
+function maybeShowChangelog() {
+  try {
+    const log = (typeof window !== 'undefined' && window.PB_CHANGELOG) || {};
+    const cur = (typeof APP_VERSION !== 'undefined' && APP_VERSION) || '';
+    if (!cur || !log[cur]) { // 当前版本无条目（如未维护）也要记录，避免每次启动重复判断
+      try { if (cur) localStorage.setItem(CHANGELOG_LAST_LS, cur); } catch { /* 忽略 */ }
+      return;
+    }
+    const last = localStorage.getItem(CHANGELOG_LAST_LS) || '';
+    if (last === cur) return; // 同版本已看过
+    localStorage.setItem(CHANGELOG_LAST_LS, cur);
+    // 首次安装（last 为空）不弹——老用户升级路径才公告
+    if (!last) return;
+    const items = log[cur];
+    openModal(`
+      <div class="modal-head">
+        <h3>已更新到 v${escapeHtml(cur)}</h3>
+        <button class="modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+      </div>
+      <div class="modal-body">
+        <p class="hint" style="margin:0 0 10px">本次更新内容：</p>
+        <ul style="margin:0;padding-left:18px;font-size:13.5px;line-height:1.9">
+          ${items.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}
+        </ul>
+      </div>
+      <div class="modal-foot">
+        <button class="btn primary" data-close>知道了</button>
+      </div>
+    `);
+  } catch { /* 公告失败不影响启动 */ }
+}
+
 async function openSettingsModal() {
   const s = loadSettings();
   const modeField = IS_TAURI ? `
@@ -4217,15 +4253,21 @@ function getAgentHub() {
       return { items, contentSearch: allowContent };
     },
     async createNote({ content, title, tags }) {
-      const id = await LocalStore.noteCreate({
-        title: title || PassNotes.titleOf(content),
+      const wantTitle = title || PassNotes.titleOf(content);
+      const normTags = PassFiles.tagsJoin(tags || '');
+      const newId = await LocalStore.noteCreate({
+        title: wantTitle,
         content,
-        tags: PassFiles.tagsJoin(tags || ''),
+        tags: normTags,
         source: 'manual', // AI 记的便签按手动来源入账
       });
       refreshNotesList(); refreshSidebar();
-      const note = (LocalStore.notesList() || []).find((n) => n.id === id) || { id, title, content, tags };
-      return { id, title: note.title, note };
+      // v4.12.4 加固：以 notesList 反查完整行为准（last_insert_rowid 在个别环境返回 0/undefined，
+      // 且兜底对象缺 updated_at/source 曾致 AI 卡片 NaN；全行反查两者皆根治）
+      const rows = (LocalStore.notesList() || []).filter((n) => n.title === wantTitle && n.content === content);
+      const note = rows.find((n) => Number(n.id) === Number(newId)) || rows[0];
+      if (note) return { id: note.id, title: note.title, note };
+      return { id: newId, title: wantTitle, note: { id: newId, title: wantTitle, content, tags: normTags, source: 'manual', created_at: new Date().toISOString(), updated_at: new Date().toISOString() } };
     },
     async tagItems(tag, targets) {
       const results = [];
@@ -4505,7 +4547,7 @@ function agentDisplay(payload) {
           <div class="ad-owner">${escapeHtml(n.title || PassNotes.titleOf(n.content))}</div>
           <div class="ad-note">${escapeHtml(PassNotes.previewText(n.content, 120))}</div>
         </div>
-        <div class="ad-acc">${NOTE_SOURCE_LABEL[n.source] || '手动'} · 点击查看全文</div>
+        <div class="ad-acc">#${n.id} · ${NOTE_SOURCE_LABEL[n.source] || '手动'} · 点击查看全文</div>
       </div>`).join('');
     wrap.addEventListener('click', (e) => {
       const row = e.target.closest('.ad-row[data-k="note"]');
@@ -4616,6 +4658,7 @@ async function agentChat(userText, onDelta, signal) {
     model,
     signal,
     exec: getAgentExec(),
+    onUsage: (u) => { agentState.lastUsage = u; }, // v4.12.4：token 用量（↑输入 ↓输出）
     onEvent: (type, payload) => {
       if (type === 'tool') {
         const label = AgentCore.TOOL_LABELS[payload.name]?.(payload.args) || payload.name;
@@ -4650,6 +4693,18 @@ function agentStatus(text) {
   el.classList.toggle('hidden', !text);
 }
 
+/** v4.12.4：token 用量标记——渠道返回 usage 时显示 ↑输入 ↓输出 token；
+ * 无 usage（渠道不支持 include_usage）时按字符数估算（中文约 1 字 ≈ 1 token 保守折半），带 ≈ 前缀。 */
+function agentUsageLabel(userText, reply, usage) {
+  if (usage && (usage.prompt_tokens != null || usage.completion_tokens != null)) {
+    const p = usage.prompt_tokens ?? '?';
+    const c = usage.completion_tokens ?? '?';
+    return `↑${p} ↓${c} token`;
+  }
+  const est = Math.round(((userText || '').length + (reply || '').length) / 2);
+  return `≈↑↓${est} token`;
+}
+
 async function agentSend() {
   if (agentState.busy) return;
   const input = $('#agent-input');
@@ -4668,7 +4723,6 @@ async function agentSend() {
   const busyBubble = agentBubble('<span class="dotting">正在回复</span>', 'assistant');
   let streamed = false;
   let streamedFull = '';
-  let chunkCount = 0;
   let renderTimer = null;
   const renderNow = () => {
     renderTimer = null;
@@ -4676,17 +4730,17 @@ async function agentSend() {
     if (!streamed) { busyBubble.innerHTML = ''; streamed = true; }
     if (t) busyBubble.innerHTML = mdToHtml(t);
   };
+  agentState.lastUsage = null;
   try {
     const reply = await agentChat(text, (fullText) => {
       // 流式渐进：仅存储文本，由 rAF 统一渲染（防止手机 WebView 高频 innerHTML 卡顿）
       streamedFull = fullText;
-      chunkCount++;
       if (!renderTimer) renderTimer = requestAnimationFrame(renderNow);
     }, ac.signal);
     // 最终回复（可能无流式增量时直接到这里）
     busyBubble.innerHTML = mdToHtml(reply || '');
-    // 诊断标记：最终块数（便于排查流式是否真的分块到达）
-    busyBubble.insertAdjacentHTML('beforeend', `<span class="stream-dbg" style="font-size:10px;color:#999;float:right">⚡共${chunkCount}块</span>`);
+    // v4.12.4：token 用量标记（渠道不给 usage 时按字符数估算，带 ≈ 前缀）
+    busyBubble.insertAdjacentHTML('beforeend', `<span class="stream-dbg" style="font-size:10px;color:#999;float:right">${agentUsageLabel(text, reply, agentState.lastUsage)}</span>`);
   } catch (e) {
     if (ac.signal.aborted) {
       // 保留已流出的部分 + 停止标记
@@ -4990,6 +5044,7 @@ function noteSrcBadge(src) {
 function noteTime(iso) {
   try {
     const d = new Date(iso);
+    if (!iso || isNaN(d.getTime())) return ''; // v4.12.4：undefined/非法时间此前输出 NaN-NaN-NaN NaN:NaN
     const p = (n) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
   } catch { return ''; }
@@ -5033,7 +5088,8 @@ function renderNoteCard(n) {
     </div>
     <div class="note-content">${escapeHtml(n.content)}</div>
     <div class="note-foot">
-      <span>${noteTime(n.updated_at)}</span>
+      <span>#${n.id}</span>
+      ${noteTime(n.updated_at) ? `<span>${noteTime(n.updated_at)}</span>` : ''}
       ${tags.map((t) => `<span class="note-tag-chip">${escapeHtml(t)}</span>`).join('')}
       <span class="note-ops">
         <button class="btn small" data-note-act="edit">编辑</button>
@@ -5054,8 +5110,9 @@ function openNoteDetail(note) {
     </div>
     <div class="modal-body">
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;font-size:12px;color:var(--muted,#889)">
+        <span>#${note.id}</span>
         ${noteSrcBadge(note.source)}
-        <span>${noteTime(note.updated_at)}</span>
+        ${noteTime(note.updated_at) ? `<span>${noteTime(note.updated_at)}</span>` : ''}
         ${tags.map((t) => `<span class="note-tag-chip">${escapeHtml(t)}</span>`).join('')}
       </div>
       <div style="white-space:pre-wrap;word-break:break-word;max-height:58vh;overflow-y:auto;font-size:14px;line-height:1.7">${escapeHtml(note.content)}</div>
@@ -6169,6 +6226,7 @@ async function injectShotDemo() {
     await injectShotDemo(); // 截图深链演示注入（非截图场景为 no-op）
     setupQuickNoteShortcut();
     setupQuickPanelBridge(); // v4.10.0：快捷面板（Alt+P）+ 托盘模式同步
+    maybeShowChangelog(); // v4.12.4：更新后首次启动弹"本次更新内容"公告
     // v4.9.0 启动静默检查更新（桌面每次启动；手机 24h 节流；失败静默不打扰）
     if (IS_TAURI) {
       const sUpd = loadSettings();
