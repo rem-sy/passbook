@@ -25,8 +25,13 @@
       background: var(--bg); color: var(--text);
       font-family: inherit; font-size: 13.5px; line-height: 1.45;
       box-shadow: 0 0 0 1px var(--line), var(--q-shadow);
-      display: flex; flex-direction: column;
       -webkit-user-select: none; user-select: none;
+    }
+    /* v4.12.3：主容器改 fixed inset:0——不依赖 html/body height:100% 高度链
+     * （WebView2 无边框小窗下 flex:1 基准高度解析不可靠 → .q-body 高度=内容高度 → 永不溢出 → 无滚动条） */
+    .q-app {
+      position: fixed; inset: 0;
+      display: flex; flex-direction: column;
     }
     svg { width: 15px; height: 15px; flex-shrink: 0; }
 
@@ -229,7 +234,7 @@
     <div class="q-gate-box" id="q-gate-box"></div>
   </div>
 
-  <div id="q-app" class="q-app hidden" style="display:flex;flex-direction:column;flex:1;min-height:0">
+  <div id="q-app" class="q-app hidden">
     <!-- 顶部拖动条：标题 + 最小化/收起（无边框窗口的拖动区） -->
     <div class="q-drag">
       <div class="q-title">
