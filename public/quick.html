@@ -126,20 +126,38 @@
     .q-actions .btn { flex: 1; }
     .q-save-form { display: flex; flex-direction: column; gap: 8px; border-top: 1px dashed var(--line); padding-top: 10px; }
 
-    /* ---------- AI 对话 ---------- */
-    #tab-ai { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+    /* ---------- AI 对话（v4.12.2：全面板滚动——#ai-log 不再独立滚动，随 .q-body 整体滚） ---------- */
+    #tab-ai { display: flex; flex-direction: column; gap: 8px; }
     .q-clear {
       border: 1px solid var(--line); background: transparent; color: var(--muted);
       border-radius: 999px; padding: 4px 12px; font-size: 11px; cursor: pointer;
       transition: color .15s, border-color .15s;
     }
     .q-clear:hover { color: var(--danger); border-color: var(--danger); }
-    #ai-log { flex: 1; min-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px; }
-    .ai-msg { max-width: 92%; font-size: 12.5px; line-height: 1.65; padding: 8px 11px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; -webkit-user-select: text; user-select: text; }
-    .ai-msg.user { align-self: flex-end; background: var(--q-accent); color: #fff; border-bottom-right-radius: 4px; }
+    #ai-log { display: flex; flex-direction: column; gap: 8px; padding: 2px; }
+    /* AI 消息 Markdown 轻渲染（表格/代码/加粗/列表/链接） */
+    .ai-msg { max-width: 92%; font-size: 12.5px; line-height: 1.65; padding: 8px 11px; border-radius: 12px; word-break: break-word; -webkit-user-select: text; user-select: text; }
+    .ai-msg.user { align-self: flex-end; background: var(--q-accent); color: #fff; border-bottom-right-radius: 4px; white-space: pre-wrap; }
     html.dark .ai-msg.user { color: #10141c; }
     .ai-msg.assistant { align-self: flex-start; background: var(--card); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
     .ai-msg.assistant.error { border-color: var(--danger); color: var(--danger); }
+    .ai-msg table { border-collapse: collapse; margin: 6px 0; font-size: 12px; width: 100%; }
+    .ai-msg th, .ai-msg td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; }
+    .ai-msg th { background: var(--bg); font-weight: 650; }
+    .ai-msg pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; overflow-x: auto; font-size: 11.5px; margin: 6px 0; white-space: pre; }
+    .ai-msg code { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; }
+    .ai-msg pre code { background: none; padding: 0; }
+    .ai-msg ul, .ai-msg ol { margin: 4px 0 4px 18px; }
+    .ai-msg li { margin: 2px 0; }
+    .ai-msg strong { font-weight: 650; }
+    .ai-msg a { color: var(--q-accent); }
+    /* 全面板唯一滚动条（.q-body），深色联动 */
+    .q-body { overscroll-behavior: contain; }
+    .q-body::-webkit-scrollbar { width: 8px; }
+    .q-body::-webkit-scrollbar-thumb { background: var(--line); border-radius: 999px; }
+    .q-body::-webkit-scrollbar-thumb:hover { background: var(--line-strong); }
+    html.dark .q-body::-webkit-scrollbar-thumb { background: #333a49; }
+    html.dark .q-body::-webkit-scrollbar-thumb:hover { background: #414a5d; }
     .ai-msg .ai-caret { display: inline-block; width: 7px; height: 13px; background: var(--q-accent); border-radius: 2px; margin-left: 3px; vertical-align: -2px; animation: q-blink 0.9s steps(2) infinite; }
     @keyframes q-blink { 50% { opacity: 0; } }
     .ai-tool {
@@ -149,9 +167,15 @@
       max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     .ai-tool svg { width: 11px; height: 11px; }
-    .ai-open .q-actions { margin-top: 10px; }
-    .ai-input-row { display: flex; gap: 8px; align-items: flex-end; padding-top: 10px; }
-    .ai-input-row textarea { height: 40px; min-height: 40px; max-height: 96px; flex: 1; }
+    /* AI 输入行 sticky 钉在面板底部（随 .q-body 整体滚动的容器里保持可见） */
+    .ai-input-row {
+      position: sticky; bottom: 0; z-index: 10;
+      display: flex; gap: 8px; align-items: flex-end;
+      padding: 8px 0 2px;
+      background: var(--bg);
+    }
+    .ai-input-row textarea { height: 40px; min-height: 40px; max-height: 96px; flex: 1; overflow-y: auto; scrollbar-width: none; }
+    .ai-input-row textarea::-webkit-scrollbar { display: none; } /* 输入框滚动条隐藏（滚轮仍可滚），面板级滚动条才可见 */
 
     /* ---------- PIN 门 / 加载 ---------- */
     .q-gate { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; background: var(--bg); }

@@ -1,9 +1,8 @@
-/* 密码本 · 快捷面板（v4.12.0）
- * 运行在独立 "quick" 小窗（无边框置顶，Alt+P 呼出，鼠标附近定位，可拖动 / 右下角缩放，尺寸记忆）。
- * 数据主权在主窗：所有库操作经 quick-request/quick-response 窗口事件由主窗代执行，
- * 本窗不直接开 SQLite（避免双写冲突）。PIN 门与主窗共享解锁状态（同 profile localStorage）。
- * AI 对话复用 AgentCore（agent-core.js）：channelFetch 走 Rust agent_http_stream 事件流，
- * 工具执行转发主窗 executor（onDisplay 的真实结果随响应带回本窗渲染卡片，不回传 AI 渠道）。
+/* 密码本 · 快捷面板（v4.12.2）
+ * 运行在独立 "quick" 小窗（无边框置顶，Alt+P 呼出，可拖动 / 右下角缩放，尺寸记忆）。
+ * 数据主权在主窗：所有库操作经 quick-request/quick-response 窗口事件由主窗代执行。
+ * AI 流式通道同样经主窗转发（agent:http-stream → 主窗 agentFetchStream → quick-ai-stream 事件回推）。
+ * v4.12.2 关键修复：aiSend 漏 push 用户消息（模型只看到 system+tools 没有问题本身 → 答非所问）。
  */
 (function () {
   'use strict';
@@ -11,11 +10,11 @@
   const IS_TAURI = !!(window.__TAURI__ || window.__TAURI_INTERNALS__);
   const $ = (id) => document.getElementById(id);
 
-  /* ---------- 与主窗的请求桥（id 配对，5s 超时——AI 工具调用可能稍慢） ---------- */
+  /* ---------- 与主窗的请求桥（id 配对） ---------- */
   const pending = new Map();
   let seq = 0;
-  async function callMain(action, payload, timeoutMs) {
-    if (!IS_TAURI) throw new Error('快捷面板需在桌面应用内使用');
+  function callMain(action, payload, timeoutMs) {
+    if (!IS_TAURI) return Promise.reject(new Error('快捷面板需在桌面应用内使用'));
     const id = 'q' + (++seq);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -84,16 +83,19 @@
     el.classList.toggle('err', !!isErr);
   }
 
-  const SVG_LOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
   const SVG_STAR = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17.25 6.16 20.4l1.26-6.5-4.72-4.6 6.53-.95L12 2.75l2.77 5.6 6.53.95-4.72 4.6 1.26 6.5Z"/></svg>';
   const SVG_COPY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
-  const SVG_MIN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></svg>';
 
   /* ---------- PIN 门 / 视图状态 ---------- */
-  let gateState = null; // 最近一次 gate 结果（含 settings 快照）
+  let gateState = null;
+
+  function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
 
   function renderGateBox(view) {
     const box = $('q-gate-box');
+    const SVG_LOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>';
     if (view === 'loading') {
       box.innerHTML = '<div class="q-spinner"></div>' +
         '<h3 class="q-gate-title">主界面初始化中</h3>' +
@@ -196,10 +198,6 @@
     }
   }
 
-  function esc(s) {
-    return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  }
-
   function renderResults() {
     const wrap = $('q-results');
     if (!lastResults.length) {
@@ -220,7 +218,6 @@
     }).join('');
   }
 
-  // 按钮事件（委托）
   $('q-results').addEventListener('click', async (e) => {
     const btn = e.target.closest('button');
     if (!btn) return;
@@ -238,7 +235,7 @@
     } catch (err) { msg(err.message, true); }
   });
 
-  // TOTP 码实时刷新（每秒刷可见行）
+  // TOTP 码实时刷新
   setInterval(async () => {
     for (const el of document.querySelectorAll('[data-totp]')) {
       const it = lastResults.find((x) => String(x.id) === String(el.dataset.totp));
@@ -250,7 +247,7 @@
     }
   }, 1000);
 
-  /* ---------- 生成器（偏好与主窗共享 settings.gen） ---------- */
+  /* ---------- 生成器 ---------- */
   function genOpts() {
     return {
       length: Number($('q-gen-len').value) || 16,
@@ -271,7 +268,6 @@
   }
 
   function saveGenPrefs() {
-    // 只更新面板可调的四项 + 长度，保留主窗存的其余偏好键（symbols/ensure/…）
     try {
       const s = loadSettings();
       s.gen = { ...(s.gen || {}), length: Number($('q-gen-len').value) || 16,
@@ -307,7 +303,7 @@
     } catch (e) { msg(e.message, true); }
   });
 
-  /* ---------- 快速导入（粘贴文本，合并模式） ---------- */
+  /* ---------- 快速导入 ---------- */
   let importTimer = null;
   let importRows = [];
   $('q-import-text').addEventListener('input', () => {
@@ -329,14 +325,10 @@
     } catch (e) { msg(e.message, true, 'q-import-preview'); }
   });
 
-  /* ================= AI 对话（v4.12.0 / v4.12.1 通道重构） ================= */
+  /* ================= AI 对话 ================= */
   const aiState = { messages: [], busy: false, abort: null };
 
-  /** v4.12.1：AI 流式通道改经主窗转发（与主窗 AI 完全同源）。
-   * 此前面板窗口直接 invoke agent_http_stream：大请求体（system+tools ~20KB）跨窗口 IPC
-   * 与主窗路径存在实现差异，且 agent-stream-* 事件全局广播、两窗互相收对方 chunk。
-   * 现面板只发 agent:http-stream 请求 → 主窗用自己的 agentFetchStream 发起，
-   * chunk 由主窗按流 id 定向 emitTo('quick','quick-ai-stream') 回面板。 */
+  /** 流式网络出口：转发主窗（与主窗 AI 完全同源），chunk 按 sid 定向回推 */
   async function aiChannelFetch(url, opts, onChunk) {
     if (!IS_TAURI) throw new Error('AI 对话需在桌面应用内使用');
     const signal = opts.signal || null;
@@ -358,7 +350,6 @@
     const onAbort = () => {
       err = new Error('已停止');
       resolveDone();
-      if (IS_TAURI) window.__TAURI__.event.emit('quick-ai-abort', { sid }).catch?.(() => {});
       try { window.__TAURI__.event.emit('quick-ai-abort', { sid }); } catch { /* 尽力而为 */ }
     };
     if (signal) signal.addEventListener('abort', onAbort);
@@ -376,18 +367,15 @@
       json: async () => JSON.parse(full),
     };
   }
-  function tauriInvokeQ(cmd, args) {
-    return window.__TAURI__.core.invoke(cmd, args);
-  }
 
-  /** 工具执行：转发主窗 executor；onDisplay 的真实结果随响应带回（不回传 AI 渠道） */
+  /** 工具执行：转发主窗 executor；真实结果随响应带回渲染卡片（不回传 AI 渠道） */
   async function aiExec(name, args) {
     const r = await callMain('agent:exec', { name, args }, 15000);
     for (const d of (r && r.displays) || []) renderAiCard(d);
     return (r && r.result) || { error: '无结果' };
   }
 
-  function aiScroll() { const log = $('ai-log'); log.scrollTop = log.scrollHeight; }
+  function aiScroll() { const b = document.querySelector('.q-body'); if (b) b.scrollTop = b.scrollHeight; }
 
   function aiBubble(text, cls) {
     const div = document.createElement('div');
@@ -398,6 +386,60 @@
     return div;
   }
 
+  /** Markdown 轻渲染（先转义再转语法，零依赖，不渲染原始 HTML；占位符用 \x01 序号 \x01 防数字误匹配） */
+  function aiMd(text) {
+    let s = esc(String(text == null ? '' : text));
+    const blocks = [];
+    const PH = (i) => '\x01' + i + '\x01';
+    s = s.replace(/```([\s\S]*?)```/g, (m, code) => {
+      blocks.push('<pre><code>' + code.replace(/\n$/, '') + '</code></pre>');
+      return PH(blocks.length - 1);
+    });
+    s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+    // 表格 + 列表逐行
+    const lines = s.split('\n');
+    let out = '';
+    let listTag = ''; // '' | ul | ol
+    let inTable = false;
+    const closeList = () => { if (listTag) { out += '</' + listTag + '>'; listTag = ''; } };
+    const closeTable = () => { if (inTable) { out += '</tbody></table>'; inTable = false; } };
+    for (let i = 0; i < lines.length; i++) {
+      const t = lines[i].trim();
+      if (/^\|.*\|$/.test(t)) { // 表格行
+        closeList();
+        const cells = t.replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+        if (cells.every((c) => /^:?-{2,}:?$/.test(c))) continue; // 分隔行跳过
+        if (!inTable) {
+          out += '<table><tbody>';
+          inTable = true;
+          // 首个数据行作为表头
+          out += '<tr>' + cells.map((c) => '<th>' + c + '</th>').join('') + '</tr>';
+          continue;
+        }
+        out += '<tr>' + cells.map((c) => '<td>' + c + '</td>').join('') + '</tr>';
+        continue;
+      }
+      closeTable();
+      const lm = t.match(/^(?:[-*]|\d+[.、])\s+(.*)$/); // 列表行
+      if (lm) {
+        const want = /^\d/.test(t) ? 'ol' : 'ul';
+        if (listTag !== want) { closeList(); out += '<' + want + '>'; listTag = want; }
+        out += '<li>' + lm[1] + '</li>';
+        continue;
+      }
+      closeList();
+      out += t + '\n';
+    }
+    closeList();
+    closeTable();
+    // 恢复代码块占位符 + 换行
+    out = out.replace(/\x01(\d+)\x01/g, (m, i) => blocks[Number(i)] || '');
+    return out;
+  }
+
   function aiToolLine(name, args) {
     const div = document.createElement('div');
     div.className = 'ai-tool';
@@ -405,10 +447,9 @@
       '<span>' + esc(PassQuick.aiToolLabel(name, args)) + '</span>';
     $('ai-log').appendChild(div);
     aiScroll();
-    return div;
   }
 
-  /** AI 查询结果的真实数据卡片（与主窗 agentDisplay 同样的隐私分级：默认打码，用户主动显示/复制） */
+  /** AI 查询结果的真实数据卡片（默认打码，用户主动复制） */
   function renderAiCard(payload) {
     if (!payload || !Array.isArray(payload.items) || !payload.items.length) return;
     const wrap = document.createElement('div');
@@ -433,7 +474,7 @@
       '<div class="q-it-owner">' + esc(x.owner || '') + '</div>' +
       '<div class="q-it-account">' + esc(x.account || '') + '</div></div>' +
       '<div class="q-btns">' +
-      (x.totp_secret ? '<button class="q-totp" data-ai-totp="' + esc(x.totp_secret) + '"><span>' + '······' + '</span></button>' : '') +
+      (x.totp_secret ? '<button class="q-totp" data-ai-totp="' + esc(x.totp_secret) + '"><span>······</span></button>' : '') +
       '<button class="q-copy-pw" data-ai-pw="' + esc(String(x.password || '')) + '">' + SVG_COPY + ' 密码</button>' +
       '</div></div>').join('');
     wrap.addEventListener('click', async (e) => {
@@ -445,13 +486,11 @@
           const { code } = await PassTotp.generateTotp(btn.dataset.aiTotp);
           await copyText(code);
         }
-      } catch (err) { toast2(err.message, true); }
+      } catch (err) { msg(err.message, true); }
     });
     $('ai-log').appendChild(wrap);
     aiScroll();
   }
-
-  function toast2(text, isErr) { msg(text, isErr, 'ai-empty'); }
 
   /** 发送一轮对话（流式 + 工具循环） */
   async function aiSend() {
@@ -464,6 +503,8 @@
       return;
     }
     input.value = '';
+    // v4.12.2 根因修复：此前漏 push 用户消息——模型只收到 system+tools、没看到问题本身，导致答非所问
+    aiState.messages.push({ role: 'user', content: text });
     aiBubble(text, 'user');
     aiState.busy = true;
     $('ai-send').classList.add('hidden');
@@ -483,19 +524,18 @@
         onEvent: (type, p) => { if (type === 'tool') aiToolLine(p.name, p.args); },
         onDelta: (t) => {
           shown = t;
-          bubble.textContent = t;
-          bubble.insertAdjacentHTML('beforeend', '<span class="ai-caret"></span>');
+          bubble.innerHTML = aiMd(t) + '<span class="ai-caret"></span>';
           aiScroll();
         },
         signal: controller.signal,
       });
       bubble.querySelector('.ai-caret')?.remove();
       if (!shown) bubble.textContent = '（无回复内容）';
+      else bubble.innerHTML = aiMd(shown);
     } catch (e) {
       bubble.querySelector('.ai-caret')?.remove();
-      const m = String((e && e.message) || e);
       bubble.classList.add('error');
-      bubble.textContent = PassQuick.fmtAgentError(m);
+      bubble.textContent = PassQuick.fmtAgentError(String((e && e.message) || e));
     } finally {
       aiState.busy = false;
       aiState.abort = null;
@@ -506,14 +546,15 @@
   }
 
   $('ai-send').addEventListener('click', aiSend);
+  $('ai-stop').addEventListener('click', () => {
+    if (aiState.abort) aiState.abort.abort(); // abort → 主窗 quickStreams 中止底层流
+  });
   $('ai-clear').addEventListener('click', () => {
-    if (aiState.busy) { if (aiState.abort) aiState.abort.abort(); }
+    if (aiState.busy && aiState.abort) aiState.abort.abort();
     aiState.messages.length = 0;
     $('ai-log').innerHTML = '';
     $('ai-input').value = '';
-  });
-  $('ai-stop').addEventListener('click', () => {
-    if (aiState.abort) aiState.abort.abort(); // abort → onAbort → 主窗 quick_ai_stream_abort（中止主窗侧底层流）
+    aiScroll();
   });
   $('ai-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -527,16 +568,12 @@
   $('q-min').addEventListener('click', hidePanel);
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && IS_TAURI) {
-      window.__TAURI__.core.invoke('quick_panel_hide').catch(() => {});
-    }
+    if (e.key === 'Escape' && IS_TAURI) hidePanel();
   });
-  // v4.11.1：不监听 blur——点击其他窗口面板保持打开；收起 = Esc / 再按 Alt+P / 顶部最小化
 
-  // 每次重新显示（Alt+P 唤出）都重查锁定态：托盘期间主窗可能已自动上锁
   window.addEventListener('focus', () => refreshGate());
 
-  /* ---------- v4.12.0：右下角自定义缩放（无边框窗口） + 尺寸记忆 ---------- */
+  /* ---------- 右下角自定义缩放 + 尺寸记忆 ---------- */
   (function bindResize() {
     const grip = $('q-rsz');
     if (!grip) return;
@@ -554,14 +591,14 @@
       if (!active) return;
       const w = startW + (e.clientX - startX);
       const h = startH + (e.clientY - startY);
-      tauriInvokeQ('quick_panel_apply_size', { w, h }).catch(() => { /* 尽力而为 */ });
+      window.__TAURI__.core.invoke('quick_panel_apply_size', { w, h }).catch(() => {});
     });
     const finish = async () => {
       if (!active) return;
       active = false;
       try {
         const r = document.body.getBoundingClientRect();
-        await tauriInvokeQ('quick_panel_save_size', { w: r.width, h: r.height });
+        await window.__TAURI__.core.invoke('quick_panel_save_size', { w: r.width, h: r.height });
       } catch { /* 尽力而为 */ }
     };
     grip.addEventListener('pointerup', finish);

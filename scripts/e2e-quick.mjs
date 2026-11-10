@@ -136,7 +136,9 @@ const srv = http.createServer((req, res) => {
   try {
     const file = join(PROJ, 'public', p.replace(/^\//, ''));
     const data = readFileSync(file);
-    res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
+    // CSS 必须 text/css（octet-stream 会被 Chromium 拒绝应用 → .hidden 失效 → e2e 视觉断言全失真）
+    const mime = p.endsWith('.css') ? 'text/css' : p.endsWith('.js') ? 'text/javascript' : p.endsWith('.html') ? 'text/html' : 'application/octet-stream';
+    res.writeHead(200, { 'Content-Type': mime + '; charset=utf-8' });
     res.end(data);
   } catch { res.writeHead(404); res.end('nf'); }
 }).listen(PORT);
