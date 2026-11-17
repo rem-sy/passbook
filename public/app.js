@@ -139,7 +139,7 @@ function uiConfirm(message, opts = {}) {
       if (e.key === 'Escape') { e.stopPropagation(); done(false); }
       else if (e.key === 'Enter') { e.stopPropagation(); done(true); }
     };
-    mask.addEventListener('click', (e) => { if (e.target === mask) done(false); });
+    mask.addEventListener('click', (e) => { e.stopPropagation(); }); // v4.12.5：不再点背景当作取消（防误触），必须点按钮
     mask.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => done(b.dataset.r === '1')));
     document.addEventListener('keydown', onKey, true);
     document.body.appendChild(mask);
@@ -153,9 +153,7 @@ function openModal(html, wide = false) {
   history.pushState({ pb: 1 }, ''); // 压一层，系统返回键/浏览器后退优先关弹窗
   const root = $('#modal-root');
   root.innerHTML = `<div class="modal-mask"><div class="modal${wide ? ' wide' : ''}">${html}</div></div>`;
-  root.querySelector('.modal-mask').addEventListener('click', (e) => {
-    if (e.target === e.currentTarget) closeModal();
-  });
+  // v4.12.5：不再点背景关闭——录入/导入等表单弹窗极易误触丢内容，只允许 X / 关闭按钮关
   root.querySelector('.modal-close')?.addEventListener('click', closeModal);
   root.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closeModal)); // v3.3.3：统一关闭约定（TOTP 说明「我知道了」此前无监听）
 }
@@ -2502,12 +2500,12 @@ function openImportModal() {
         <button class="btn" data-tab="zip">文件仓 zip</button>
       </div>
       <div id="tab-paste">
-        <label class="field"><span>每行一条：所属,账户,密码[,网址][,备注]（也支持 所属/账户/密码 或 所属 账户 密码）</span>
-          <textarea id="import-paste" placeholder="微信,13800000000,P@ssw0rd1&#10;GitHub,user@example.com,Abc12345&#10;网银/张三/XyZ!6789"></textarea>
+        <label class="field"><span>每行一条：所属,账户,密码[,网址][,备注]（也支持 所属/账户/密码 或 所属 账户 密码）；v4.12.5 起支持直接粘贴 PASSBOOK 迁移密文（每行一条）与「分享卡片」文本——来自条目分享的「复制文本」</span>
+          <textarea id="import-paste" placeholder="微信,13800000000,P@ssw0rd1&#10;GitHub,user@example.com,Abc12345&#10;网银/张三/XyZ!6789&#10;PASSBOOK:eyJvd25lciI6…" style="min-height:110px"></textarea>
         </label>
       </div>
       <div id="tab-scan" class="hidden">
-        <p class="hint">连续扫描多张二维码：迁移码 / 分享卡片将逐条直接入库（其他类型提示跳过），完成后显示汇总。</p>
+        <p class="hint">扫描迁移码/分享卡片后自动填入手动录入框——可修改字段，点「保存」才真正入库（不会自动保存，不会重复入库）。不识别的类型自动跳过并继续扫。</p>
         <button class="btn primary" id="scan-import-start" type="button">开始扫码</button>
         <div id="scan-import-count" class="hint" style="margin-top:8px"></div>
       </div>
@@ -2768,23 +2766,9 @@ function openImportModal() {
   });
 }
 
+/* v4.12.5：粘贴导入解析抽到 import-text.js（PASSBOOK 迁移密文 / 分享卡片 / CSV 行，Node 可测） */
 function parseImportText(text) {
-  const rows = [];
-  for (const rawLine of String(text || '').split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
-    // 跳过可能的表头
-    if (/^(所属|账户|账号|用户名|owner|account)[,，/\t ]/.test(line)) continue;
-    let parts = line.split(',').map((s) => s.trim());
-    if (parts.length < 3) parts = line.split('，').map((s) => s.trim());
-    if (parts.length < 3) parts = line.split('/').map((s) => s.trim());
-    if (parts.length < 3) parts = line.split(/\t+/).map((s) => s.trim());
-    if (parts.length < 3) parts = line.split(/\s+/).map((s) => s.trim());
-    if (parts.length < 3) continue;
-    const [owner, account, password, url = '', note = ''] = parts;
-    rows.push({ owner, account, password, url, category: '', note });
-  }
-  return rows;
+  return window.PassImportText.parseImportText(text, window.PassQR);
 }
 
 /* ---------------- 浏览器一键导入（v4.1.0） ---------------- */
@@ -6445,14 +6429,14 @@ function openTotpGuideModal(ownerVal) {
  * data-close 按钮；各处 ⃝? 按钮统一 class hint-btn + data-hint=key。
  * v3.3.4：不再走 openModal（那会替换 #modal-root，从设置弹窗点说明会把
  * 设置弹窗销毁）——自建 overlay 层 append 到 body，z-index 650 高于弹窗；
- * 关闭只移除自身（点遮罩空白/我知道了都关），不压 history 返回栈。
+ * 关闭只移除自身（我知道了 / X 关闭；v4.12.5 起不再点遮罩空白关），不压 history 返回栈。
  * TOTP 指南同样走此层。 */
 function openOverlayModal(html, wide = false, onClose) { // v4.0.0：onClose 关闭回调（扫码层释放相机）
   const mask = document.createElement('div');
   mask.className = 'modal-mask hint-mask';
   mask.innerHTML = `<div class="modal${wide ? ' wide' : ''}">${html}</div>`;
   const close = () => { mask.remove(); if (onClose) try { onClose(); } catch (e) { } };
-  mask.addEventListener('click', (e) => { if (e.target === e.currentTarget) close(); });
+  // v4.12.5：不再点背景关闭（防误触），只允许 X / data-close 按钮关
   mask.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', close));
   mask.querySelector('.modal-close')?.addEventListener('click', close);
   document.body.appendChild(mask);
@@ -6611,16 +6595,19 @@ function levelName(l) {
 // ② 条目 → 二维码（分享 / 迁移）
 async function openEntryQrModal(item) {
   let mode = 'share';
+  const payloadText = () => mode === 'share' ? PassQR.buildShareCard(item) : PassQR.packMigrate(item);
   const render = () => {
-    const text = mode === 'share' ? PassQR.buildShareCard(item) : PassQR.packMigrate(item);
+    const text = payloadText();
     const q = PassQR.encodeQR(text, 300);
     const el = $('#qr-preview');
     if (el) { el.src = q.dataUrl; el.dataset.payload = text; }
     const cap = $('#qr-mode-cap');
     if (cap) cap.textContent = mode === 'share' ? '分享模式：人类可读卡片（含明文密码）' : '迁移模式：PASSBOOK 载荷（全字段，机器可读）';
+    const ta = $('#qr-text');
+    if (ta) ta.value = text;
   };
   openOverlayModal(`
-    <div class="modal-head"><h3>条目二维码</h3>
+    <div class="modal-head"><h3>条目分享</h3>
       <button class="modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" x2="19" y1="5" y2="19"/><line x1="19" x2="5" y1="5" y2="19"/></svg></button>
     </div>
     <div class="modal-body" style="text-align:center">
@@ -6630,11 +6617,14 @@ async function openEntryQrModal(item) {
       </div>
       <img id="qr-preview" alt="二维码预览" style="width:280px;height:280px;image-rendering:pixelated;border:1px solid var(--line);border-radius:8px" />
       <p class="hint" id="qr-mode-cap" style="margin:8px 0"></p>
-      <p class="hint danger-text" style="margin:8px 0">⚠ 明文二维码 = 密码裸奔，请当面扫码、阅后即焚</p>
       <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
         <button class="btn" id="qr-save" type="button">保存图片</button>
         <button class="btn" id="qr-copy" type="button">复制图片</button>
+        <button class="btn primary" id="qr-copy-text" type="button">复制文本</button>
       </div>
+      <p class="hint" style="margin:12px 0 4px">无法传图片时：复制下方文本发给对方，对方在「导入 → 粘贴文本」中粘贴即可（两种模式都支持）</p>
+      <textarea id="qr-text" readonly style="width:100%;box-sizing:border-box;font-family:monospace;font-size:11px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);resize:none" rows="3" spellcheck="false"></textarea>
+      <p class="hint danger-text" style="margin:8px 0">⚠ 分享内容含明文密码，请当面传递、阅后即焚</p>
     </div>`, true);
   render();
   $('#qr-mode-share').addEventListener('click', () => { mode = 'share'; syncModeBtns(); render(); });
@@ -6673,6 +6663,15 @@ async function openEntryQrModal(item) {
       toast('复制图片失败' + (e && e.message ? '：' + e.message : '') + '，可用「保存图片」', true);
     }
   });
+  // v4.12.5：密文文本导出——无法传图片时复制载荷文本，对方「导入 → 粘贴文本」直接粘
+  $('#qr-copy-text').addEventListener('click', async () => {
+    try {
+      await copyText(payloadText());
+      toast('文本已复制（' + (mode === 'share' ? '分享卡片' : '迁移密文') + '）');
+    } catch (e) {
+      toast('复制失败，可长按下方文本框手动复制', true);
+    }
+  });
 }
 
 // ③ 扫码填写（手动录入弹窗，五级识别）
@@ -6701,31 +6700,24 @@ function scanFillStart() {
     }, { title: '扫码填写（迁移码/分享卡片/TOTP/网址/文本）' });
 }
 
-// ③' 扫码导入（连续，仅迁移码/分享卡片入库）
+// ③' 扫码导入（v4.12.5 重做：识别后不再直接入库——填入手动录入框，
+//     允许修改并确认保存，规避扫完即存导致的重复保存）
 async function scanImportStart() {
-  {
-    let n = 0;
-    const counter = $('#scan-import-count');
-    counter.textContent = '已导入 0 条';
-    openScanOverlay(async (text) => {
-      const r = PassQR.parseQrPayload(text);
-      if (r.level === 'migrate' || r.level === 'share') {
-        const e = r.entry;
-        await store.create({
-          owner: e.owner || '', account: e.account || '', password: e.password || '',
-          url: e.url || '', category: e.category || '', note: e.note || '',
-          totp_secret: e.totp_secret || '', fav: e.fav || 0,
-        });
-        n++;
-        counter.textContent = '已导入 ' + n + ' 条（最近：' + ((e.owner || '') + ' / ' + (e.account || '')).trim() + '）';
-        toast('已导入：' + (e.owner || e.account || '条目'));
-        await refreshList(); await refreshSidebar();
-      } else {
-        toast(levelName(r.level) + '，跳过（仅支持迁移码/分享卡片）');
-      }
-      return false; // continuous 由浮层自行重启
-    }, { title: '扫码导入（连续）', continuous: true });
-  }
+  const closeIt = openScanOverlay(async (text) => {
+    const r = PassQR.parseQrPayload(text);
+    if (r.level !== 'migrate' && r.level !== 'share') {
+      toast(levelName(r.level) + '，跳过（仅支持迁移码/分享卡片）');
+      return false; // 未入库——浮层自动重启相机继续扫
+    }
+    const e = r.entry;
+    closeIt();
+    openManualAddModal();
+    const put = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = String(v); };
+    put('mf-owner', e.owner); put('mf-account', e.account); put('mf-password', e.password);
+    put('mf-url', e.url); put('mf-category', e.category); put('mf-note', e.note); put('mf-totp', e.totp_secret);
+    toast('已按' + (r.level === 'migrate' ? '迁移码' : '分享卡片') + '填写，确认或修改后点「保存」');
+    return true; // 已转确认框，不重启相机
+  }, { title: '扫码导入（识别后确认保存）', continuous: true });
 }
 
 // v4.0.2：document 级事件委托（与 TOTP 扫码同款模式，不依赖 openModal 重包装时机）

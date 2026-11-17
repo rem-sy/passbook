@@ -1,5 +1,5 @@
 /* 密码本 · Service Worker：离线可用（PWA） */
-const CACHE_NAME = 'passbook-v93';
+const CACHE_NAME = 'passbook-v94';
 const ASSETS = [
   './',
   './index.html',
@@ -7,6 +7,7 @@ const ASSETS = [
   './app.js',
   './updater.js',
   './changelog.js',
+  './import-text.js',
   './generator.js',
   './passphrase.js',
   './watchtower.js',
