@@ -1394,10 +1394,21 @@ html[data-shell] .vault-locked #toast-root { visibility: hidden; }
 .settings-groups { min-width: 0; }
 .settings-body .set-group-title { margin: 0 0 8px; }
 @media (max-width: 650px) {
-  .settings-body { grid-template-columns: minmax(0, 1fr); }
+  .settings-body { grid-template-columns: minmax(0, 1fr); grid-auto-rows: max-content; }
   .settings-nav { position: static; display: flex; overflow: auto; padding: 3px 4px 8px; }
   .settings-section { flex: none; white-space: nowrap; }
 }
+.settings-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.settings-heading .icon-btn { width: 48px; height: 48px; }
+.settings-body.settings-compact { display: block; flex: 1; }
+.settings-compact .settings-nav { position: static; display: grid; padding: 4px; overflow: visible; }
+.settings-compact .settings-section { justify-content: space-between; gap: 12px; white-space: normal; }
+.settings-compact .settings-section::after {
+  content: ''; width: 8px; height: 8px; flex: none;
+  border-right: 2px solid var(--muted); border-top: 2px solid var(--muted);
+  transform: rotate(45deg);
+}
+.settings-compact .set-group-title { display: none; }
 
 html[data-shell] .agent-panel { height: var(--visual-height); top: var(--visual-top); }
 html[data-shell="touch"] .agent-panel { width: 100%; }

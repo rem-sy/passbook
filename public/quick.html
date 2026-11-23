@@ -73,12 +73,15 @@
 
     .q-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 
-    input[type="text"], input[type="number"], textarea {
+    input[type="search"], input[type="text"], input[type="number"], textarea {
       width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: var(--q-radius);
       padding: 10px 12px; font-size: 13.5px; font-family: inherit; outline: none;
       background: var(--card); color: var(--text); transition: border-color 0.15s;
     }
     input:focus, textarea:focus { border-color: var(--q-accent); }
+    #tab-search { flex: none; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+    #q-search { appearance: none; min-height: 42px; }
+    #q-search:focus-visible { outline: 2px solid var(--q-accent); outline-offset: 2px; }
     input[type="number"] { width: 76px; text-align: center; }
     input[type="checkbox"] { accent-color: var(--q-accent); }
     textarea { height: 118px; resize: none; font-size: 12.5px; line-height: 1.6; -webkit-user-select: text; user-select: text; }
@@ -277,7 +280,7 @@
     </div>
     <div class="q-body">
       <!-- 搜索 -->
-      <div id="tab-search" style="display:flex;flex-direction:column;gap:10px">
+      <div id="tab-search">
         <input id="q-search" type="search" aria-label="搜索密码" placeholder="搜索 所属 / 账户 / 网址 / 备注" autocomplete="off" />
         <div id="q-results"></div>
       </div>

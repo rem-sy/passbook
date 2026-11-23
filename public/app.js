@@ -265,13 +265,13 @@ async function requestModalClose() {
   if (mainDialog === layer) closeModal();
 }
 
-function openModal(html, wide = false, { page = false, draft = false, hasDraft, focus, inspector = false } = {}) {
+function openModal(html, wide = false, { page = false, draft = false, hasDraft, focus, inspector = false, onBack } = {}) {
   const root = $('#modal-root');
   const origin = mainDialog?.origin;
   if (mainDialog) uiLayers.splice(uiLayers.indexOf(mainDialog), 1);
   root.innerHTML = `<div class="modal-mask${page || inspector ? ' modal-page' : ''}"><div class="modal${wide ? ' wide' : ''}">${html}</div></div>`;
   const mask = root.firstElementChild;
-  mainDialog = showDialog(mask, { focus, dismiss: requestModalClose, inspector });
+  mainDialog = showDialog(mask, { focus, dismiss: () => onBack?.() || requestModalClose(), inspector });
   if (origin) mainDialog.origin = origin;
   if (draft) mainDialog.draft = draftValues(mask);
   mainDialog.hasDraft = hasDraft;
@@ -1071,7 +1071,7 @@ async function initStore() {
       // 老版本明文库升级：自动启用加密（自动密钥，用户无感）
       if (DbCrypto.hasWebCrypto() && !LocalStore.getStoredKey()) {
         await LocalStore.enableEncryption();
-        toast('已自动启用数据库加密，密钥已保存在本机（设置 → 数据库加密 → 备份密钥）');
+        toast('已自动启用数据库加密，密钥已保存在本机（设置 → 存储与数据 → 数据库加密 → 备份密钥）');
       }
     }
   }
@@ -3102,7 +3102,7 @@ function openExportModal() {
     <div class="modal-body">
       <div class="export-grid">
         <div class="export-item">
-          <div><div class="t">下载 .db 数据库文件${currentMode === 'local' && LocalStore._encrypted ? '<span style="color:var(--ok)">（已加密）</span>' : ''}</div><div class="d">用于多端同步：放到网盘/Syncthing 文件夹，另一端用「导入 → .db 文件」合并${currentMode === 'local' && LocalStore._encrypted ? '；该副本为密文，导入/恢复时需密钥文本（设置 → 数据库加密 → 备份密钥）' : ''}</div></div>
+          <div><div class="t">下载 .db 数据库文件${currentMode === 'local' && LocalStore._encrypted ? '<span style="color:var(--ok)">（已加密）</span>' : ''}</div><div class="d">用于多端同步：放到网盘/Syncthing 文件夹，另一端用「导入 → .db 文件」合并${currentMode === 'local' && LocalStore._encrypted ? '；该副本为密文，导入/恢复时需密钥文本（设置 → 存储与数据 → 数据库加密 → 备份密钥）' : ''}</div></div>
           <button class="btn primary" id="btn-export-db">下载</button>
         </div>
         <div class="export-item">
@@ -3659,10 +3659,15 @@ async function openSettingsModal(initialGroup) {
 
   openModal(`
     <div class="modal-head">
-      <h3>设置</h3>
+      <div class="settings-heading">
+        <button class="icon-btn hidden" id="btn-settings-back" type="button" aria-label="返回设置列表">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 5-7 7 7 7M5 12h14"/></svg>
+        </button>
+        <h3 tabindex="-1">设置</h3>
+      </div>
       <button class="modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
-    <div class="modal-body settings-body">
+    <div class="modal-body settings-body${TOUCH_SHELL ? ' settings-compact' : ''}">
       <nav class="settings-nav" aria-label="设置分组"></nav>
       <div class="settings-groups">
       <div class="set-group" data-setting="data">
@@ -3753,30 +3758,61 @@ async function openSettingsModal(initialGroup) {
       <button class="btn" id="btn-settings-cancel">取消</button>
       <button class="btn primary" id="btn-settings-save">保存</button>
     </div>
-  `, true, { page: true, draft: true, hasDraft: () => lockEnabled !== !!s.pinHash || bioEnabled !== (s.bioUnlock !== false && !!s.pinHash) });
+  `, true, {
+    page: true,
+    draft: true,
+    hasDraft: () => lockEnabled !== !!s.pinHash || bioEnabled !== (s.bioUnlock !== false && !!s.pinHash),
+    onBack: backToSettings,
+  });
 
   const settingsBody = $('#modal-root .settings-body');
-  const groups = [...settingsBody.querySelectorAll('[data-setting]')];
+  const title = settingsBody.closest('.modal').querySelector('.settings-heading h3');
+  const back = $('#btn-settings-back');
+  const panels = settingsBody.querySelector('.settings-groups');
   const nav = settingsBody.querySelector('.settings-nav');
-  const sections = groups.map((group) => {
+  let currentSection = null;
+  const sections = [...panels.querySelectorAll('[data-setting]')].map((group) => {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'btn settings-section';
     button.textContent = group.querySelector('.set-group-title span').textContent;
     nav.appendChild(button);
-    button.addEventListener('click', () => selectGroup(group.dataset.setting));
+    button.addEventListener('click', () => {
+      selectGroup(group.dataset.setting);
+      if (TOUCH_SHELL) title.focus();
+    });
     return { group, button };
   });
+
   function selectGroup(name) {
-    for (const { group, button } of sections) {
-      const active = group.dataset.setting === name;
-      group.classList.toggle('hidden', !active);
-      button.setAttribute('aria-pressed', String(active));
-      if (active) button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    currentSection = sections.find(({ group }) => group.dataset.setting === name) || null;
+    for (const section of sections) {
+      const active = section === currentSection;
+      section.group.classList.toggle('hidden', !active);
+      if (!TOUCH_SHELL) section.button.setAttribute('aria-pressed', String(active));
+    }
+    if (TOUCH_SHELL) {
+      nav.classList.toggle('hidden', !!currentSection);
+      panels.classList.toggle('hidden', !currentSection);
+      back.classList.toggle('hidden', !currentSection);
+      title.textContent = currentSection?.button.textContent || '设置';
+    } else {
+      currentSection?.button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }
     settingsBody.scrollTop = 0;
   }
-  selectGroup(groups.some((group) => group.dataset.setting === initialGroup) ? initialGroup : 'data');
+
+  function backToSettings() {
+    if (!TOUCH_SHELL || !currentSection) return false;
+    const { button } = currentSection;
+    selectGroup(null);
+    button.focus({ preventScroll: true });
+    return true;
+  }
+
+  back.addEventListener('click', backToSettings);
+  const initial = sections.some(({ group }) => group.dataset.setting === initialGroup) ? initialGroup : null;
+  selectGroup(initial || (TOUCH_SHELL ? null : 'data'));
 
   if (IS_TAURI) {
     getTauriDbPath().then((p) => { $('#set-dbpath').value = p; }).catch(() => {});
@@ -3912,7 +3948,11 @@ async function openSettingsModal(initialGroup) {
     if (lockEnabled) {
       // 启用状态下：有输入则设置/更换 PIN；留空则保持现状不变
       if (pin) {
-        if (pin.length < 4 || pin.length > 12) return toast('PIN 需为 4-12 位', true);
+        if (pin.length < 4 || pin.length > 12) {
+          selectGroup('security');
+          $('#set-pin').focus();
+          return toast('PIN 需为 4-12 位', true);
+        }
         ns.pinHash = await sha256(pin);
       }
     } else {
@@ -6584,7 +6624,7 @@ function guideSec(img, title, html) {
 
 function openGuideModal() {
   // 根据当前设备选图目录：触屏设备（手机/PWA）显示手机版截图
-  _guideDir = (navigator.maxTouchPoints > 0 && 'ontouchstart' in window) ? 'guide-mobile' : 'guide';
+  _guideDir = TOUCH_SHELL ? 'guide-mobile' : 'guide';
   openModal(`
     <div class="modal-head">
       <h3>使用说明</h3>
@@ -6592,8 +6632,8 @@ function openGuideModal() {
     </div>
     <div class="modal-body guide-body">
       ${guideSec('main.png', '① 界面总览：三标签页与强搜索', `
-        <p>顶栏下方是页面级<b>三标签</b>：<b>密码 | 随手记 | 文件仓</b>，点选切换，停留页自动记忆。三个页面各有<b>独立的搜索框</b>，互不干扰——密码页用顶栏搜索，随手记/文件仓用各自工具栏内的搜索框。</p>
-        <p>左侧<b>分类侧栏</b>三页通用（手机端点左上角 ☰ 呼出）：<b>分类是跨类型的</b>——同一分类下可同时有密码、便签和文件，选中「工作」后密码页、随手记页、文件仓页都只展示「工作」类，切换页面筛选保持；侧栏「管理分类」的重命名/合并/删除会同步三类记录。卡片左侧<b>星标</b> ☆ 收藏常用条目并自动置顶。顶部<b>搜索框</b>支持多词与操作符：关键词（命中 所属 / 账户 / 网址 / 备注 / 分类，打分排序+高亮）+ <code>分类：工作</code>、<code>有验证码</code>、<code>有收藏</code> 等过滤语法。</p>
+        <p>在手机底部导航或电脑导航中切换<b>密码、随手记和文件仓</b>。每页有独立的搜索框，应用会记住上次停留的页面。</p>
+        <p>点顶部的分类菜单可打开<b>分类侧栏</b>，宽屏电脑上侧栏常驻。三个页面共用分类，选中「工作」后切换页面仍会保留筛选。「管理分类」的重命名、合并和删除会同步处理三类记录。卡片左侧的<b>星标</b>可收藏常用条目。密码搜索支持多词和 <code>分类：工作</code>、<code>有验证码</code>、<code>有收藏</code> 等操作符。</p>
         <p>每条记录默认打码，点 <b>眼睛</b> 看明文、<b>复制</b> 进剪贴板；<b>TOTP 动态码</b>实时显示 6 位验证码与倒计时（点一下即复制）；带 <b>📎 徽标</b> 的记录挂着附件。卡片左侧默认<b>首字头像</b>，设置里可开启<b>站点图标</b>。</p>`)}
       ${guideSec('notes.png', '② 随手记：碎片信息一键收集', `
         <p><b>手机快捷方式</b>：长按应用图标 →「随手记」，秒开小卡片预览剪贴板（前 80 字），点「收入」入队，下次打开应用自动入库并提示补了几条。</p>
@@ -6608,20 +6648,20 @@ function openGuideModal() {
            · <b>桌面拖拽</b>：把文件拖进文件仓页的虚线框即导入。</p>
         <p><b>同内容自动去重</b>：按内容 sha256 共用一份加密存储，删除时最后一份引用才会物理清除。</p>
         <p><b>文档预览（全离线本地渲染）</b>：PDF / docx / xlsx / Markdown / txt / 图片直接应用内预览；旧版 doc/ppt/xls 与 pptx 不做内置渲染，提供「系统打开」（临时解密到缓存目录调用系统应用）。桌面与手机同一套渲染。</p>
-        <p>文件页搜索框多词模糊匹配<b>名称 / 备注 / 标签 / 来源 / 正文内容</b>（顶栏搜索依旧只管密码页）。<b>内容检索</b>：PDF / Word / Excel / PPT / Markdown / 文本文件的正文在导入时自动抽取建索引（本地完成、不上传），命中正文的结果带「内容命中」徽标与上下文片段；点工具栏「内容索引」可为存量/失败的文件补建。旧 doc/ppt/xls 二进制与图片没有文本层，只检索名称等元数据。</p>
-         <p><b>体检</b>（v4.7.0）：点工具栏「体检」核对记录与加密本体、内容索引的配对情况，报告四类问题——记录在但本体丢失（可从 zip 备份重导自愈或手动删行）、孤儿加密本体（一键清理并回收空间）、未建索引 / 索引可疑（一键并入内容索引管线重建）。</p>`)}
+        <p>文件页搜索框多词模糊匹配<b>名称 / 备注 / 标签 / 来源 / 正文内容</b>。PDF / Word / Excel / PPT / Markdown / 文本文件的正文在导入时自动抽取建索引（本地完成、不上传），命中正文的结果带「内容命中」徽标与上下文片段。点「更多 → 内容索引」可为存量或失败的文件补建。旧 doc/ppt/xls 二进制与图片没有文本层，只检索名称等元数据。</p>
+        <p>点<b>「更多 → 体检」</b>核对记录与加密本体、内容索引的配对情况。记录存在但本体丢失时，可从 zip 备份重导或删除记录。孤儿文件可一键清理，未建或可疑的索引可一键重建。</p>`)}
       ${guideSec('manual.png', '④ 存一条密码（手动录入）', `
-        <p>点工具栏 <b>「＋ 手动录入」</b>，填写<b>所属</b>（应用/网站）、<b>账户</b>、<b>密码</b>三项必填。</p>
-        <p>还可选填 <b>TOTP 密钥</b>（base32 或直接粘贴 otpauth:// 链接自动提取）、<b>分类</b>、<b>网址</b>、<b>备注</b>；编辑已有记录时能上传<b>附件</b>（每张 ≤2MB，随数据库加密存储）。</p>
+        <p>点<b>「新建条目」</b>，填写所属（应用或网站）、账户和密码。</p>
+        <p>展开<b>「更多字段」</b>可填写 TOTP 密钥（base32 或 otpauth:// 链接）、分类、网址和备注。编辑已有记录时能上传<b>附件</b>，每个最多 2 MB，随数据库加密存储。</p>
         <p>连续录入用<b>「保存并继续录入」</b>；改密码时旧密码自动归档进<b>历史</b>，随时可查看/复制。</p>`)}
       ${guideSec('gen.png', '⑤ 生成强密码（字符型）', `
-        <p>点 <b>「生成密码」</b> 展开生成器：选长度、字符类型，可勾选排除易混淆字符、键盘布局不连续、禁止连续相同/顺序字符等约束。</p>
+        <p>从<b>「更多 → 生成密码」</b>打开生成器，选择长度和字符类型。可勾选排除易混淆字符、键盘布局不连续、禁止连续相同字符或顺序字符等约束。</p>
         <p>实时显示<b>熵值与强度评级</b>；生成后一键<b>复制</b>或<b>保存到密码本</b>。手动录入表单里的魔棒按钮也能按当前设置快速生成。</p>`)}
       ${guideSec('phrase.png', '⑥ 生成密码短语（好记型）', `
         <p>切到 <b>「密码短语」</b> 标签：用<b>中文词表</b>（或 English words）随机组词，自选词数（推荐 6+）、分隔符，可附加两位数字。</p>
         <p>例如「灯塔-枫叶-晨曦-海豚-麦浪-松柏-47」，比随机字符串好记得多，6 词约 54 bits、8 词约 72 bits，配合数字更高。</p>`)}
       ${guideSec('agent.png', '⑦ AI 助理：聊天管理整个保险箱（密码 / 便签 / 文件）', `
-        <p>点右上角 <b>星形图标</b> 打开侧边对话面板，直接说人话：</p>
+        <p>点右上角的<b>星形图标</b>打开 AI 助理。手机端使用全屏对话，电脑端使用侧边面板。</p>
         <p>· 「帮我存一下：GitHub，账户 tom@example.com，密码 Abc!2345，备注工作主力号」<br/>
            · 「我 GitHub 的密码是什么？」「上周记的快递单号帮我找一下」<br/>
            · 「帮我记一条便签：周三交房租」「体检报告放哪了？它讲了什么？」<br/>
@@ -6630,20 +6670,20 @@ function openGuideModal() {
         <p><b>隐私保护</b>：查询结果里的密码已打码，便签只给 ≤80 字摘要、文件只给前 200 字摘要或命中片段，真实密码、便签全文与文件详情只在应用内卡片展示（可查看复制），不会发送给 AI 渠道；存、改密码与记便签时你提供的内容会发送给你配置的模型渠道。<b>删除保护</b>：AI 只能发起删除（便签/文件），应用内会弹确认卡片，你点「确认删除」才会真删（5 分钟内有效）。设置 → AI 助理可关「允许 AI 检索文件正文」（关闭后 AI 只能搜到文件名/备注/标签命中，get_file 也只给元数据）；随手记与文件仓能力仅本地模式支持。</p>
         <p>面板右上角可<b>清空对话</b>；生成过程中可点<b>停止</b>按钮随时中断。</p>`)}
       ${guideSec('sync.png', '⑧ 设置：加密 / 备份 / 锁定', `
-        <p>点右上角<b>齿轮</b>打开设置：</p>
+        <p>点右上角的<b>设置图标</b>，再选择一个分组。手机端点页面左上角的返回箭头可回到分组列表，然后继续编辑或保存。</p>
         <p>· <b>自动备份快照</b>：每小时自动把数据库整份快照存入 <code>backups/</code>，滚动保留最近 3~20 份；可随时<b>立即备份</b>，列表里每份可一键<b>恢复</b>或删除。</p>
-        <p>· <b>数据库加密</b>：AES-256 全库加密（含导出的 .db）；<b>文件仓本体同样始终加密</b>（密钥从数据库密钥派生，未启用整库加密时用本机固定密钥），开启/关闭加密或更换密钥时文件本体自动重加密。<b>请务必备份密钥</b>（设置 → 数据库加密 → 备份密钥）。</p>
+        <p>· 在<b>「存储与数据」</b>管理数据库加密和备份。启用 AES-256 整库加密后，原生应用导出的 .db 也保留加密。文件仓本体始终加密，换钥时自动重加密。加密的 .db 导入时需要密钥，可在「数据库加密」下点「备份密钥」。</p>
         <p>· <b>存储模式 / 数据库位置</b>：桌面版默认本地文件，可指向网盘文件夹多机共用。随手记与文件仓为本地模式功能。</p>
         <p>· <b>AI 助理</b>：填接口地址 / 模型名 / API Key（OpenAI 兼容渠道均可）；「允许 AI 检索文件正文」开关（默认开，仅发送命中片段摘要）；<b>随手记快捷键</b>（默认 Ctrl+Alt+N）。</p>
         <p>· <b>自动更新</b>：启动时自动检查 GitHub Release（手机端 24 小时至多一次）；电脑端下载验签后静默安装并自动重启，手机端下载 APK 拉起系统安装器。更新走公开的 GitHub Release；可配代理。</p>
-        <p>· <b>启动锁 PIN</b> 与 <b>自动锁定</b>：闲置可锁定（默认 5 分钟），复制密码后剪贴板自动清除；深色主题跟随系统或手动固定。电脑（Windows Hello）与手机（指纹/面容）可开启<b>生物识别解锁</b>。</p>`)}
+        <p>· 在<b>「安全与锁定」</b>管理 PIN、自动锁定和剪贴板清除，并可开启生物识别解锁（电脑使用 Windows Hello，手机使用指纹或面容）。在<b>「更新与外观」</b>选择主题。</p>`)}
       ${guideSec('', '⑨ 多端同步（手机 ↔ 电脑）', `
         <p>每台设备各存一份完整数据库（桌面是本地 <b>.db</b> 文件，手机是应用内存储），通过<b>导出 .db → 网盘/Syncthing → 另一端导入</b>合并；导入时选<b>「合并（跳过重复）」</b>即可汇总。导出的 .db 不含文件仓本体——文件仓单独用「导出 → 文件仓导出（zip：加密本体+清单）」。</p>
         <p>Android 版默认开启<b>防截屏</b>：截图、最近任务卡片都看不到密码内容。</p>`)}
       ${guideSec('import.png', '⑩ 批量导入 / 导出备份', `
-        <p>「导入」支持三种方式：<b>粘贴文本</b>（每行一条：<code>所属,账户,密码[,网址][,备注]</code>）、上传 <b>CSV / JSON / TXT</b>、以及直接导入别的设备的 <b>.db</b> 文件（加密的 .db 会提示输入密钥文本解锁后导入）。手机端也可从别的应用「分享 / 用其他应用打开」把数据送进来（随手记与文件仓）。</p>
-        <p>「导出」可导出 .db 数据库（用于同步，已启用加密时导出副本同样为密文）、JSON 备份（用于留存），以及<b>文件仓 zip</b>（加密本体 + 清单）。</p>
-        <p>导入加密 .db 时会提示输入密钥文本（设置 → 数据库加密 → 备份密钥）解锁后合并；「文件仓 zip」tab 导入另一端导出的文件仓包（同内容自动去重）；两端加密体系不同时会弹窗要求输入<b>导出端的数据库加密密钥</b>，验证通过后自动把全部文件重加密迁移到本机加密体系（v4.7.0），密钥不对则中止导入不留半套数据。</p>`)}
+        <p>在密码页点<b>「更多 → 导入」</b>，可粘贴 CSV 行、迁移文本或分享卡片，也可选取 CSV、JSON、TXT 或 .db 文件。确认预览结果后再导入。手机端可从其他应用分享文字或文件到随手记和文件仓。</p>
+        <p>在<b>「更多 → 导出」</b>可导出 .db 数据库、明文 JSON 条目或加密的文件仓 zip。原生应用在启用数据库加密时会导出加密的 .db 副本。</p>
+        <p>导入加密 .db 时会提示输入密钥文本（设置 → 存储与数据 → 数据库加密 → 备份密钥）解锁后合并；「文件仓 zip」tab 导入另一端导出的文件仓包（同内容自动去重）；两端加密体系不同时会弹窗要求输入<b>导出端的数据库加密密钥</b>，验证通过后自动把全部文件重加密迁移到本机加密体系（v4.7.0），密钥不对则中止导入不留半套数据。</p>`)}
       <p class="hint">提示：请保管好数据库文件，建议开启数据库加密（自动密钥，请备份密钥文本）与启动锁 PIN；配合自动备份快照更安心。</p>
     </div>
     <div class="modal-foot">

@@ -1,8 +1,9 @@
 // 诊断：v4.12.1 快捷面板内容超出时 .q-body 是否可滚（复现用户"下面内容完全不可见"）
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFileSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import http from 'node:http';
 
 const PROJ = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -38,21 +39,24 @@ const srv = http.createServer((req, res) => {
   } catch { res.writeHead(404); res.end('nf'); }
 }).listen(PORT);
 
-const profile = join(PROJ, 'data', '.scroll-e2e-' + Date.now());
-mkdirSync(profile, { recursive: true });
-const edg = spawn(EDGE, [`--remote-debugging-port=${CD}`, '--headless=new', '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--no-sandbox', '--user-data-dir=' + profile, 'about:blank'], { stdio: 'ignore' });
+const temporaryRoot = realpathSync(tmpdir());
+const profile = mkdtempSync(join(temporaryRoot, 'passbook-scroll-e2e-'));
+const edg = spawn(EDGE, [`--remote-debugging-port=${CD}`, '--headless=new', '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--no-sandbox', '--user-data-dir=' + profile, 'about:blank'], { stdio: 'ignore', windowsHide: true });
+let ws;
 try {
   let list = null; for (let i = 0; i < 20 && !list; i++) { try { list = await (await fetch(`http://127.0.0.1:${CD}/json`)).json(); } catch {} if (!list) await sleep(500); }
   const page = list.find((t) => t.type === 'page');
-  const ws = new WebSocket(page.webSocketDebuggerUrl);
+  ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((r) => ws.onopen = r);
   let id = 0; const pend = {};
   ws.onmessage = (raw) => { const m = JSON.parse(raw.data); if (m.id && pend[m.id]) { pend[m.id](m); delete pend[m.id]; } };
   const send = (method, params = {}) => new Promise((res) => { const i = ++id; pend[i] = res; ws.send(JSON.stringify({ id: i, method, params })); });
   const ev = async (expression) => (await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })).result?.result?.value;
+  const resize = (width, height) => send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
   await send('Page.enable');
   await send('Network.enable');
   await send('Network.setCacheDisabled', { cacheDisabled: true });
+  await resize(360, 420);
 
   // 模拟 gate 通过（绕过真实事件，直接操作 DOM）
   await send('Page.navigate', { url: `http://127.0.0.1:${PORT}/__t.html` });
@@ -67,6 +71,20 @@ try {
     return 1;
   })()`);
   await sleep(300);
+
+  await ev("document.querySelector('#q-search').focus()");
+  for (const [width, height] of [[360, 420], [520, 560], [360, 420]]) {
+    await resize(width, height);
+    const geometry = await ev(`(() => {
+      const input = document.querySelector('#q-search').getBoundingClientRect();
+      const firstCard = document.querySelector('.q-item').getBoundingClientRect();
+      const body = document.querySelector('.q-body').getBoundingClientRect();
+      return { height: input.height, gap: firstCard.top - input.bottom, inView: input.top >= body.top && firstCard.bottom <= body.bottom };
+    })()`);
+    const separated = geometry.height >= 42 && geometry.gap >= 8 && geometry.inView;
+    log(`${separated ? 'OK' : 'FAIL'} ${width}×${height} 搜索框与首张卡片分隔 ${JSON.stringify(geometry)}`);
+    if (!separated) process.exitCode = 1;
+  }
 
   const r1 = await ev(`(function(){
     const b = document.querySelector('.q-body');
@@ -128,9 +146,17 @@ try {
     if (!noNested || !okWhole || !okVisible) process.exitCode = 1;
   }
 
-  rmSync(profile, { recursive: true, force: true });
 } finally {
+  ws?.close();
   srv.close();
-  try { edg.kill(); } catch {}
-  try { spawn('cmd', ['/c', 'taskkill /F /T /PID ' + edg.pid], { stdio: 'ignore' }); } catch {}
+  if (edg.pid) spawnSync('taskkill.exe', ['/F', '/T', '/PID', String(edg.pid)], { stdio: 'ignore', windowsHide: true });
+  const resolvedProfile = realpathSync(profile);
+  if (resolvedProfile === profile && dirname(resolvedProfile) === temporaryRoot) {
+    try {
+      rmSync(resolvedProfile, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+    } catch (error) {
+      if (process.platform !== 'win32' || error.code !== 'EPERM') throw error;
+      log('Windows 暂时锁定了 Edge 临时目录，测试结果已记录。');
+    }
+  }
 }
