@@ -103,14 +103,14 @@
         '<button class="btn" id="q-gate-open">打开主界面</button>';
     } else if (view === 'pin') {
       box.innerHTML = '<h3 class="q-gate-title">' + SVG_LOCK + ' 密码本已锁定</h3>' +
-        '<input id="q-pin" type="password" placeholder="输入 PIN" autocomplete="current-password" />' +
+        '<input id="q-pin" type="password" inputmode="numeric" aria-label="输入 PIN" placeholder="输入 PIN" autocomplete="current-password" />' +
         '<p class="q-err" id="q-pin-err"></p>' +
         '<button class="btn primary" id="q-pin-go">解锁</button>' +
         '<p class="q-gate-hint">与主界面启动锁为同一把锁，解锁后两边同时解锁。</p>';
     } else {
       box.innerHTML = '<h3 class="q-gate-title">快捷面板不可用</h3><p class="q-hint">请从桌面应用主界面使用。</p>';
     }
-    $('q-pin')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') tryPinUnlock(); });
+    $('q-pin')?.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) tryPinUnlock(); });
     $('q-pin-go')?.addEventListener('click', tryPinUnlock);
     $('q-gate-open')?.addEventListener('click', openMain);
     if (view === 'pin') $('q-pin').focus();
@@ -130,7 +130,9 @@
       gate.classList.add('hidden');
       app.classList.remove('hidden');
       $('q-rsz').classList.remove('hidden');
-      $('q-search').focus();
+      const mode = document.querySelector('.q-tabs .on')?.dataset.tab;
+      const input = {search: 'q-search', gen: 'q-gen-len', import: 'q-import-text', ai: 'ai-input'}[mode];
+      if (input && !app.contains(document.activeElement)) $(input).focus();
     } else {
       app.classList.add('hidden');
       $('q-rsz').classList.add('hidden');
@@ -169,8 +171,10 @@
   /* ---------- Tab 切换 ---------- */
   document.querySelectorAll('.q-tabs button').forEach((b) => {
     b.addEventListener('click', () => {
-      document.querySelectorAll('.q-tabs button').forEach((x) => x.classList.remove('on'));
-      b.classList.add('on');
+      for (const button of document.querySelectorAll('.q-tabs button')) {
+        button.classList.toggle('on', button === b);
+        button.setAttribute('aria-pressed', String(button === b));
+      }
       for (const t of ['search', 'gen', 'import', 'ai']) $('tab-' + t).classList.toggle('hidden', t !== b.dataset.tab);
       if (b.dataset.tab === 'search') $('q-search').focus();
       if (b.dataset.tab === 'import') $('q-import-text').focus();
@@ -565,7 +569,7 @@
     aiScroll();
   });
   $('ai-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
       e.preventDefault();
       aiSend();
     }
@@ -576,7 +580,7 @@
   $('q-min').addEventListener('click', hidePanel);
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && IS_TAURI) hidePanel();
+    if (e.key === 'Escape' && IS_TAURI && !e.isComposing) hidePanel();
   });
 
   window.addEventListener('focus', () => refreshGate());

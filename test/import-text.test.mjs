@@ -39,13 +39,20 @@ test('分享卡片文本：单张与多张连粘（v4.12.5 复制文本导出入
 });
 
 test('混合内容：密文 + 卡片 + CSV 行一起粘', () => {
-  const text = Q.packMigrate(entry) + '\n微信,13800000000,Wx#2024,https://wx.qq.com,家人号';
-  const rows = T.parseImportText(text);
-  assert.equal(rows.length, 2);
+  const text = [
+    Q.packMigrate(entry),
+    Q.buildShareCard({ owner: 'Steam', account: 'sample', password: 'Demo#5' }),
+    '微信,13800000000,Wx#2024,https://wx.qq.com,家人号',
+    'PASSBOOK:!!!not-base64!!!',
+  ].join('\n');
+  const { rows, skipped } = T.parseImportReport(text);
+  assert.equal(rows.length, 3);
+  assert.equal(skipped, 1);
   assert.equal(rows[0].owner, 'GitHub');
-  assert.equal(rows[1].owner, '微信');
-  assert.equal(rows[1].url, 'https://wx.qq.com');
-  assert.equal(rows[1].note, '家人号');
+  assert.equal(rows[1].owner, 'Steam');
+  assert.equal(rows[2].owner, '微信');
+  assert.equal(rows[2].url, 'https://wx.qq.com');
+  assert.equal(rows[2].note, '家人号');
 });
 
 test('经典 CSV 行为不回归：五种分隔符 + 表头/注释跳过', () => {

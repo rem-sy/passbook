@@ -158,6 +158,15 @@
     .ai-msg a { color: var(--q-accent); }
     /* 全面板唯一滚动条（.q-body），深色联动 */
     .q-body { overscroll-behavior: contain; }
+    .q-tabs button { min-height: 34px; }
+    .q-tabs button.on { background: var(--primary-soft); color: var(--primary-strong); }
+    #q-open-main {
+      min-height: 28px; padding-inline: 6px; margin-left: auto; border: 0; border-radius: 5px;
+      background: transparent; color: var(--primary-strong); font: inherit; cursor: pointer; white-space: nowrap;
+    }
+    #q-open-main:hover { background: var(--primary-soft); }
+    .q-btns button { min-height: 28px; }
+
     .q-body::-webkit-scrollbar { width: 8px; }
     .q-body::-webkit-scrollbar-thumb { background: var(--line); border-radius: 999px; }
     .q-body::-webkit-scrollbar-thumb:hover { background: var(--line-strong); }
@@ -242,26 +251,26 @@
         <span>快捷面板</span>
       </div>
       <div class="q-drag-btns">
-        <button class="q-min" id="q-min" title="收起面板（Alt+P 再唤出）">
+        <button class="q-min" id="q-min" aria-label="收起快捷面板" title="收起面板（Alt+P 再唤出）">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/></svg>
         </button>
       </div>
     </div>
 
-    <div class="q-tabs" id="q-tabs">
-      <button data-tab="search" class="on">
+    <div class="q-tabs" id="q-tabs" aria-label="快捷面板功能">
+      <button data-tab="search" class="on" aria-pressed="true" aria-controls="tab-search">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
         搜索
       </button>
-      <button data-tab="gen">
+      <button data-tab="gen" aria-pressed="false" aria-controls="tab-gen">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/><path d="m14 7 3 3"/><path d="M5 6v4"/><path d="M19 14v4"/><path d="M10 2v2"/><path d="M7 8H3"/><path d="M21 16h-4"/><path d="M11 3H9"/></svg>
         生成
       </button>
-      <button data-tab="import">
+      <button data-tab="import" aria-pressed="false" aria-controls="tab-import">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
         导入
       </button>
-      <button data-tab="ai">
+      <button data-tab="ai" aria-pressed="false" aria-controls="tab-ai">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a5 5 0 0 1 5 5v1a4 4 0 0 1 0 8H7a4 4 0 0 1 0-8V8a5 5 0 0 1 5-5Z"/><path d="M12 8v8"/><circle cx="12" cy="5" r="0.5"/></svg>
         AI
       </button>
@@ -269,7 +278,7 @@
     <div class="q-body">
       <!-- 搜索 -->
       <div id="tab-search" style="display:flex;flex-direction:column;gap:10px">
-        <input id="q-search" type="text" placeholder="搜索 所属 / 账户 / 网址 / 备注" autocomplete="off" />
+        <input id="q-search" type="search" aria-label="搜索密码" placeholder="搜索 所属 / 账户 / 网址 / 备注" autocomplete="off" />
         <div id="q-results"></div>
       </div>
       <!-- 生成 -->
@@ -318,7 +327,7 @@
           <p class="q-hint">对 AI 说：帮我查 GitHub 的密码 / 存一条 / 生成 16 位强密码。查询结果密码打码，真实值点搜索结果复制。</p>
         </div>
         <div class="ai-input-row">
-          <textarea id="ai-input" placeholder="说人话即可（Enter 发送，Shift+Enter 换行）" rows="1"></textarea>
+          <textarea id="ai-input" aria-label="输入消息" placeholder="输入消息…" rows="1"></textarea>
           <button class="btn primary" id="ai-send" style="width:auto;padding:10px 14px">发送</button>
           <button class="btn hidden" id="ai-stop" style="width:auto;padding:10px 14px">停止</button>
         </div>
@@ -326,7 +335,7 @@
     </div>
     <div class="q-foot">
       <span><kbd>Alt P</kbd> 呼出 · <kbd>Esc</kbd> 收起 · 可拖动 / 右下角缩放</span>
-      <a id="q-open-main">打开主界面</a>
+      <button type="button" id="q-open-main">打开主界面</button>
     </div>
   </div>
 

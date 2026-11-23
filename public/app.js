@@ -77,6 +77,10 @@ function debounce(fn, ms) {
 const IS_TAURI = typeof window !== 'undefined' && !!(window.__TAURI__ || window.__TAURI_INTERNALS__);
 /** Android 端检测：用户代理里带 Android（Tauri 手机版） */
 const IS_ANDROID = IS_TAURI && typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
+const TOUCH_SHELL = IS_ANDROID || (!IS_TAURI && matchMedia('(pointer: coarse)').matches);
+const COMPACT_SHELL = matchMedia('(max-width: 959px)');
+const WIDE_DETAILS = matchMedia('(min-width: 1180px)');
+document.documentElement.dataset.shell = TOUCH_SHELL ? 'touch' : 'desktop';
 
 async function tauriInvoke(cmd, args) {
   return window.__TAURI__.core.invoke(cmd, args);
@@ -115,51 +119,236 @@ function toast(msg, isError = false) {
 /* ---------------- 确认弹窗（v4.11.3） ----------------
  * 原生 confirm 在 Tauri 桌面被 dialog 插件接管为异步 invoke 且默认 ACL 不放行
  * （报 plugin:dialog|confirm not allowed），返回的 Promise 还会让同步 if(!confirm()) 失真——
- * 危险操作实际跳过确认。故全部改用本自建弹窗：Promise<boolean>，Enter=确定 / Esc=取消。 */
+ * 危险操作使用自建确认层，按 Enter 执行当前焦点所在按钮。 */
 function uiConfirm(message, opts = {}) {
   return new Promise((resolve) => {
     const mask = document.createElement('div');
     mask.className = 'modal-mask';
     mask.style.zIndex = '660'; // 自建弹窗层规范（DEVELOPGUIDE §7）
     mask.innerHTML = `
-      <div class="modal" style="max-width:360px">
+      <div class="modal confirmation" style="max-width:400px">
         <div class="modal-head"><h3>${escapeHtml(opts.title || '请确认')}</h3><span></span></div>
-        <div class="modal-body"><p style="white-space:pre-wrap;word-break:break-word;font-size:13.5px;line-height:1.7;margin:0">${escapeHtml(message)}</p></div>
+        <div class="modal-body"><p class="confirmation-message">${escapeHtml(message)}</p></div>
         <div class="modal-foot">
           <button class="btn" data-r="0">取消</button>
           <button class="btn ${opts.danger ? 'danger' : 'primary'}" data-r="1">${escapeHtml(opts.okText || '确定')}</button>
         </div>
       </div>`;
-    const done = (r) => {
+    const done = (result) => {
       mask.remove();
-      document.removeEventListener('keydown', onKey, true);
-      resolve(r);
+      removeUiLayer(layer);
+      resolve(result);
     };
-    const onKey = (e) => {
-      if (e.key === 'Escape') { e.stopPropagation(); done(false); }
-      else if (e.key === 'Enter') { e.stopPropagation(); done(true); }
-    };
-    mask.addEventListener('click', (e) => { e.stopPropagation(); }); // v4.12.5：不再点背景当作取消（防误触），必须点按钮
-    mask.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => done(b.dataset.r === '1')));
-    document.addEventListener('keydown', onKey, true);
-    document.body.appendChild(mask);
-    mask.querySelector('[data-r="1"]')?.focus();
+    mask.querySelectorAll('button').forEach((button) => button.addEventListener('click', () => done(button.dataset.r === '1')));
+    const layer = showDialog(mask, {
+      role: 'alertdialog',
+      focus: '[data-r="0"]',
+      dismiss: () => done(false),
+    });
+    layer.lockClose = () => done(false);
   });
 }
 
-/* ---------------- 弹窗 ---------------- */
-let pbSuppressPop = false; // 按钮主动关闭时置位，让随后的 popstate 不再重复处理
-function openModal(html, wide = false) {
-  history.pushState({ pb: 1 }, ''); // 压一层，系统返回键/浏览器后退优先关弹窗
-  const root = $('#modal-root');
-  root.innerHTML = `<div class="modal-mask"><div class="modal${wide ? ' wide' : ''}">${html}</div></div>`;
-  // v4.12.5：不再点背景关闭——录入/导入等表单弹窗极易误触丢内容，只允许 X / 关闭按钮关
-  root.querySelector('.modal-close')?.addEventListener('click', closeModal);
-  root.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closeModal)); // v3.3.3：统一关闭约定（TOTP 说明「我知道了」此前无监听）
+/* ---------------- 弹窗、焦点与系统返回 ---------------- */
+const uiLayers = [];
+const uiInert = new Set();
+const focusable = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], summary, [tabindex]:not([tabindex="-1"])';
+let uiBackPending = false;
+let mainDialog = null;
+let lockDialog = null;
+let dialogSequence = 0;
+
+function topUiLayer() {
+  return lockDialog || uiLayers.at(-1);
 }
+
+function syncUi() {
+  for (const element of uiInert) element.inert = false;
+  uiInert.clear();
+  const disable = (element) => {
+    if (element.inert || element.matches('script, #toast-root')) return;
+    element.inert = true;
+    uiInert.add(element);
+  };
+  const top = topUiLayer();
+  const sidebar = $('#sidebar');
+  if ((TOUCH_SHELL || COMPACT_SHELL.matches) && !document.body.classList.contains('side-open')) disable(sidebar);
+  if (top?.blocking) {
+    for (let element = top.element; element.parentElement && element !== document.body; element = element.parentElement) {
+      for (const sibling of element.parentElement.children) {
+        if (sibling !== element && sibling !== top.backdrop) disable(sibling);
+      }
+    }
+  }
+  document.body.classList.toggle('ui-modal-open', !!top?.blocking);
+  const needsBack = uiLayers.some((layer) => layer !== lockDialog);
+  if (uiBackPending || needsBack === !!history.state?.pbLayer) return;
+  if (needsBack) history.pushState({ pbLayer: true }, '');
+  else {
+    uiBackPending = true;
+    history.back();
+  }
+}
+
+function addUiLayer(element, options) {
+  const active = document.activeElement;
+  const layer = { element, origin: active?.closest('.command-menu')?.querySelector('summary') || active, ...options };
+  uiLayers.push(layer);
+  return layer;
+}
+
+function removeUiLayer(layer, restoreFocus = true) {
+  const at = uiLayers.indexOf(layer);
+  if (at < 0) return;
+  uiLayers.splice(at, 1);
+  syncUi();
+  if (restoreFocus) {
+    const top = topUiLayer();
+    const origin = layer.origin;
+    if (origin?.isConnected && !origin.closest('[inert], .hidden') && origin.getClientRects().length) origin.focus({ preventScroll: true });
+    else if (top) (top.element.querySelector('[role="dialog"], [role="alertdialog"]') || top.element).focus({ preventScroll: true });
+    else $(['#search', '#note-search', '#file-search'][['pass', 'notes', 'files'].indexOf(state.view)])?.focus({ preventScroll: true });
+  }
+}
+
+function showDialog(mask, { role = 'dialog', focus, dismiss, lock = false, inspector = false } = {}) {
+  const dialog = mask.querySelector('.modal');
+  const title = dialog.querySelector('.modal-head h3');
+  dialog.tabIndex = -1;
+  dialog.setAttribute('role', role);
+  if (title) {
+    title.id = 'pb-dialog-title-' + ++dialogSequence;
+    dialog.setAttribute('aria-labelledby', title.id);
+  }
+  const description = dialog.querySelector('.confirmation-message');
+  if (description) {
+    description.id = 'pb-dialog-description-' + dialogSequence;
+    dialog.setAttribute('aria-describedby', description.id);
+  }
+  if (!mask.isConnected) document.body.appendChild(mask);
+  const layer = addUiLayer(mask, { blocking: true, dismiss, inspector });
+  if (lock) lockDialog = layer;
+  setDialogLayout(layer);
+  if (topUiLayer() === layer) (focus && dialog.querySelector(focus) || dialog).focus({ preventScroll: true });
+  return layer;
+}
+
+function setDialogLayout(layer) {
+  const isPane = layer.inspector && !TOUCH_SHELL && WIDE_DETAILS.matches;
+  layer.blocking = !isPane;
+  layer.element.classList.toggle('detail-inspector', isPane);
+  const dialog = layer.element.querySelector('.modal');
+  if (isPane) dialog.removeAttribute('aria-modal');
+  else dialog.setAttribute('aria-modal', 'true');
+  document.body.classList.toggle('has-inspector', uiLayers.some(({ element }) => element.classList.contains('detail-inspector')));
+  syncUi();
+}
+
+function draftValues(element) {
+  return JSON.stringify([...element.querySelectorAll('input, select, textarea')].filter((field) =>
+    !field.readOnly && !['hidden', 'button'].includes(field.type)).map((field) =>
+    ['checkbox', 'radio'].includes(field.type) ? field.checked : field.value));
+}
+
+async function requestModalClose() {
+  const layer = mainDialog;
+  if (!layer || layer !== topUiLayer()) return;
+  if (layer.pending) return;
+  if (layer.draft !== undefined && (layer.draft !== draftValues(layer.element) || layer.hasDraft?.())) {
+    layer.pending = true;
+    const discard = await uiConfirm('关闭后，本次未保存的更改将丢失。', {
+      title: '放弃更改？', danger: true, okText: '放弃更改',
+    });
+    layer.pending = false;
+    if (!discard) return;
+  }
+  if (mainDialog === layer) closeModal();
+}
+
+function openModal(html, wide = false, { page = false, draft = false, hasDraft, focus, inspector = false } = {}) {
+  const root = $('#modal-root');
+  const origin = mainDialog?.origin;
+  if (mainDialog) uiLayers.splice(uiLayers.indexOf(mainDialog), 1);
+  root.innerHTML = `<div class="modal-mask${page || inspector ? ' modal-page' : ''}"><div class="modal${wide ? ' wide' : ''}">${html}</div></div>`;
+  const mask = root.firstElementChild;
+  mainDialog = showDialog(mask, { focus, dismiss: requestModalClose, inspector });
+  if (origin) mainDialog.origin = origin;
+  if (draft) mainDialog.draft = draftValues(mask);
+  mainDialog.hasDraft = hasDraft;
+  root.querySelectorAll('.modal-close, [data-close]').forEach((button) => button.addEventListener('click', requestModalClose));
+}
+
 function closeModal() {
+  if (!mainDialog) return;
+  const layer = mainDialog;
+  mainDialog = null;
   $('#modal-root').innerHTML = '';
-  if (history.state && history.state.pb) { pbSuppressPop = true; history.back(); } // 同步历史栈
+  document.body.classList.remove('has-inspector');
+  removeUiLayer(layer);
+}
+
+WIDE_DETAILS.addEventListener('change', () => {
+  if (mainDialog?.inspector) setDialogLayout(mainDialog);
+});
+
+window.addEventListener('popstate', () => {
+  if (uiBackPending) {
+    uiBackPending = false;
+    syncUi();
+    return;
+  }
+  const layer = topUiLayer();
+  if (!layer || layer === lockDialog) return;
+  syncUi();
+  layer.dismiss?.();
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.defaultPrevented || event.isComposing) return;
+  const menu = event.target.closest('.command-menu[open]');
+  if (event.key === 'Escape' && menu) {
+    event.preventDefault();
+    menu.open = false;
+    menu.querySelector('summary').focus();
+    return;
+  }
+  const layer = topUiLayer();
+  if (!layer) return;
+  const confirmationAction = event.target.closest('button[data-r]');
+  if (event.key === 'Enter' && confirmationAction && layer.element.contains(confirmationAction)) {
+    event.preventDefault();
+    confirmationAction.click();
+    return;
+  }
+  if (event.key === 'Escape' && layer.dismiss) {
+    event.preventDefault();
+    layer.dismiss();
+  }
+  if (event.key !== 'Tab' || !layer.blocking) return;
+  const stops = [...layer.element.querySelectorAll(focusable)].filter((node) =>
+    node.getClientRects().length && !node.closest('[inert]'));
+  const first = stops[0], last = stops.at(-1), current = document.activeElement;
+  if (!first || !stops.includes(current) || current === (event.shiftKey ? first : last)) {
+    event.preventDefault();
+    (event.shiftKey ? last : first)?.focus();
+  }
+}, true);
+
+document.addEventListener('click', (event) => {
+  for (const menu of document.querySelectorAll('.command-menu[open]')) {
+    if (event.target.closest('button') || !menu.contains(event.target)) menu.open = false;
+  }
+});
+
+if (TOUCH_SHELL && window.visualViewport) {
+  const viewport = window.visualViewport;
+  const fitViewport = () => {
+    document.documentElement.style.setProperty('--visual-height', viewport.height + 'px');
+    document.documentElement.style.setProperty('--visual-top', viewport.offsetTop + 'px');
+  };
+  viewport.addEventListener('resize', fitViewport);
+  viewport.addEventListener('scroll', fitViewport);
+  fitViewport();
 }
 
 /* ---------------- 数据库 schema（server 与 local 共用） ---------------- */
@@ -911,16 +1100,15 @@ function promptKeyInput(err = '', hint = '') {
           <button class="btn primary" data-x="ok" style="flex:2">确定</button>
         </div>
       </div>`;
-    document.body.appendChild(mask);
     const input = mask.querySelector('input');
-    const done = (v) => { mask.remove(); resolve(v); };
+    const done = (v) => { mask.remove(); removeUiLayer(layer); resolve(v); };
     mask.querySelector('[data-x="ok"]').addEventListener('click', () => { if (input.value) done(input.value); });
     mask.querySelector('[data-x="cancel"]').addEventListener('click', () => done(null));
     input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && input.value) done(input.value);
-      if (e.key === 'Escape') done(null);
+      if (e.key === 'Enter' && !e.isComposing && input.value) done(input.value);
     });
-    input.focus();
+    const layer = showDialog(mask, { focus: 'input', dismiss: () => done(null) });
+    layer.lockClose = () => done(null);
   });
 }
 
@@ -942,11 +1130,13 @@ function showKeyBackup(key) {
         <button class="btn" id="btn-key-close" style="flex:1">关闭</button>
       </div>
     </div>`;
-  document.body.appendChild(mask);
+  const close = () => { mask.remove(); removeUiLayer(layer); };
+  const layer = showDialog(mask, { dismiss: close });
+  layer.lockClose = close;
   mask.querySelector('#btn-key-copy').addEventListener('click', () => {
     navigator.clipboard.writeText(key).then(() => toast('密钥已复制')).catch(() => toast('复制失败，请手动选中文本复制', true));
   });
-  mask.querySelector('#btn-key-close').addEventListener('click', () => mask.remove());
+  mask.querySelector('#btn-key-close').addEventListener('click', close);
 }
 
 /* ---------------- 状态 ---------------- */
@@ -1185,7 +1375,7 @@ function renderEntries(items, hitsMap) {
           <div class="entry-main">
             <div class="entry-title">
               <button class="entry-fav ${it.fav ? 'active' : ''}" data-act="fav" title="${it.fav ? '取消收藏' : '收藏'}">${it.fav ? ICONS.starFill : ICONS.star}</button>
-              <span class="entry-owner">${hl('owner', it.id, it.owner)}</span>
+              <button type="button" class="entry-owner entry-open" data-act="details">${hl('owner', it.id, it.owner)}</button>
               ${cat}
               ${attachBadge}
             </div>
@@ -1195,8 +1385,8 @@ function renderEntries(items, hitsMap) {
             <div class="entry-pw">
               <span class="pw-masked" data-pw="${escapeHtml(it.password)}">••••••••</span>
               <div class="pw-actions">
-                <button data-act="toggle" title="显示/隐藏">${ICONS.eye}</button>
-                <button data-act="copy" title="复制">${ICONS.copy}</button>
+                <button data-act="toggle" aria-label="显示密码" aria-pressed="false" title="显示密码">${ICONS.eye}</button>
+                <button data-act="copy" aria-label="复制密码" title="复制密码">${ICONS.copy}<span class="entry-action-label">复制</span></button>
               </div>
             </div>
             ${it.totp_secret ? `
@@ -1204,17 +1394,12 @@ function renderEntries(items, hitsMap) {
               <svg class="totp-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
               <span class="totp-code" data-totp="${escapeHtml(it.totp_secret)}">······</span>
               <span class="totp-remain"></span>
-              <button data-act="copy-totp" title="复制验证码">${ICONS.copy}</button>
+              <button data-act="copy-totp" aria-label="复制验证码" title="复制验证码">${ICONS.copy}<span class="entry-action-label">复制验证码</span></button>
             </div>` : ''}
           </div>
           <div class="entry-side">
             <span class="entry-time">${fmtTime(it.updated_at)}</span>
-            <div class="entry-ops">
-              ${parseHistory(it.history).length ? `<button data-act="history" title="密码历史">${ICONS.history}</button>` : ''}
-              <button data-act="qr" title="二维码">${ICONS.qr}</button>
-<button data-act="edit" title="编辑">${ICONS.edit}</button>
-              <button data-act="del" class="del" title="删除">${ICONS.trash}</button>
-            </div>
+            <div class="entry-ops"><button data-act="edit" aria-label="编辑条目" title="编辑条目">${ICONS.edit}</button></div>
           </div>
         </div>
       </div>`;
@@ -1301,16 +1486,25 @@ $('#entry-list').addEventListener('click', async (e) => {
   const card = btn.closest('.entry');
   const id = Number(card.dataset.id);
   const act = btn.dataset.act;
-  if (act === 'toggle') {
+  if (act === 'details') {
+    const item = (await store.list({})).items.find((row) => row.id === id);
+    if (item) openEntryDetail(item);
+  } else if (act === 'toggle') {
     const pw = card.querySelector('.pw-masked');
     if (pw.classList.contains('revealed')) {
       pw.classList.remove('revealed');
       pw.textContent = '••••••••';
       btn.innerHTML = ICONS.eye;
+      btn.setAttribute('aria-pressed', 'false');
+      btn.setAttribute('aria-label', '显示密码');
+      btn.title = '显示密码';
     } else {
       pw.classList.add('revealed');
       pw.textContent = pw.dataset.pw;
       btn.innerHTML = ICONS.eyeOff;
+      btn.setAttribute('aria-pressed', 'true');
+      btn.setAttribute('aria-label', '隐藏密码');
+      btn.title = '隐藏密码';
     }
   } else if (act === 'copy') {
     await copyText(card.querySelector('.pw-masked').dataset.pw);
@@ -1318,13 +1512,6 @@ $('#entry-list').addEventListener('click', async (e) => {
     const secret = card.querySelector('.totp-code')?.dataset.totp;
     if (!secret) return;
     try { const { code } = await PassTotp.generateTotp(secret); await copyText(code); } catch (e) { toast(e.message, true); }
-  } else if (act === 'history') {
-    const item = (await store.list({})).items.find((x) => x.id === id);
-    if (item) openHistoryModal(item);
-  } else if (act === 'qr') {
-    // v4.0.0：条目 → 二维码（分享/迁移）
-    const item = (await store.list({})).items.find((x) => x.id === id);
-    if (item) openEntryQrModal(item);
   } else if (act === 'fav') {
     // 收藏星标（v2.7.0）：乐观切换 + 重排（收藏置顶）
     const item = (await store.list({})).items.find((x) => x.id === id);
@@ -1344,22 +1531,50 @@ $('#entry-list').addEventListener('click', async (e) => {
     const list = await store.list({});
     const item = list.items.find((x) => x.id === id);
     if (item) openEditModal(item);
-  } else if (act === 'del') {
-    const item = (await store.list({})).items.find((x) => x.id === id);
-    if (!item) return;
-    if (await uiConfirm(`确定删除「${item.owner} / ${item.account}」吗？`, { danger: true, okText: '删除' })) {
-      try {
-        await store.remove(id);
-        state.selectedIds.delete(id); // v4.1.1：单删也同步勾选集合，多选计数不残留
-        toast('已删除');
-        refreshChips();
-        refreshList();
-      } catch (err) { toast(err.message, true); }
-    }
+
   }
 });
 
 /* ---------------- 多选模式 + 批量操作（v3.4.0）---------------- */
+function openEntryDetail(item) {
+  openModal(`
+    <div class="modal-head">
+      <h3>${escapeHtml(item.owner)}</h3>
+      <button class="modal-close" aria-label="关闭详情">${ICONS.x}</button>
+    </div>
+    <div class="modal-body record-detail">
+      <div class="record-detail-row"><div><strong>账号</strong><p>${escapeHtml(item.account)}</p></div>
+        <button class="btn" id="entry-detail-account">复制账号</button></div>
+      <div class="record-detail-row"><div><strong>密码</strong><p class="mono">••••••••</p></div>
+        <button class="btn" id="entry-detail-password">复制密码</button></div>
+      ${item.totp_secret ? `<div class="record-detail-row entry-totp"><div><strong>动态验证码</strong>
+        <p><code class="totp-code" data-totp="${escapeHtml(item.totp_secret)}">······</code> <span class="totp-remain"></span></p></div>
+        <button class="btn" id="entry-detail-totp">复制验证码</button></div>` : ''}
+      ${item.category ? `<div><strong>分类</strong><p>${escapeHtml(item.category)}</p></div>` : ''}
+      ${item.url ? `<div><strong>网址</strong><p>${escapeHtml(item.url)}</p></div>` : ''}
+      ${item.note ? `<div><strong>备注</strong><p class="record-note">${escapeHtml(item.note)}</p></div>` : ''}
+      <div class="record-detail-tools">
+        ${parseHistory(item.history).length ? '<button class="btn" id="entry-detail-history">密码历史</button>' : ''}
+        ${_attachCounts[item.id] ? '<button class="btn" id="entry-detail-attachments">附件</button>' : ''}
+        <button class="btn" id="entry-detail-share">分享</button>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-close>关闭</button>
+      <button class="btn primary" id="entry-detail-edit">编辑条目</button>
+    </div>`, false, { inspector: true });
+  $('#entry-detail-account').addEventListener('click', () => copyText(item.account));
+  $('#entry-detail-password').addEventListener('click', () => copyText(item.password));
+  $('#entry-detail-totp')?.addEventListener('click', async () => {
+    try { await copyText((await PassTotp.generateTotp(item.totp_secret)).code); }
+    catch (error) { toast(error.message, true); }
+  });
+  $('#entry-detail-history')?.addEventListener('click', () => openHistoryModal(item));
+  $('#entry-detail-attachments')?.addEventListener('click', () => openAttachmentsModal(item.id, item.owner));
+  $('#entry-detail-share').addEventListener('click', () => openEntryQrModal(item));
+  $('#entry-detail-edit').addEventListener('click', () => openEditModal(item));
+}
+
 function msUpdateBar() {
   const bar = $('#ms-bar');
   if (!bar) return;
@@ -1744,10 +1959,15 @@ function scheduleClipboardClear() {
 }
 
 function doAutoLock() {
-  if (!loadSettings().pinHash) return; // 未启用启动锁则无锁可上
+  if (!loadSettings().pinHash || lockDialog) return;
   unlocked = false;
+  for (const layer of [...uiLayers].reverse()) layer.lockClose?.();
   closeModal();
-  refreshList(); // 重新打码已显示的密码与验证码
+  setAgentPanel(false);
+  closeGenerator();
+  closeSidebarDrawer();
+  agentState.abortController?.abort();
+  refreshList();
   showLockIfNeeded();
 }
 
@@ -1838,19 +2058,46 @@ $('#sidebar-nav')?.addEventListener('click', (e) => {
   closeSidebarDrawer(); // 手机端选择后收起抽屉
 });
 
-/* 手机端抽屉开合（v2.7.0） */
+/* 窄屏分类抽屉和宽屏页面导航 */
+let drawerLayer = null;
 function openSidebarDrawer() {
+  if (drawerLayer) return;
   document.body.classList.add('side-open');
+  $('#btn-side-menu').setAttribute('aria-expanded', 'true');
+  $('#sidebar').setAttribute('role', 'dialog');
+  $('#sidebar').setAttribute('aria-modal', 'true');
+  drawerLayer = addUiLayer($('#sidebar'), { blocking: true, dismiss: closeSidebarDrawer, backdrop: $('#side-mask') });
+  syncUi();
+  $('#sidebar-nav button')?.focus({ preventScroll: true });
 }
 function closeSidebarDrawer() {
+  if (!drawerLayer) return;
   document.body.classList.remove('side-open');
+  $('#btn-side-menu').setAttribute('aria-expanded', 'false');
+  $('#sidebar').removeAttribute('role');
+  $('#sidebar').removeAttribute('aria-modal');
+  removeUiLayer(drawerLayer);
+  drawerLayer = null;
 }
 $('#btn-side-menu')?.addEventListener('click', () => {
   document.body.classList.contains('side-open') ? closeSidebarDrawer() : openSidebarDrawer();
 });
-$('#side-mask')?.addEventListener('click', closeSidebarDrawer);
+$('#side-mask').addEventListener('click', closeSidebarDrawer);
+$('#btn-sidebar-close').addEventListener('click', closeSidebarDrawer);
+
+function layoutShell() {
+  const rail = !TOUCH_SHELL && !COMPACT_SHELL.matches;
+  if (rail) closeSidebarDrawer();
+  const tabs = $('#view-tabs');
+  if (rail) $('#sidebar-views').appendChild(tabs);
+  else $('.topbar').after(tabs);
+  syncUi();
+}
+COMPACT_SHELL.addEventListener('change', layoutShell);
+layoutShell();
 
 /* ---------------- 生成器 ---------------- */
+let generatorLayer = null;
 const GEN_DEFAULTS = { length: 16, upper: true, lower: true, digit: true, symbol: true, symbols: '', ensure: true, ambiguous: true, noadj: false, norepeat: false, noseq: false, exclude: '' };
 
 /** 短语模式选项（v2.3.0） */
@@ -1969,8 +2216,14 @@ function showGenPanel() {
     $('#gen-pp-cap').checked = !!g.pp.capitalize;
     $('#gen-pp-num').checked = g.pp.includeNumber !== false;
   }
-  if ($('#gen-panel').classList.contains('hidden')) history.pushState({ pb: 1 }, ''); // 返回键可先收起生成器
-  $('#gen-panel').classList.remove('hidden');
+  const panel = $('#gen-panel');
+  if (!generatorLayer) {
+    generatorLayer = addUiLayer(panel, { dismiss: closeGenerator });
+    syncUi();
+  }
+  panel.classList.remove('hidden');
+  $('#btn-generate').focus({ preventScroll: true });
+  panel.scrollIntoView({ block: 'nearest' });
 }
 
 // 模式切换（v2.3.0）
@@ -2011,10 +2264,13 @@ $('#btn-manual-add').addEventListener('click', () => {
   openManualAddModal();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 });
-$('#btn-gen-close').addEventListener('click', () => {
+function closeGenerator() {
+  if (!generatorLayer) return;
   $('#gen-panel').classList.add('hidden');
-  if (history.state && history.state.pb) history.back();
-});
+  removeUiLayer(generatorLayer);
+  generatorLayer = null;
+}
+$('#btn-gen-close').addEventListener('click', closeGenerator);
 
 /* ---------------- 编辑 / 新建弹窗 ---------------- */
 /* ---------------- 附件查看/下载（v2.4.0）：BLOB → 内存 URL，不落盘 ---------------- */
@@ -2111,6 +2367,9 @@ function openEditModal(item = null, prefillPw = '') {
           <button class="btn" id="btn-gen-again" title="用当前生成器设置重新生成">${ICONS.wand}</button>
         </div>
       </label>
+      <details class="advanced-fields">
+        <summary>更多字段<span>TOTP、分类、网址和备注</span></summary>
+        <div class="advanced-fields-body">
       <label class="field"><span>动态验证码 TOTP（可选）<button class="btn totp-scan-btn" type="button" data-totp-scan="1" title="扫码获取 TOTP"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 12h10"/></svg></button><button class="hint-btn" type="button" data-hint="totp" title="TOTP 使用说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></span>
         <input id="f-totp" placeholder="base32 密钥或 otpauth:// 链接，粘贴自动提取" value="${escapeHtml(v('totp_secret'))}" autocomplete="off" spellcheck="false" />
       </label>
@@ -2126,6 +2385,8 @@ function openEditModal(item = null, prefillPw = '') {
       <label class="field"><span>备注（可选）</span>
         <textarea id="f-note" placeholder="如：安全问题答案、注册邮箱…">${escapeHtml(v('note'))}</textarea>
       </label>
+        </div>
+      </details>
       ${isNew ? '' : `
       <div class="field"><span>附件（最多 2MB/个，随数据库加密存储）</span>
         <div class="attach-box">
@@ -2140,7 +2401,7 @@ function openEditModal(item = null, prefillPw = '') {
       <button class="btn" id="btn-cancel">取消</button>
       <button class="btn primary" id="btn-save">保存</button>
     </div>
-  `, false);
+  `, true, { page: true, draft: true, focus: '#f-owner' });
 
   // 自动补全（v3.0.8 改自绘联想，替代 datalist——安卓 WebView datalist 遮挡输入框）
   (async () => {
@@ -2177,7 +2438,7 @@ function openEditModal(item = null, prefillPw = '') {
     })();
   })();
 
-  $('#btn-cancel')?.addEventListener('click', closeModal);
+  $('#btn-cancel')?.addEventListener('click', requestModalClose);
 
   // 附件区（v2.4.0，仅编辑已有条目）
   if (!isNew) {
@@ -2380,6 +2641,9 @@ function openManualAddModal() {
           <button class="btn" id="mf-gen" title="用当前生成器设置生成">${ICONS.wand}</button>
         </div>
       </label>
+      <details class="advanced-fields">
+        <summary>更多字段<span>TOTP、分类、网址和备注</span></summary>
+        <div class="advanced-fields-body">
       <label class="field"><span>动态验证码 TOTP（可选）<button class="btn totp-scan-btn" type="button" data-totp-scan="1" title="扫码获取 TOTP"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 12h10"/></svg></button><button class="hint-btn" type="button" data-hint="totp" title="TOTP 使用说明"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg></button></span>
         <input id="mf-totp" placeholder="base32 密钥或 otpauth:// 链接，粘贴自动提取" autocomplete="off" spellcheck="false" />
       </label>
@@ -2395,13 +2659,15 @@ function openManualAddModal() {
       <label class="field"><span>备注 · 记忆关键词（可选）</span>
         <textarea id="mf-note" placeholder="自由输入帮你回忆的关键词，如：老家宽带、妈妈手机号注册、2019年办的卡…"></textarea>
       </label>
+        </div>
+      </details>
       <div class="hint" id="mf-saved-info"></div>
-      <div class="form-actions" id="form-actions">
+    </div>
+    <div class="modal-foot form-actions" id="form-actions">
           <button class="btn" id="mf-save-continue">保存并继续录入</button>
         <button class="btn primary" id="mf-save">保存</button>
-      </div>
     </div>
-  `, true);
+  `, true, { page: true, draft: true, focus: '#mf-owner' });
 
   // 自动补全（v3.0.8 改自绘联想，替代 datalist——安卓 WebView datalist 遮挡输入框；
   // 仅当用户输入非空时才出现列表，行为与编辑弹窗一致）
@@ -2470,6 +2736,7 @@ function openManualAddModal() {
       if (keepOpen) {
         $('#mf-owner').value = ''; $('#mf-account').value = ''; $('#mf-password').value = '';
         $('#mf-url').value = ''; $('#mf-note').value = ''; $('#mf-totp').value = '';
+        if (mainDialog) mainDialog.draft = draftValues(mainDialog.element);
         $('#mf-owner').focus();
       } else {
         closeModal();
@@ -2479,7 +2746,6 @@ function openManualAddModal() {
   }
   $('#mf-save-continue').addEventListener('click', () => mfSave(true));
   $('#mf-save').addEventListener('click', () => mfSave(false));
-  setTimeout(() => $('#mf-owner').focus(), 50);
 }
 
 /* ---------------- 导入 ---------------- */
@@ -2500,7 +2766,7 @@ function openImportModal() {
         <button class="btn" data-tab="zip">文件仓 zip</button>
       </div>
       <div id="tab-paste">
-        <label class="field"><span>每行一条：所属,账户,密码[,网址][,备注]（也支持 所属/账户/密码 或 所属 账户 密码）；v4.12.5 起支持直接粘贴 PASSBOOK 迁移密文（每行一条）与「分享卡片」文本——来自条目分享的「复制文本」</span>
+        <label class="field"><span>粘贴条目文本。支持 CSV 行、PASSBOOK 迁移文本和分享卡片，可以混合使用。</span>
           <textarea id="import-paste" placeholder="微信,13800000000,P@ssw0rd1&#10;GitHub,user@example.com,Abc12345&#10;网银/张三/XyZ!6789&#10;PASSBOOK:eyJvd25lciI6…" style="min-height:110px"></textarea>
         </label>
       </div>
@@ -2555,7 +2821,7 @@ function openImportModal() {
       <button class="btn" id="btn-import-cancel">关闭</button>
       <button class="btn primary" id="btn-import-go">开始导入</button>
     </div>
-  `, true);
+  `, true, { page: true, draft: true, hasDraft: () => !!(importFileCache?.parsed?.length || browserImportCache?.result?.rows?.length) });
 
   // tabs
   $$('.import-tabs .btn').forEach((b) => b.addEventListener('click', () => {
@@ -2706,22 +2972,25 @@ function openImportModal() {
     }
   }
 
-  function showImportPreview(rows) {
+  function showImportPreview(rows, skipped = 0) {
     const wrap = $('#import-preview-wrap');
     wrap.classList.remove('hidden');
-    $('#import-preview').textContent = rows.length
-      ? `解析出 ${rows.length} 条：\n` + rows.slice(0, 12).map((r) => `${r.owner} | ${r.account} | ${'*'.repeat((r.password || '').length)}`).join('\n') + (rows.length > 12 ? `\n… 共 ${rows.length} 条` : '')
-      : '未解析出任何记录';
+    const summary = `可导入 ${rows.length} 条${skipped ? `，无法识别 ${skipped} 条` : ''}`;
+    const preview = rows.slice(0, 12).map((row) => `${row.owner} · ${row.account}`).join('\n');
+    $('#import-preview').textContent = summary + (preview ? '\n' + preview : '') + (rows.length > 12 ? '\n…' : '');
   }
 
   function parseAndPreview(text) {
-    const rows = parseImportText(text);
+    const { rows, skipped } = PassImportText.parseImportReport(text);
     importFileCache.parsed = rows;
-    showImportPreview(rows);
+    showImportPreview(rows, skipped);
   }
 
-  $('#import-paste').addEventListener('input', debounce(() => parseAndPreview($('#import-paste').value), 300));
-  $('#btn-import-cancel').addEventListener('click', closeModal);
+  const pasteField = $('#import-paste');
+  pasteField.addEventListener('input', debounce(() => {
+    if (pasteField.isConnected) parseAndPreview(pasteField.value);
+  }, 300));
+  $('#btn-import-cancel').addEventListener('click', requestModalClose);
   $('#btn-import-go').addEventListener('click', async () => {
     // v4.1.0：浏览器导入 tab——独立管线（去重策略单选 + 明文删除提醒）
     if (!$('#tab-browser').classList.contains('hidden')) {
@@ -2837,7 +3106,7 @@ function openExportModal() {
           <button class="btn primary" id="btn-export-db">下载</button>
         </div>
         <div class="export-item">
-          <div><div class="t">下载 JSON 备份</div><div class="d">完整备份，便于迁移与查看</div></div>
+          <div><div class="t">下载 JSON 条目</div><div class="d">含明文密码，只包含密码条目。</div></div>
           <button class="btn" id="btn-export-json">下载</button>
         </div>
         <div class="export-item">
@@ -3254,7 +3523,7 @@ function maybeShowChangelog() {
   } catch { /* 公告失败不影响启动 */ }
 }
 
-async function openSettingsModal() {
+async function openSettingsModal(initialGroup) {
   const s = loadSettings();
   const modeField = IS_TAURI ? `
       <label class="field"><span>存储模式</span>
@@ -3393,8 +3662,10 @@ async function openSettingsModal() {
       <h3>设置</h3>
       <button class="modal-close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
     </div>
-    <div class="modal-body">
-      <div class="set-group">
+    <div class="modal-body settings-body">
+      <nav class="settings-nav" aria-label="设置分组"></nav>
+      <div class="settings-groups">
+      <div class="set-group" data-setting="data">
         <div class="set-group-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg><span>存储与数据</span></div>
         <div class="set-card">
           ${modeField}
@@ -3403,7 +3674,7 @@ async function openSettingsModal() {
           ${backupField}
         </div>
       </div>
-      <div class="set-group">
+      <div class="set-group" data-setting="security">
         <div class="set-group-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span>安全与锁定</span></div>
         <div class="set-card">
           <div class="field"><span>启动锁（可选，仅本地拦截，不加密数据）</span>
@@ -3449,20 +3720,20 @@ async function openSettingsModal() {
           </label>
         </div>
       </div>
-      <div class="set-group">
+      <div class="set-group" data-setting="ai">
         <div class="set-group-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg><span>AI 助理</span></div>
         <div class="set-card">
           ${agentField}
         </div>
       </div>
       ${quickNoteField ? `
-      <div class="set-group">
+      <div class="set-group" data-setting="desktop">
         <div class="set-group-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M10 9h4"/><path d="M12 7v4"/><path d="M8 1v4"/><path d="M16 1v4"/></svg><span>桌面集成（托盘 · 快捷键 · 自启动）</span></div>
         <div class="set-card">
           ${quickNoteField}
         </div>
       </div>` : ''}
-      <div class="set-group">
+      <div class="set-group" data-setting="appearance">
         <div class="set-group-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg><span>更新与外观</span></div>
         <div class="set-card">
           ${updateField}
@@ -3476,13 +3747,36 @@ async function openSettingsModal() {
           ${faviconField}
         </div>
       </div>
-      <p class="hint">PIN 仅阻止他人直接打开界面。AI 查询结果已打码（真实密码只在应用卡片内展示/复制）；存、改密码时内容仍会发送给你配置的模型渠道，请只填自己信任的接口。</p>
+      </div>
     </div>
     <div class="modal-foot">
       <button class="btn" id="btn-settings-cancel">取消</button>
       <button class="btn primary" id="btn-settings-save">保存</button>
     </div>
-  `);
+  `, true, { page: true, draft: true, hasDraft: () => lockEnabled !== !!s.pinHash || bioEnabled !== (s.bioUnlock !== false && !!s.pinHash) });
+
+  const settingsBody = $('#modal-root .settings-body');
+  const groups = [...settingsBody.querySelectorAll('[data-setting]')];
+  const nav = settingsBody.querySelector('.settings-nav');
+  const sections = groups.map((group) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn settings-section';
+    button.textContent = group.querySelector('.set-group-title span').textContent;
+    nav.appendChild(button);
+    button.addEventListener('click', () => selectGroup(group.dataset.setting));
+    return { group, button };
+  });
+  function selectGroup(name) {
+    for (const { group, button } of sections) {
+      const active = group.dataset.setting === name;
+      group.classList.toggle('hidden', !active);
+      button.setAttribute('aria-pressed', String(active));
+      if (active) button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+    settingsBody.scrollTop = 0;
+  }
+  selectGroup(groups.some((group) => group.dataset.setting === initialGroup) ? initialGroup : 'data');
 
   if (IS_TAURI) {
     getTauriDbPath().then((p) => { $('#set-dbpath').value = p; }).catch(() => {});
@@ -3543,7 +3837,7 @@ async function openSettingsModal() {
   }
   if (currentMode === 'local') refreshEncSection();
 
-  $('#btn-settings-cancel').addEventListener('click', closeModal);
+  $('#btn-settings-cancel').addEventListener('click', requestModalClose);
   // 启动锁开关：点击启用/停用，只影响本弹窗状态，保存时才落库
   let lockEnabled = !!s.pinHash;
   $('#set-agent-preset')?.addEventListener('change', (e) => {
@@ -3702,6 +3996,7 @@ async function openSettingsModal() {
       saveSettings(ns);
     }
     closeModal();
+    if (agentLayer) refreshAgentSetup();
     toast('设置已保存');
     if (!IS_TAURI) location.reload();
   });
@@ -3783,15 +4078,16 @@ async function showLockIfNeeded() {
     <div class="modal" style="max-width:340px;text-align:center">
       <div class="modal-head"><h3>${ICONS.lock} 密码本已锁定</h3><span></span></div>
       <div class="modal-body">
-        <input id="lock-pin" type="password" placeholder="输入 PIN" style="border:1px solid var(--line);border-radius:10px;padding:13px;font-size:17px;letter-spacing:4px;width:100%;text-align:center;outline:none" autocomplete="current-password" />
+        <input id="lock-pin" type="password" inputmode="numeric" aria-label="输入 PIN" placeholder="输入 PIN" style="border:1px solid var(--line);border-radius:10px;padding:13px;font-size:17px;letter-spacing:4px;width:100%;text-align:center;outline:none" autocomplete="current-password" />
         <p class="hint" id="lock-err" style="color:var(--danger)"></p>
       </div>
       <div class="modal-foot" style="justify-content:center">
-        ${s.bioUnlock !== false && (await Bio.available()) ? `<button class="btn" id="lock-bio" style="width:100%;margin-bottom:8px">${ICONS.lock} 指纹 / 面容解锁</button>` : ''}
+        <button class="btn hidden" id="lock-bio">${ICONS.lock} 生物识别解锁</button>
         <button class="btn primary" id="lock-go" style="width:100%">解锁</button>
       </div>
     </div>`;
-  document.body.appendChild(mask);
+  document.body.classList.add('vault-locked');
+  showDialog(mask, { lock: true, focus: '#lock-pin' });
   // v3.0.5：元素引用收敛到 mask 作用域（生物识别往返后全局 id 查询可能失效），并加空值防护
   const pinEl = () => mask.querySelector('#lock-pin');
   const errEl = () => mask.querySelector('#lock-err');
@@ -3801,8 +4097,7 @@ async function showLockIfNeeded() {
     if (!el) return;
     const hash = await sha256(el.value);
     if (hash === s.pinHash) {
-      unlocked = true;
-      document.querySelectorAll('.lock-mask').forEach((m) => m.remove()); // v3.0.7：清掉所有锁层
+      unlockVaultUi();
     } else if (errEl()) {
       errEl().textContent = 'PIN 错误';
     }
@@ -3815,14 +4110,23 @@ async function showLockIfNeeded() {
     btn.disabled = false;
     if (unlocked || !document.body.contains(mask)) return;
     if (ok) {
-      unlocked = true;
-      document.querySelectorAll('.lock-mask').forEach((m) => m.remove()); // v3.0.7：清掉所有锁层
+      unlockVaultUi();
     } else if (errEl()) errEl().textContent = '生物识别未通过，请输入 PIN';
     pinEl()?.focus();
   });
   mask.querySelector('#lock-go')?.addEventListener('click', tryUnlock);
-  pinEl()?.addEventListener('keydown', (e) => { if (e.key === 'Enter') tryUnlock(); });
-  pinEl()?.focus();
+  pinEl()?.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) tryUnlock(); });
+  if (s.bioUnlock !== false && await Bio.available()) mask.querySelector('#lock-bio')?.classList.remove('hidden');
+}
+
+function unlockVaultUi() {
+  unlocked = true;
+  if (!lockDialog) return;
+  const layer = lockDialog;
+  lockDialog = null;
+  layer.element.remove();
+  document.body.classList.remove('vault-locked');
+  removeUiLayer(layer);
 }
 
 /* ---------------- 搜索 / 排序 ---------------- */
@@ -4742,26 +5046,51 @@ async function agentSend() {
   }
 }
 
+let agentLayer = null;
 function setAgentPanel(show) {
   const panel = $('#agent-panel');
-  const wasHidden = panel.classList.contains('hidden');
-  if (show) panel.classList.remove('hidden');
-  else panel.classList.add('hidden');
-  if (show && wasHidden) history.pushState({ pb: 1 }, ''); // 打开时压一层，返回键先关面板
-  else if (!show && !wasHidden && history.state && history.state.pb) { pbSuppressPop = true; history.back(); }
+  if (show === !!agentLayer) return;
+  panel.classList.toggle('hidden', !show);
+  $('#btn-agent').setAttribute('aria-expanded', String(show));
+  if (show) {
+    agentLayer = addUiLayer(panel, { blocking: TOUCH_SHELL, dismiss: () => setAgentPanel(false) });
+    if (TOUCH_SHELL) {
+      panel.setAttribute('role', 'dialog');
+      panel.setAttribute('aria-modal', 'true');
+    }
+    syncUi();
+    (TOUCH_SHELL ? $('#agent-close') : $('#agent-input')).focus({ preventScroll: true });
+  } else {
+    removeUiLayer(agentLayer);
+    agentLayer = null;
+  }
 }
 
-$('#btn-agent').addEventListener('click', () => {
-  const panel = $('#agent-panel');
-  setAgentPanel(panel.classList.contains('hidden'));
+function refreshAgentSetup() {
   const cfg = loadAgentConfig();
-  if (!cfg.baseUrl || !cfg.model) {
-    const has = [...$('#agent-messages').children].some((x) => x.classList.contains('cfg-tip'));
-    if (!has) {
-      agentBubble('当前 AI 渠道未配置。打开 设置 → AI 助理，填入接口地址与模型名即可开始聊天存/查密码。', 'sys cfg-tip');
-    }
+  const missing = !cfg.baseUrl || !cfg.model;
+  const tip = $('#agent-messages .cfg-tip');
+  if (!missing) tip?.remove();
+  else if (!tip) agentBubble(
+    '配置模型后即可开始对话。<br><button class="btn agent-setup" type="button" data-agent-setup>配置 AI 渠道</button>',
+    'sys cfg-tip',
+  );
+}
+$('#btn-agent').addEventListener('click', () => {
+  setAgentPanel(!agentLayer);
+  if (agentLayer) refreshAgentSetup();
+});
+$('#agent-messages').addEventListener('click', (event) => {
+  if (event.target.closest('[data-agent-setup]')) {
+    openSettingsModal('ai');
+    return;
   }
-  $('#agent-input').focus();
+  const prompt = event.target.closest('[data-agent-prompt]');
+  if (prompt) {
+    const input = $('#agent-input');
+    input.value = prompt.dataset.agentPrompt;
+    input.focus();
+  }
 });
 $('#agent-close').addEventListener('click', () => setAgentPanel(false));
 
@@ -4778,21 +5107,13 @@ $('#agent-clear').addEventListener('click', () => {
   if (agentState.busy) agentState.abortController?.abort();
   agentState.messages = [];
   $('#agent-messages').innerHTML = AGENT_WELCOME_HTML;
+  refreshAgentSetup();
   agentStatus('');
 });
 
-// 系统返回键 / 浏览器后退：先关弹窗，再关面板，最后才是退出/离开
-window.addEventListener('popstate', () => {
-  const root = $('#modal-root');
-  if (root && root.children.length) { root.innerHTML = ''; return; } // 已由返回键弹出历史，无需再 back()
-  const panel = $('#agent-panel');
-  if (panel && !panel.classList.contains('hidden')) { panel.classList.add('hidden'); return; }
-  const gen = $('#gen-panel');
-  if (gen && !gen.classList.contains('hidden')) gen.classList.add('hidden');
-});
 $('#agent-send').addEventListener('click', agentSend);
 $('#agent-input').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); agentSend(); }
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); agentSend(); }
 });
 $('#agent-input').addEventListener('input', (e) => {
   e.target.style.height = 'auto';
@@ -5007,11 +5328,19 @@ const NOTE_SOURCE_LABEL = { manual: '手动', clipboard: '剪贴板', share: '�
 /** 切换页面级标签：外层显隐 + 记忆停留页；密码页 DOM/交互不动 */
 function setView(v) {
   if (!VIEW_KEYS.includes(v)) v = 'pass';
+  if (state.view !== v) {
+    if (mainDialog?.inspector) closeModal();
+    closeGenerator();
+    window.scrollTo(0, 0);
+  }
   state.view = v;
   try { localStorage.setItem(VIEW_LS_KEY, v); } catch { /* 忽略隐私模式 */ }
   for (const k of VIEW_KEYS) $('#view-' + k)?.classList.toggle('hidden', k !== v);
   document.querySelectorAll('#view-tabs .view-tab').forEach((b) => {
-    b.classList.toggle('active', b.dataset.view === v);
+    const active = b.dataset.view === v;
+    b.classList.toggle('active', active);
+    if (active) b.setAttribute('aria-current', 'page');
+    else b.removeAttribute('aria-current');
   });
   // v4.6.0：侧栏三页常驻——分类体系跨类型（密码/便签/文件同一套标签池与筛选）
   closeSidebarDrawer();
@@ -5067,7 +5396,7 @@ function renderNoteCard(n) {
   return `
   <article class="note-card" data-id="${n.id}" title="点击查看全文" style="cursor:pointer">
     <div class="note-head">
-      <span class="note-title">${escapeHtml(n.title || PassNotes.titleOf(n.content))}</span>
+      <button class="note-title record-link" type="button">${escapeHtml(n.title || PassNotes.titleOf(n.content))}</button>
       ${noteSrcBadge(n.source)}
     </div>
     <div class="note-content">${escapeHtml(n.content)}</div>
@@ -5106,7 +5435,7 @@ function openNoteDetail(note) {
       <button class="btn" id="btn-nd-copy">复制全文</button>
       <button class="btn primary" id="btn-nd-edit">编辑</button>
     </div>
-  `, true);
+  `, false, { inspector: true });
   $('#btn-nd-copy').addEventListener('click', () => {
     copyText(note.content).catch(() => toast('复制失败', true)); // copyText 自带成功 toast
   });
@@ -5147,8 +5476,8 @@ function openNoteModal(note) {
       <button class="btn" id="btn-note-cancel">取消</button>
       <button class="btn primary" id="btn-note-save">保存</button>
     </div>
-  `);
-  $('#btn-note-cancel').addEventListener('click', closeModal);
+  `, false, { page: true, draft: true, focus: '#note-f-title' });
+  $('#btn-note-cancel').addEventListener('click', requestModalClose);
   $('#btn-note-save').addEventListener('click', async () => {
     const content = $('#note-f-content').value;
     if (!content.trim()) return toast('正文不能为空', true);
@@ -5219,12 +5548,12 @@ async function handleQuickAction(action, payload) {
   if (action === 'unlock') {
     if (!s.pinHash) return { ok: true };
     if (payload && payload.hash === s.pinHash) {
-      unlocked = true;
-      document.querySelectorAll('.lock-mask').forEach((m) => m.remove()); // 同步撤掉主窗锁层
+      unlockVaultUi();
       return { ok: true };
     }
     return { ok: false };
   }
+  if (!vaultReady || (s.pinHash && !unlocked)) throw new Error('请先解锁密码本');
   if (action === 'search') {
     const q = String((payload && payload.q) || '').trim();
     let items;
@@ -5557,7 +5886,7 @@ function renderFileCard(f, ci) {
   <article class="note-card file-card" data-id="${f.id}" title="点击查看详情" style="cursor:pointer">
     <div class="note-head">
       ${fileIcon(f.mime, f.name)}
-      <span class="note-title">${escapeHtml(f.name)}</span>
+      <button class="note-title record-link" type="button">${escapeHtml(f.name)}</button>
       ${fileSrcBadge(f.source)}
       ${contentBadge}
     </div>
@@ -5640,7 +5969,7 @@ function openFileDetail(file) {
       <button class="btn" id="btn-fd-open">系统打开</button>
       <button class="btn primary" id="btn-fd-preview">${k === 'system' ? '打开' : '预览'}</button>
     </div><!-- foot-wrap：手机端四按钮换行不超宽 -->
-  `, true);
+  `, false, { inspector: true });
   $('#btn-fd-preview').addEventListener('click', () => openFilePreview(file));
   $('#btn-fd-open').addEventListener('click', () => systemOpenFile(file).catch((e) => toast(e.message, true)));
   $('#btn-fd-edit').addEventListener('click', () => openFileEditModal(file));
@@ -5680,8 +6009,8 @@ function openFileEditModal(file) {
       <button class="btn" id="btn-file-edit-cancel">取消</button>
       <button class="btn primary" id="btn-file-edit-save">保存</button>
     </div>
-  `);
-  $('#btn-file-edit-cancel').addEventListener('click', closeModal);
+  `, false, { page: true, draft: true, focus: '#file-f-name' });
+  $('#btn-file-edit-cancel').addEventListener('click', requestModalClose);
   $('#btn-file-edit-save').addEventListener('click', async () => {
     try {
       await LocalStore.fileUpdate(file.id, {
@@ -5745,7 +6074,7 @@ async function openFilePreview(file) {
       <button class="btn" id="btn-fp-open">系统打开</button>
       <button class="btn primary" id="btn-fp-close">关闭</button>
     </div>
-  `, true);
+  `, true, { page: true });
   $('#btn-fp-close').addEventListener('click', closeModal);
   $('#btn-fp-open').addEventListener('click', () => systemOpenFile(file).catch((e) => toast(e.message, true)));
   const box = $('#file-preview-box');
@@ -6435,11 +6764,12 @@ function openOverlayModal(html, wide = false, onClose) { // v4.0.0：onClose 关
   const mask = document.createElement('div');
   mask.className = 'modal-mask hint-mask';
   mask.innerHTML = `<div class="modal${wide ? ' wide' : ''}">${html}</div>`;
-  const close = () => { mask.remove(); if (onClose) try { onClose(); } catch (e) { } };
+  const close = () => { mask.remove(); removeUiLayer(layer); if (onClose) onClose(); };
   // v4.12.5：不再点背景关闭（防误触），只允许 X / data-close 按钮关
   mask.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', close));
   mask.querySelector('.modal-close')?.addEventListener('click', close);
-  document.body.appendChild(mask);
+  const layer = showDialog(mask, { dismiss: close });
+  layer.lockClose = close;
   return close;
 }
 function openHintModal(title, bodyHtml) {
@@ -6602,7 +6932,7 @@ async function openEntryQrModal(item) {
     const el = $('#qr-preview');
     if (el) { el.src = q.dataUrl; el.dataset.payload = text; }
     const cap = $('#qr-mode-cap');
-    if (cap) cap.textContent = mode === 'share' ? '分享模式：人类可读卡片（含明文密码）' : '迁移模式：PASSBOOK 载荷（全字段，机器可读）';
+    if (cap) cap.textContent = mode === 'share' ? '分享模式：人类可读卡片（含明文密码）' : '迁移模式：包含原始字段的 Base64 文本，未经加密';
     const ta = $('#qr-text');
     if (ta) ta.value = text;
   };
@@ -6663,11 +6993,11 @@ async function openEntryQrModal(item) {
       toast('复制图片失败' + (e && e.message ? '：' + e.message : '') + '，可用「保存图片」', true);
     }
   });
-  // v4.12.5：密文文本导出——无法传图片时复制载荷文本，对方「导入 → 粘贴文本」直接粘
+  // 复制条目文本——无法传图片时复制载荷文本，对方「导入 → 粘贴文本」直接粘
   $('#qr-copy-text').addEventListener('click', async () => {
     try {
       await copyText(payloadText());
-      toast('文本已复制（' + (mode === 'share' ? '分享卡片' : '迁移密文') + '）');
+      toast('文本已复制（' + (mode === 'share' ? '分享卡片' : '迁移文本') + '）');
     } catch (e) {
       toast('复制失败，可长按下方文本框手动复制', true);
     }

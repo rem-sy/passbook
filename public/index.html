@@ -25,13 +25,13 @@
       <span id="mode-badge" class="mode-badge" title="当前存储模式"></span>
     </div>
     <div class="top-actions">
-      <button id="btn-side-menu" class="icon-btn side-menu-btn" title="分类导航" aria-label="分类导航">
+      <button id="btn-side-menu" class="icon-btn side-menu-btn" title="分类导航" aria-label="打开分类" aria-controls="sidebar" aria-expanded="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></svg>
       </button>
       <button id="btn-guide" class="icon-btn" title="使用说明" aria-label="使用说明">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
       </button>
-      <button id="btn-agent" class="icon-btn" title="AI 助理：聊天管密码 / 便签 / 文件仓" aria-label="AI 助理">
+      <button id="btn-agent" class="icon-btn" title="AI 助理：聊天管密码 / 便签 / 文件仓" aria-label="AI 助理" aria-controls="agent-panel" aria-expanded="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
       </button>
       <button id="btn-settings" class="icon-btn" title="设置" aria-label="设置">
@@ -42,37 +42,39 @@
 
   <!-- 页面级三标签（v4.3.0）：密码 | 随手记 | 文件仓 -->
   <nav id="view-tabs" class="view-tabs" aria-label="页面导航">
-    <button class="view-tab active" data-view="pass">密码</button>
-    <button class="view-tab" data-view="notes">随手记</button>
-    <button class="view-tab" data-view="files">文件仓</button>
+    <button class="view-tab active" data-view="pass" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>密码</button>
+    <button class="view-tab" data-view="notes"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6m-6 4h6m-6 4h4"/></svg>随手记</button>
+    <button class="view-tab" data-view="files"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>文件仓</button>
   </nav>
 
   <!-- 分类侧栏（v2.7.0）：桌面常驻左侧，手机为抽屉 -->
   <div id="side-mask" class="side-mask"></div>
   <aside id="sidebar" class="sidebar" aria-label="分类导航">
-    <div class="side-head">分类</div>
+    <div id="sidebar-views"></div>
+    <div class="side-head">分类 <button id="btn-sidebar-close" type="button" class="icon-btn" aria-label="关闭分类">×</button></div>
     <nav id="sidebar-nav"></nav>
   </aside>
 
   <main class="container">
     <!-- 便签页（v4.3.0 随手记；v4.3.1 独立搜索框，与密码页顶栏搜索互不干扰） -->
     <section id="view-notes" class="view hidden">
-      <section class="toolbar card">
+      <section class="view-toolbar" aria-label="随手记工具栏">
+      <h2 class="view-heading">随手记</h2>
+      <div class="command-bar">
         <div class="search-row">
           <div class="search-wrap">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-            <input id="note-search" type="search" placeholder="搜索便签：多词模糊匹配 标题 / 正文 / 标签" autocomplete="off" />
+            <input id="note-search" type="search" aria-label="搜索便签" placeholder="搜索便签…" autocomplete="off" />
           </div>
         </div>
-        <div class="tb-lines">
-          <div class="tb-line">
-            <button id="btn-note-add" class="btn primary" title="新建便签">
+        <div class="command-actions">
+          <button id="btn-note-add" class="btn primary" title="新建便签">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
               <span class="tb-text">新建便签</span>
             </button>
-          </div>
         </div>
-      </section>
+      </div>
+    </section>
       <section class="list-head">
         <span id="note-count">共 0 条</span>
       </section>
@@ -85,19 +87,23 @@
 
     <!-- 文件仓页（v4.4.0：四通道收文件 + 独立搜索 + 文档预览） -->
     <section id="view-files" class="view hidden">
-      <section class="toolbar card">
+      <section class="view-toolbar" aria-label="文件仓工具栏">
+      <h2 class="view-heading">文件仓</h2>
+      <div class="command-bar">
         <div class="search-row">
           <div class="search-wrap">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-            <input id="file-search" type="search" placeholder="搜索文件：多词模糊匹配 名称 / 备注 / 标签 / 来源 / 正文内容" autocomplete="off" />
+            <input id="file-search" type="search" aria-label="搜索文件" placeholder="搜索文件…" autocomplete="off" />
           </div>
         </div>
-        <div class="tb-lines">
-          <div class="tb-line">
-            <button id="btn-files-import" class="btn primary" title="导入文件">
+        <div class="command-actions">
+          <button id="btn-files-import" class="btn primary" title="导入文件">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></svg>
               <span class="tb-text">导入文件</span>
             </button>
+<details class="command-menu">
+          <summary class="btn" aria-label="文件仓工具">更多 <span aria-hidden="true">⋯</span></summary>
+          <div class="command-options">
             <button id="btn-files-index" class="btn" title="为未索引文件抽取正文，建立内容检索索引">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
               <span class="tb-text">内容索引</span>
@@ -106,10 +112,12 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
               <span class="tb-text">体检</span>
             </button>
-            <label id="file-drop-zone" class="file-drop file-drop-zone" for="file-input-multi" title="拖拽文件到此处导入">拖拽文件到此处（或点击选择）<input type="file" id="file-input-multi" multiple hidden /></label>
           </div>
+        </details>
         </div>
-      </section>
+      </div>
+      <label id="file-drop-zone" class="file-drop file-drop-zone" for="file-input-multi" title="拖拽文件到此处导入">拖拽文件到此处（或点击选择）<input type="file" id="file-input-multi" multiple hidden /></label>
+    </section>
       <section class="list-head">
         <span id="file-count">共 0 个</span>
       </section>
@@ -215,57 +223,56 @@
     </section>
 
     <!-- 工具栏：搜索 + 分类 + 排序 -->
-    <section class="toolbar card">
-      <!-- v3.4.2 工具栏重排：搜索独立行 → 高频主操作 + 列表控制图标组 + ⋯溢出菜单 -->
-      <div class="search-row">
+    <section class="view-toolbar" aria-label="密码工具栏">
+      <h2 class="view-heading">密码</h2>
+      <div class="command-bar">
+        <div class="search-row">
         <div class="search-wrap">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-          <input id="search" type="search" placeholder="搜索：多词模糊匹配，支持 分类:工作、有验证码、无验证码" autocomplete="off" />
+          <input id="search" type="search" aria-label="搜索密码" placeholder="搜索密码…" autocomplete="off" />
         </div>
       </div>
-      <!-- v3.4.3 工具栏三排布局：录入数据行 / 生成体检行 / 列表控制行（按钮只搬位置不换 id） -->
-      <div class="tb-lines">
-        <div class="tb-line">
-          <button id="btn-manual-add" class="btn" title="手动录入密码条目">
+        <div class="command-actions">
+          <button id="btn-manual-add" class="btn primary" title="手动录入密码条目">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-            <span class="tb-text">手动录入</span>
+            <span class="tb-text">新建条目</span>
           </button>
-          <button id="btn-import" class="btn" title="导入密码数据">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            <span class="tb-text">导入</span>
-          </button>
-          <button id="btn-export" class="btn" title="导出密码数据">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-            <span class="tb-text">导出</span>
-          </button>
-        </div>
-        <div class="tb-line">
-          <button id="btn-gen-open" class="btn primary" title="生成强密码">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
-            <span class="tb-text">生成密码</span>
-          </button>
-          <button id="btn-watchtower" class="btn" title="检查重复/弱/泄露/陈旧密码">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
-            <span class="tb-text">安全体检</span>
-          </button>
-        </div>
-        <div class="tb-line">
-          <button id="btn-filter" class="btn" title="分类筛选（多选 + 任一/全部/排除）">
+<button id="btn-filter" class="btn" title="分类筛选（多选 + 任一/全部/排除）">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
             <span class="tb-text">筛选</span>
           </button>
-          <button id="btn-multiselect" class="btn" title="多选批量操作（桌面可 Ctrl+点击卡片）">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-            <span class="tb-text">多选</span>
+<details class="command-menu">
+          <summary class="btn" aria-label="密码工具">更多 <span aria-hidden="true">⋯</span></summary>
+          <div class="command-options">
+            <button id="btn-gen-open" class="btn" title="生成强密码">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+            <span class="tb-text">生成密码</span>
           </button>
-          <button id="btn-sort" class="btn" title="自定义列表排序">
+            <button id="btn-import" class="btn" title="导入密码数据">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <span class="tb-text">导入</span>
+          </button>
+            <button id="btn-export" class="btn" title="导出密码数据">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            <span class="tb-text">导出</span>
+          </button>
+            <button id="btn-watchtower" class="btn" title="检查重复/弱/泄露/陈旧密码">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+            <span class="tb-text">安全体检</span>
+          </button>
+            <button id="btn-sort" class="btn" title="自定义列表排序">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
             <span class="tb-text">排序</span>
           </button>
+            <button id="btn-multiselect" class="btn" title="多选批量操作（桌面可 Ctrl+点击卡片）">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+            <span class="tb-text">多选</span>
+          </button>
+          </div>
+        </details>
         </div>
       </div>
-      <div id="filter-chip" class="filter-chip hidden"></div>
-      <div id="sort-chip" class="filter-chip hidden"></div>
+      <div class="active-filters"><div id="filter-chip" class="filter-chip hidden"></div><div id="sort-chip" class="filter-chip hidden"></div></div>
     </section>
 
     <!-- 多选操作条（v3.4.0） -->
@@ -301,14 +308,14 @@
     <section id="entry-list" class="entry-list"></section>
     <section id="empty-state" class="empty hidden">
       <p>还没有密码记录</p>
-      <p class="sub">点击「生成密码」生成并保存，或点「导入」批量录入</p>
+      <p class="sub">新建第一条记录，或在更多工具中导入已有密码</p>
     </section>
     </div><!-- /view-pass -->
   </main>
 
   <!-- 弹窗 -->
   <div id="modal-root"></div>
-  <div id="toast-root"></div>
+  <div id="toast-root" role="status" aria-live="polite"></div>
 
   <!-- AI 助理聊天面板 -->
   <aside id="agent-panel" class="agent-panel hidden" aria-label="AI 助理">
@@ -329,16 +336,18 @@
       </button>
     </div>
     <div id="agent-messages" class="agent-messages">
-      <div class="agent-msg sys">你好，我是密码本的保险箱 AI 助理，用自然语言管理密码、便签和文件仓，例如：<br/>
-        · 「帮我存一下：GitHub，账户 tom@example.com，密码 Abc!2345，备注工作主力号」<br/>
-        · 「我 GitHub 的密码是什么？」「上周记的快递单号帮我找一下」<br/>
-        · 「文件仓里都有什么文件？」「保险箱总览」「体检报告讲了什么？」<br/>
-        · 「帮我记一条便签：周三交房租」「把 工作 标签改成 职场」「删掉快递单号那条便签」<br/>
-        查询结果会在下方卡片展示真实密码/便签全文/文件详情（可查看复制），密码与全文不会发给我；删除需你在确认卡上点确认。</div>
+      <div class="agent-msg sys agent-welcome">
+        <p>查找密码、便签和文件，或用一句话记录事项。</p>
+        <div class="agent-prompts">
+          <button class="btn" type="button" data-agent-prompt="最近有哪些便签？">查找便签</button>
+          <button class="btn" type="button" data-agent-prompt="文件仓中有哪些文件？">查找文件</button>
+        </div>
+        <p class="hint">发送的消息会交给所配置的模型渠道。查询返回的密码仅在应用中显示。</p>
+      </div>
     </div>
-    <div id="agent-status" class="agent-status hidden"></div>
+    <div id="agent-status" class="agent-status hidden" role="status"></div>
     <div class="agent-input-row">
-      <textarea id="agent-input" rows="1" placeholder="输入消息，Enter 发送（Shift+Enter 换行）"></textarea>
+      <textarea id="agent-input" rows="1" aria-label="输入消息" placeholder="输入消息…"></textarea>
       <button id="agent-send" class="btn primary icon-only" title="发送" aria-label="发送">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
       </button>
