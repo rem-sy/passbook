@@ -216,7 +216,7 @@ fn set_quickpanel_shortcut(_app: AppHandle, _accel: String) -> Result<(), String
 fn quick_panel_toggle(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("quick") {
         match w.is_visible() {
-            Ok(true) => { let _ = w.hide(); }
+            Ok(true) => quick_panel_hide(app.clone()),
             _ => quick_panel_show(app, &w),
         }
         return;
@@ -318,11 +318,13 @@ fn quick_panel_show(app: &AppHandle, w: &tauri::WebviewWindow) {
 #[cfg(not(desktop))]
 fn quick_panel_toggle(_app: &AppHandle) {}
 
-/// v4.10.0：快捷面板失焦自隐（前端 blur/Escape 调用）。
+/// 隐藏快捷面板，通知主窗重新检查后台锁。
 #[tauri::command]
 fn quick_panel_hide(app: AppHandle) {
     if let Some(w) = app.get_webview_window("quick") {
-        let _ = w.hide();
+        if matches!(w.is_visible(), Ok(true)) && w.hide().is_ok() {
+            let _ = app.emit_to("main", "vault-window-hidden", ());
+        }
     }
 }
 
@@ -376,9 +378,7 @@ fn quick_panel_open_main(app: AppHandle) {
         let _ = w.show();
         let _ = w.set_focus();
     }
-    if let Some(w) = app.get_webview_window("quick") {
-        let _ = w.hide();
-    }
+    quick_panel_hide(app);
 }
 
 /// v4.11.4：复制 PNG 图片到系统剪贴板（桌面 Windows）。
@@ -1496,13 +1496,18 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // v4.10.0：快捷面板小窗点关闭 = 隐藏（不销毁，Alt+P 再唤出）
-                if window.label() == "quick" {
-                    api.prevent_close();
-                    let _ = window.hide();
-                    return;
+            if window.label() == "quick" {
+                match event {
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        quick_panel_hide(window.app_handle().clone());
+                    }
+                    tauri::WindowEvent::Focused(false) => quick_panel_hide(window.app_handle().clone()),
+                    _ => {}
                 }
+                return;
+            }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // v4.10.0：主窗关闭默认最小化到托盘（设置可改为直接退出）
                 if window.label() == "main" {
                     let to_tray = window
@@ -1512,7 +1517,9 @@ pub fn run() {
                         .unwrap_or(true);
                     if to_tray {
                         api.prevent_close();
-                        let _ = window.hide();
+                        if window.hide().is_ok() {
+                            let _ = window.emit_to("main", "vault-window-hidden", ());
+                        }
                     }
                 }
             }

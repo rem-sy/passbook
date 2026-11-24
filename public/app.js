@@ -1961,21 +1961,37 @@ function scheduleClipboardClear() {
 function doAutoLock() {
   if (!loadSettings().pinHash || lockDialog) return;
   unlocked = false;
+  notifyQuickGate();
   for (const layer of [...uiLayers].reverse()) layer.lockClose?.();
   closeModal();
   setAgentPanel(false);
   closeGenerator();
   closeSidebarDrawer();
   agentState.abortController?.abort();
+  for (const controller of quickStreams.values()) controller.abort();
   refreshList();
   showLockIfNeeded();
 }
 
-setInterval(() => {
-  if (PassLock.shouldLock({ lastActivity: lastUserActivity, now: Date.now(), hidden: document.hidden, cfg: loadSettings().lock })) doAutoLock();
-}, 5000);
+async function checkAutoLock() {
+  const { pinHash, lock } = loadSettings();
+  if (!pinHash || !unlocked) return;
+  let hidden = document.hidden;
+  if (lock?.autoLock === 'hidden' && IS_TAURI && !IS_ANDROID) {
+    try {
+      const windows = await window.__TAURI__.window.getAllWindows();
+      const vaultWindows = windows.filter((win) => win.label === 'main' || win.label === 'quick');
+      const visible = await Promise.all(vaultWindows.map(async (win) => (await win.isVisible()) && !(await win.isMinimized())));
+      hidden = !visible.some(Boolean);
+    } catch { hidden = document.hidden; }
+    if (loadSettings().lock?.autoLock !== 'hidden') return;
+  }
+  if (PassLock.shouldLock({ lastActivity: lastUserActivity, hidden, cfg: lock })) doAutoLock();
+}
+
+setInterval(checkAutoLock, 5000);
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && PassLock.shouldLock({ hidden: true, cfg: loadSettings().lock })) doAutoLock();
+  if (document.hidden && loadSettings().lock?.autoLock === 'hidden') checkAutoLock();
 });
 
 /* ---------------- 主题（v1.6.0） ---------------- */
@@ -4035,6 +4051,7 @@ async function openSettingsModal(initialGroup) {
       };
       saveSettings(ns);
     }
+    if (s.pinHash !== ns.pinHash) notifyQuickGate();
     closeModal();
     if (agentLayer) refreshAgentSetup();
     toast('设置已保存');
@@ -4103,7 +4120,7 @@ async function openSettingsModal(initialGroup) {
 $('#btn-settings').addEventListener('click', openSettingsModal);
 
 /* ---------------- 启动锁 ---------------- */
-let unlocked = false;
+let unlocked = !loadSettings().pinHash;
 
 async function showLockIfNeeded() {
   const s = loadSettings();
@@ -4136,7 +4153,8 @@ async function showLockIfNeeded() {
     const el = pinEl();
     if (!el) return;
     const hash = await sha256(el.value);
-    if (hash === s.pinHash) {
+    if (!mask.isConnected || unlocked) return;
+    if (hash === loadSettings().pinHash) {
       unlockVaultUi();
     } else if (errEl()) {
       errEl().textContent = 'PIN 错误';
@@ -4161,6 +4179,8 @@ async function showLockIfNeeded() {
 
 function unlockVaultUi() {
   unlocked = true;
+  lastUserActivity = Date.now();
+  notifyQuickGate();
   if (!lockDialog) return;
   const layer = lockDialog;
   lockDialog = null;
@@ -5579,19 +5599,28 @@ async function setupQuickNoteShortcut() {
  * 由主窗在内存权威库上代执行，结果 emitTo 回 quick 窗口（id 配对）。 */
 let vaultReady = false; // initStore 完成后置 true（gate 据此判断面板可否进入）
 const quickStreams = new Map(); // sid → AbortController（面板 AI 流的停止通道）
+// 主窗重载后版本号仍增加，避免面板误判新的锁状态为过期响应。
+let quickGateVersion = Math.trunc(performance.timeOrigin * 1000);
+
+function quickGate() {
+  return { ready: vaultReady, available: true, needsPin: !!loadSettings().pinHash, unlocked, version: quickGateVersion };
+}
+
+function notifyQuickGate() {
+  if (!(IS_TAURI && !IS_ANDROID)) return;
+  quickGateVersion++;
+  window.__TAURI__.event.emitTo('quick', 'quick-gate-changed', quickGate()).catch(() => {});
+}
 
 async function handleQuickAction(action, payload) {
   const s = loadSettings();
   if (action === 'gate') {
-    return { ready: vaultReady, available: true, needsPin: !!s.pinHash, unlocked };
+    return quickGate();
   }
   if (action === 'unlock') {
-    if (!s.pinHash) return { ok: true };
-    if (payload && payload.hash === s.pinHash) {
-      unlockVaultUi();
-      return { ok: true };
-    }
-    return { ok: false };
+    const ok = vaultReady && (!s.pinHash || payload?.hash === s.pinHash);
+    if (ok) unlockVaultUi();
+    return { ok, gate: quickGate() };
   }
   if (!vaultReady || (s.pinHash && !unlocked)) throw new Error('请先解锁密码本');
   if (action === 'search') {
@@ -5679,12 +5708,6 @@ async function handleQuickAction(action, payload) {
 async function setupQuickPanelBridge() {
   if (!(IS_TAURI && !IS_ANDROID)) return;
   const evt = window.__TAURI__.event;
-  try {
-    await tauriInvoke('set_quickpanel_shortcut', { accel: loadSettings().quickPanelShortcut || 'Alt+P' });
-  } catch (e) { console.warn('[passbook] 快捷面板快捷键不可用', e); }
-  try {
-    await tauriInvoke('set_tray_mode', { enabled: loadSettings().closeToTray !== false });
-  } catch { /* 尽力而为（旧版本命令缺失等） */ }
   await evt.listen('quick-request', async (ev) => {
     const req = ev.payload || {};
     let r;
@@ -5700,6 +5723,18 @@ async function setupQuickPanelBridge() {
   });
   // 托盘菜单「锁定」：与自动锁定同一管线（未启用 PIN 则无锁可上）
   await evt.listen('pb-lock', () => doAutoLock());
+  await evt.listen('quick-activity', () => {
+    if (unlocked) lastUserActivity = Date.now();
+  });
+  await evt.listen('vault-window-hidden', () => {
+    if (loadSettings().lock?.autoLock === 'hidden') checkAutoLock();
+  });
+  try {
+    await tauriInvoke('set_quickpanel_shortcut', { accel: loadSettings().quickPanelShortcut || 'Alt+P' });
+  } catch (e) { console.warn('[passbook] 快捷面板快捷键不可用', e); }
+  try {
+    await tauriInvoke('set_tray_mode', { enabled: loadSettings().closeToTray !== false });
+  } catch { /* 尽力而为（旧版本命令缺失等） */ }
 }
 
 function openQuickNoteConfirm(text) {
@@ -6559,14 +6594,17 @@ async function injectShotDemo() {
 
 (async function boot() {
   try {
+    setupQuickPanelBridge().catch((e) => console.warn('[passbook] 快捷面板连接失败', e));
     // 截图/深链演示分支：#shot-notes / #shot-files 强制本地模式（便签/文件仓为本地功能，截图走空库+演示注入）
     if (/^#shot-(notes|files)/.test(location.hash)) {
       try { const s = loadSettings(); s.storageMode = 'local'; saveSettings(s); } catch { /* 忽略 */ }
     }
     // 先过启动锁（PIN），再自动解锁加密库（本机密钥，无感），最后加载数据渲染
+    notifyQuickGate();
     await showLockIfNeeded();
     await initStore();
     vaultReady = true; // v4.10.0：快捷面板 gate 依据（初始化完才放行面板操作）
+    notifyQuickGate();
     await refreshChips();
     // v4.3.0：恢复上次停留页（默认密码页）
     let startView = 'pass';
@@ -6578,7 +6616,6 @@ async function injectShotDemo() {
     await consumePendingFiles();
     await injectShotDemo(); // 截图深链演示注入（非截图场景为 no-op）
     setupQuickNoteShortcut();
-    setupQuickPanelBridge(); // v4.10.0：快捷面板（Alt+P）+ 托盘模式同步
     maybeShowChangelog(); // v4.12.4：更新后首次启动弹"本次更新内容"公告
     // v4.9.0 启动静默检查更新（桌面每次启动；手机 24h 节流；失败静默不打扰）
     if (IS_TAURI) {

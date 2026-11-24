@@ -1,6 +1,7 @@
 // E2E 复现：快捷面板（quick.html）在 mock Tauri 桥下的渲染与交互
-// 用途：回归 v4.11.1 的搜索卡片文字渲染 / 失焦行为 / 生成与导入链路
+// 覆盖搜索、PIN 锁联动、生成、导入和 AI 对话。
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
@@ -29,6 +30,12 @@ const MOCK = `<script>
 window.__ITEMS = ${JSON.stringify(ITEMS)};
 window.__evtCbs = [];
 window.__streamRound = 0;
+window.__gate = { ready: true, available: true, needsPin: false, unlocked: true, version: 0 };
+window.__setGate = (patch) => {
+  Object.assign(window.__gate, patch);
+  window.__gate.version++;
+  window.__TAURI__.event.emit('quick-gate-changed', { ...window.__gate });
+};
 window.__TAURI__ = {
   core: {
     invoke: async (cmd, args) => {
@@ -40,7 +47,7 @@ window.__TAURI__ = {
     emit: (event, payload) => {
       if (event === 'quick-request') {
         const req = payload || {};
-        if (req.action === 'agent:http-stream') {
+        if (req.action === 'agent:http-stream' && window.__gate.unlocked && !window.__rejectStream) {
           // v4.12.1 化 mock：真正跑 __mockStream 并按 sid 定向回推 quick-ai-stream（镜像主窗转发逻辑）
           // 同时立即 respond（镜像主窗 await 整流后 return，但 done 先于 return；这里加速 respond 模拟 quick-response 快速返回也行，关键是事件流）
           window.__mockStream(req.payload || {});
@@ -51,10 +58,12 @@ window.__TAURI__ = {
           return;
         }
         const r = (window.__mockHandle || (() => ({ ok: false, error: 'no mock' })))(payload);
-        setTimeout(() => { (window.__evtCbs || []).forEach((it) => { if (it.event === 'quick-response') { try { it.cb({ event: 'quick-response', payload: r }); } catch (e) {} } }); }, 0);
+        const delay = req.action === 'gate' ? window.__gateDelay : req.action === 'search' ? window.__searchDelay : 0;
+        setTimeout(() => window.__TAURI__.event.emit('quick-response', r), delay || 0);
         return;
       }
       if (event === 'quick-ai-abort') { window.__mockAbort = payload.sid; return; }
+      if (event === 'quick-activity') { window.__activity = (window.__activity || 0) + 1; }
       for (const it of (window.__evtCbs || [])) if (it.event === event) { try { it.cb({ event, payload }); } catch (e) {} }
     },
     listen: async (event, cb) => {
@@ -90,7 +99,13 @@ window.__mockStream = function (p) {
 };
 window.__mockHandle = function (req) {
   const { id, action, payload } = req || {};
-  if (action === 'gate') return { id, ok: true, data: { ready: true, available: true, needsPin: false, unlocked: true } };
+  if (action === 'gate') return { id, ok: true, data: { ...window.__gate } };
+  if (action === 'unlock') {
+    const ok = payload.hash === ${JSON.stringify(createHash('sha256').update('2468').digest('hex'))};
+    if (ok) window.__setGate({ unlocked: true });
+    return { id, ok: true, data: { ok, gate: { ...window.__gate } } };
+  }
+  if (!window.__gate.unlocked || action === 'agent:http-stream') return { id, ok: false, error: '请先解锁密码本' };
   if (action === 'search') {
     // 镜像主窗 handleQuickAction 修复后的逻辑（含 PassSearch 包装解包；searchEntries 空查询返回 null）
     const q = String((payload || {}).q || '').trim();
@@ -118,7 +133,6 @@ window.__mockHandle = function (req) {
     }
     return { id, ok: false, error: 'mock 不支持的工具 ' + name };
   }
-  if (action === 'unlock') return { id, ok: true, data: { ok: true } };
   return { id, ok: false, error: '未知操作 ' + action };
 };
 </script>`;
@@ -254,6 +268,10 @@ try {
   assert(await ev("!!document.querySelector('[data-ai-pw]')"), '查询结果卡片含真实密码复制按钮（隐私分级：打码+主动复制）');
   const cardPw = await ev("(document.querySelector('[data-ai-pw]')||{}).dataset ? document.querySelector('[data-ai-pw]').dataset.aiPw : ''");
   assert(cardPw === 'Wx#2024happy', '卡片密码值正确（' + cardPw + '）');
+  await ev("window.__rejectStream=true; document.querySelector('#ai-input').value='查询密码'; document.querySelector('#ai-send').click()");
+  await sleep(200);
+  assert(await ev("!document.querySelector('#ai-send').classList.contains('hidden')"), 'AI 请求被锁拒绝后可继续操作');
+  await ev("window.__rejectStream=false");
   // 未配置渠道时的提示（清掉配置再发一轮）
   await ev("localStorage.removeItem('passbook-agent')");
   await ev("document.getElementById('ai-input').value='在吗'");
@@ -267,6 +285,37 @@ try {
   await sleep(200);
   assert(await ev("!!document.getElementById('ai-clear')"), '清空对话按钮存在');
   assert(await ev("document.getElementById('ai-log').children.length === 0"), '清空后对话记录为空');
+
+  // —— PIN 锁同步：拒绝错误 PIN、保留输入、忽略过期响应并清除敏感卡片 ——
+  await ev("document.querySelector('.q-tabs [data-tab=search]').click(); window.__setGate({needsPin:true})");
+  assert(await ev("!document.querySelector('#q-app').classList.contains('hidden')"), '已解锁时启用 PIN 不弹锁屏');
+  await ev("document.querySelector('#q-search').dispatchEvent(new KeyboardEvent('keydown', {key:'a', bubbles:true}))");
+  assert(await ev("window.__activity === 1"), '面板活动上报主窗口');
+  await ev("window.__searchDelay=550; document.querySelector('#q-search').dispatchEvent(new Event('input')); document.querySelector('#ai-log').textContent='缓存的查询结果';");
+  await sleep(220);
+  await ev("window.__setGate({unlocked:false}); window.__originalPin=document.querySelector('#q-pin'); window.__originalPin.value='24'; dispatchEvent(new Event('focus'))");
+  await sleep(580);
+  assert(await ev("!document.querySelector('#q-results').children.length && !document.querySelector('#ai-log').children.length && !document.querySelector('#ai-log').textContent"), '锁定清理卡片及 AI 查询结果，旧搜索响应不会恢复卡片');
+  assert(await ev("document.querySelector('#q-pin') === window.__originalPin && window.__originalPin.value === '24'"), '重新聚焦保留 PIN 输入');
+  await ev("window.__originalPin.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}))");
+  await sleep(100);
+  assert(await ev("document.querySelector('#q-pin-err').textContent === 'PIN 错误'"), '错误 PIN 仍停留在锁屏');
+  await ev("window.__searchDelay=0; window.__originalPin.value='2468'; window.__originalPin.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}))");
+  await sleep(180);
+  assert(await ev("!document.querySelector('#q-pin') && document.querySelectorAll('#q-results .q-item').length === 3"), '面板输入正确 PIN 后直接显示密码列表');
+  await ev("window.__setGate({unlocked:false}); window.__gateDelay=280; dispatchEvent(new Event('focus'))");
+  await sleep(80);
+  await ev("window.__setGate({unlocked:true})");
+  await sleep(350);
+  assert(await ev("!document.querySelector('#q-pin') && document.querySelectorAll('#q-results .q-item').length === 3"), '主窗口解锁后面板忽略过期的锁定响应');
+  await ev("window.__gateDelay=0; dispatchEvent(new Event('focus'))");
+  await sleep(120);
+  assert(await ev("!document.querySelector('#q-pin')"), '重新打开已解锁面板不会再次要求 PIN');
+  await ev("window.__setGate({ready:false, unlocked:false})");
+  assert(await ev("!!document.querySelector('.q-spinner') && document.querySelector('#q-app').classList.contains('hidden')"), '主窗口重载时自动进入等待界面');
+  await ev("window.__setGate({ready:true})");
+  assert(await ev("!!document.querySelector('#q-pin')"), '主窗口就绪后自动显示启动锁');
+  await ev("window.__setGate({unlocked:true})");
 
   // —— 截图存证 ——
   await ev("document.querySelector('.q-tabs [data-tab=search]').click()");

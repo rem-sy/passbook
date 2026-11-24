@@ -13,8 +13,9 @@
   /* ---------- 与主窗的请求桥（id 配对） ---------- */
   const pending = new Map();
   let seq = 0;
-  function callMain(action, payload, timeoutMs) {
-    if (!IS_TAURI) return Promise.reject(new Error('快捷面板需在桌面应用内使用'));
+  async function callMain(action, payload, timeoutMs) {
+    if (!IS_TAURI) throw new Error('快捷面板需在桌面应用内使用');
+    await responseListener;
     const id = 'q' + (++seq);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -22,20 +23,22 @@
         reject(new Error('主窗口响应超时'));
       }, timeoutMs || 5000);
       pending.set(id, { resolve, reject, timer });
-      window.__TAURI__.event.emit('quick-request', { id, action, payload: payload || {} });
+      Promise.resolve().then(() => window.__TAURI__.event.emit('quick-request', { id, action, payload: payload || {} })).catch((e) => {
+        pending.delete(id);
+        clearTimeout(timer);
+        reject(e);
+      });
     });
   }
-  if (IS_TAURI) {
-    window.__TAURI__.event.listen('quick-response', (ev) => {
-      const r = ev.payload || {};
-      const p = pending.get(r.id);
-      if (!p) return;
-      pending.delete(r.id);
-      clearTimeout(p.timer);
-      if (r.ok) p.resolve(r.data);
-      else p.reject(new Error(r.error || '操作失败'));
-    });
-  }
+  const responseListener = IS_TAURI ? window.__TAURI__.event.listen('quick-response', (ev) => {
+    const r = ev.payload || {};
+    const p = pending.get(r.id);
+    if (!p) return;
+    pending.delete(r.id);
+    clearTimeout(p.timer);
+    if (r.ok) p.resolve(r.data);
+    else p.reject(new Error(r.error || '操作失败'));
+  }) : null;
 
   /* ---------- 设置（与主窗同 profile 共享 localStorage） ---------- */
   function loadSettings() {
@@ -87,7 +90,9 @@
   const SVG_COPY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
 
   /* ---------- PIN 门 / 视图状态 ---------- */
-  let gateState = null;
+  let currentGateView = null;
+  let gateVersion = -1;
+  let gateRequest = 0;
 
   function esc(s) {
     return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -108,7 +113,8 @@
         '<button class="btn primary" id="q-pin-go">解锁</button>' +
         '<p class="q-gate-hint">与主界面启动锁为同一把锁，解锁后两边同时解锁。</p>';
     } else {
-      box.innerHTML = '<h3 class="q-gate-title">快捷面板不可用</h3><p class="q-hint">请从桌面应用主界面使用。</p>';
+      box.innerHTML = '<h3 class="q-gate-title">快捷面板不可用</h3>' +
+        (IS_TAURI ? '<button class="btn" id="q-gate-open">打开主界面</button>' : '<p class="q-hint">请从桌面应用主界面使用。</p>');
     }
     $('q-pin')?.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) tryPinUnlock(); });
     $('q-pin-go')?.addEventListener('click', tryPinUnlock);
@@ -116,46 +122,72 @@
     if (view === 'pin') $('q-pin').focus();
   }
 
-  async function refreshGate() {
-    let view = 'ready';
-    try {
-      gateState = await callMain('gate');
-      view = PassQuick.gateView(gateState);
-    } catch {
-      view = 'unavailable';
-    }
+  function showGate(view) {
+    if (view === currentGateView) return;
+    const wasReady = currentGateView === 'ready';
+    currentGateView = view;
     const gate = $('q-gate');
     const app = $('q-app');
     if (view === 'ready') {
       gate.classList.add('hidden');
+      $('q-gate-box').replaceChildren();
       app.classList.remove('hidden');
       $('q-rsz').classList.remove('hidden');
       const mode = document.querySelector('.q-tabs .on')?.dataset.tab;
       const input = {search: 'q-search', gen: 'q-gen-len', import: 'q-import-text', ai: 'ai-input'}[mode];
       if (input && !app.contains(document.activeElement)) $(input).focus();
+      runSearch();
     } else {
       app.classList.add('hidden');
       $('q-rsz').classList.add('hidden');
+      if (wasReady) {
+        ++searchRequest;
+        clearTimeout(searchTimer);
+        lastResults = [];
+        $('q-results').replaceChildren();
+        clearAi();
+      }
       gate.classList.remove('hidden');
       renderGateBox(view);
+    }
+  }
+
+  function applyGate(state) {
+    const version = state.version ?? 0;
+    if (version < gateVersion) return;
+    gateVersion = version;
+    ++gateRequest;
+    showGate(PassQuick.gateView(state));
+  }
+
+  async function refreshGate() {
+    const request = ++gateRequest;
+    try {
+      const state = await callMain('gate');
+      if (request === gateRequest) applyGate(state);
+    } catch {
+      if (request === gateRequest) showGate('unavailable');
     }
   }
 
   async function tryPinUnlock() {
     const pinEl = $('q-pin');
     const errEl = $('q-pin-err');
-    if (!pinEl || !pinEl.value) return;
-    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pinEl.value));
-    const hash = [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    const submit = $('q-pin-go');
+    if (!pinEl?.value || submit.disabled) return;
+    submit.disabled = true;
+    errEl.textContent = '';
     try {
-      const r = await callMain('unlock', { hash });
-      if (r && r.ok) {
-        pinEl.value = '';
-        await refreshGate();
-        runSearch();
-      } else if (errEl) errEl.textContent = 'PIN 错误';
+      const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pinEl.value));
+      const hash = [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+      if (!pinEl.isConnected) return;
+      const reply = await callMain('unlock', { hash });
+      applyGate(reply.gate);
+      if (!reply.ok && errEl.isConnected) errEl.textContent = 'PIN 错误';
     } catch (e) {
-      if (errEl) errEl.textContent = e.message;
+      if (errEl.isConnected) errEl.textContent = e.message;
+    } finally {
+      submit.disabled = false;
     }
   }
 
@@ -184,6 +216,7 @@
 
   /* ---------- 搜索 ---------- */
   let searchTimer = null;
+  let searchRequest = 0;
   let lastResults = [];
   $('q-search').addEventListener('input', () => {
     clearTimeout(searchTimer);
@@ -191,14 +224,22 @@
   });
 
   async function runSearch() {
+    if (currentGateView !== 'ready') return;
+    const request = ++searchRequest;
     const q = $('q-search').value.trim();
     const wrap = $('q-results');
     try {
       const r = await callMain('search', { q });
+      if (request !== searchRequest) return;
       lastResults = PassQuick.trimResults(r.items, 30);
       renderResults();
     } catch (e) {
-      wrap.innerHTML = '<div class="q-empty">' + (e.message || '搜索失败') + '</div>';
+      if (request !== searchRequest) return;
+      lastResults = [];
+      const empty = document.createElement('div');
+      empty.className = 'q-empty';
+      empty.textContent = e.message || '搜索失败';
+      wrap.replaceChildren(empty);
     }
   }
 
@@ -234,7 +275,7 @@
       else if (btn.dataset.copyAc) await copyText(it.account);
       else {
         const { code } = await PassTotp.generateTotp(it.totp_secret);
-        await copyText(code);
+        if (btn.isConnected) await copyText(code);
       }
     } catch (err) { msg(err.message, true); }
   });
@@ -354,12 +395,18 @@
     const onAbort = () => {
       err = new Error('已停止');
       resolveDone();
-      try { window.__TAURI__.event.emit('quick-ai-abort', { sid }); } catch { /* 尽力而为 */ }
+      Promise.resolve(window.__TAURI__.event.emit('quick-ai-abort', { sid })).catch(() => {});
     };
-    if (signal) signal.addEventListener('abort', onAbort);
-    try {
-      await callMain('agent:http-stream', { sid, url, method: opts.method || 'POST', headers: opts.headers || {}, body: opts.body }, 300000);
-    } catch (e) { if (!err) err = e; }
+    if (signal?.aborted) {
+      unlisten();
+      throw new Error('已停止');
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+    callMain('agent:http-stream', { sid, url, method: opts.method || 'POST', headers: opts.headers || {}, body: opts.body }, 300000)
+      .catch((e) => {
+        if (!err) err = e;
+        resolveDone();
+      });
     await done;
     signal?.removeEventListener('abort', onAbort);
     try { unlisten(); } catch { /* 忽略 */ }
@@ -374,7 +421,9 @@
 
   /** 工具执行：转发主窗 executor；真实结果随响应带回渲染卡片（不回传 AI 渠道） */
   async function aiExec(name, args) {
+    const signal = aiState.abort?.signal;
     const r = await callMain('agent:exec', { name, args }, 15000);
+    if (signal?.aborted) throw new Error('已停止');
     for (const d of (r && r.displays) || []) renderAiCard(d);
     return (r && r.result) || { error: '无结果' };
   }
@@ -488,7 +537,7 @@
         if (btn.dataset.aiPw !== undefined) await copyText(btn.dataset.aiPw);
         else if (btn.dataset.aiTotp !== undefined) {
           const { code } = await PassTotp.generateTotp(btn.dataset.aiTotp);
-          await copyText(code);
+          if (btn.isConnected) await copyText(code);
         }
       } catch (err) { msg(err.message, true); }
     });
@@ -500,7 +549,7 @@
   async function aiSend() {
     const input = $('ai-input');
     const text = input.value.trim();
-    if (!text || aiState.busy) return;
+    if (currentGateView !== 'ready' || !text || aiState.busy) return;
     const cfg = loadAgentConfigRaw();
     if (!cfg.baseUrl || !cfg.model) {
       aiBubble('AI 渠道未配置：请到主界面「设置 → AI 助理」填写接口地址与模型名（可点「获取模型列表」选择），保存后回来即可对话。', 'assistant error');
@@ -561,13 +610,13 @@
   $('ai-stop').addEventListener('click', () => {
     if (aiState.abort) aiState.abort.abort(); // abort → 主窗 quickStreams 中止底层流
   });
-  $('ai-clear').addEventListener('click', () => {
-    if (aiState.busy && aiState.abort) aiState.abort.abort();
-    aiState.messages.length = 0;
-    $('ai-log').innerHTML = '';
+  function clearAi() {
+    aiState.abort?.abort();
+    aiState.messages = [];
+    $('ai-log').replaceChildren();
     $('ai-input').value = '';
-    aiScroll();
-  });
+  }
+  $('ai-clear').addEventListener('click', clearAi);
   $('ai-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
       e.preventDefault();
@@ -584,6 +633,14 @@
   });
 
   window.addEventListener('focus', () => refreshGate());
+  let lastActivityReport = 0;
+  for (const event of ['pointerdown', 'keydown', 'wheel']) {
+    document.addEventListener(event, () => {
+      if (!IS_TAURI || currentGateView !== 'ready' || Date.now() - lastActivityReport < 1000) return;
+      lastActivityReport = Date.now();
+      Promise.resolve(window.__TAURI__.event.emit('quick-activity')).catch(() => {});
+    }, { passive: true, capture: true });
+  }
 
   /* ---------- 右下角自定义缩放 + 尺寸记忆 ---------- */
   (function bindResize() {
@@ -620,5 +677,12 @@
   /* ---------- 启动 ---------- */
   applyTheme();
   loadGenPrefs();
-  refreshGate().then(() => { if (PassQuick.gateView(gateState) === 'ready') runSearch(); });
+  showGate('loading');
+  (async () => {
+    if (IS_TAURI) {
+      await responseListener;
+      await window.__TAURI__.event.listen('quick-gate-changed', (ev) => applyGate(ev.payload));
+    }
+    await refreshGate();
+  })().catch(() => showGate('unavailable'));
 })();
