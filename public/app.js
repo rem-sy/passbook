@@ -1374,8 +1374,10 @@ function renderEntries(items, hitsMap) {
           ${faviconSlot(it)}
           <div class="entry-main">
             <div class="entry-title">
-              <button class="entry-fav ${it.fav ? 'active' : ''}" data-act="fav" title="${it.fav ? '取消收藏' : '收藏'}">${it.fav ? ICONS.starFill : ICONS.star}</button>
-              <button type="button" class="entry-owner entry-open" data-act="details">${hl('owner', it.id, it.owner)}</button>
+              <div class="entry-heading">
+                <button class="entry-fav ${it.fav ? 'active' : ''}" data-act="fav" title="${it.fav ? '取消收藏' : '收藏'}">${it.fav ? ICONS.starFill : ICONS.star}</button>
+                <button type="button" class="entry-owner entry-open" data-act="details">${hl('owner', it.id, it.owner)}</button>
+              </div>
               ${cat}
               ${attachBadge}
             </div>
@@ -1457,39 +1459,55 @@ setInterval(async () => {
   }
 }, 1000);
 
+let entryDetailRequest = 0;
 $('#entry-list').addEventListener('click', async (e) => {
+  const card = e.target.closest('.entry');
+  if (!card) return;
+  const id = Number(card.dataset.id);
+  const btn = e.target.closest('button[data-act]');
+  const act = btn?.dataset.act;
   // v3.4.0 多选：多选模式下点卡片任意处（除操作按钮/链接）=切换勾选；
   // 桌面 ctrl/cmd+点击卡片可直接把单张加入多选（自动进入多选模式）
-  const card0 = e.target.closest('.entry');
-  if (card0 && !e.target.closest('button[data-act]') && !e.target.closest('a')) {
+  if (!act || act === 'details') {
+    if (!btn && e.target.closest('a, button, input, textarea, select, label')) return;
     if (state.multiSelect) {
-      const id = Number(card0.dataset.id);
       if (state.selectedIds.has(id)) state.selectedIds.delete(id); else state.selectedIds.add(id);
-      card0.classList.toggle('ms-checked', state.selectedIds.has(id));
-      card0.querySelector('.ms-check').innerHTML = state.selectedIds.has(id)
-        ? '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>'
-        : '';
+      card.classList.toggle('ms-checked', state.selectedIds.has(id));
+      const check = card.querySelector('.ms-check');
+      if (check) {
+        check.innerHTML = state.selectedIds.has(id)
+          ? '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>'
+          : '';
+      }
       msUpdateBar();
       return;
     }
-    if ((e.ctrlKey || e.metaKey) && !e.target.closest('input,textarea')) {
+    if (e.ctrlKey || e.metaKey) {
       state.multiSelect = true;
-      state.selectedIds = new Set([Number(card0.dataset.id)]);
+      state.selectedIds = new Set([id]);
       $('#btn-multiselect')?.classList.add('active');
       refreshList();
       msUpdateBar();
       return;
     }
+    const selection = window.getSelection();
+    if (!btn && selection?.type === 'Range' && card.contains(selection.anchorNode)) return;
+    const request = ++entryDetailRequest;
+    const layer = topUiLayer();
+    try {
+      const { items } = await store.list({});
+      if (request !== entryDetailRequest || layer !== topUiLayer() || state.view !== 'pass' || state.multiSelect || lockDialog) return;
+      const item = items.find((row) => row.id === id);
+      if (item) {
+        card.querySelector('.entry-open')?.focus({ preventScroll: true });
+        openEntryDetail(item);
+      }
+    } catch (err) {
+      if (request === entryDetailRequest) toast(err.message, true);
+    }
+    return;
   }
-  const btn = e.target.closest('button[data-act]');
-  if (!btn) return;
-  const card = btn.closest('.entry');
-  const id = Number(card.dataset.id);
-  const act = btn.dataset.act;
-  if (act === 'details') {
-    const item = (await store.list({})).items.find((row) => row.id === id);
-    if (item) openEntryDetail(item);
-  } else if (act === 'toggle') {
+  if (act === 'toggle') {
     const pw = card.querySelector('.pw-masked');
     if (pw.classList.contains('revealed')) {
       pw.classList.remove('revealed');
@@ -1528,6 +1546,7 @@ $('#entry-list').addEventListener('click', async (e) => {
   } else if (act === 'attach') {
     openAttachmentsModal(id, btn.dataset.aname || '');
   } else if (act === 'edit') {
+    ++entryDetailRequest;
     const list = await store.list({});
     const item = list.items.find((x) => x.id === id);
     if (item) openEditModal(item);

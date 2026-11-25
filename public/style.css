@@ -396,6 +396,7 @@ html.dark mark.hl { background: rgba(255, 193, 7, 0.38); color: #ffe9b0; }
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: 13px 16px;
+  cursor: pointer;
   transition: border-color .15s;
 }
 .entry:hover { border-color: var(--line-strong); }
@@ -1313,6 +1314,8 @@ html[data-shell] .entry, html[data-shell] .note-card {
 }
 html[data-shell] .entry-top { align-items: flex-start; }
 html[data-shell] .entry-title { flex-wrap: wrap; gap: 3px 6px; }
+.entry-heading { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+.entry-heading .entry-fav { flex: none; }
 .entry-open, .record-link {
   appearance: none; border: 0; background: transparent; color: var(--text); font: inherit; font-weight: 700;
   text-align: start; cursor: pointer; overflow-wrap: anywhere; padding: 0; border-radius: 4px; min-width: 0;
@@ -1328,7 +1331,9 @@ html[data-shell="touch"] .entry-main { flex: 1; min-width: 0; }
 html[data-shell="touch"] .entry-side { display: none; }
 html[data-shell="touch"] .entry-action-label { display: inline; }
 html[data-shell="touch"] :is(.entry-open, .record-link, .entry-fav, .entry-pw .pw-actions button, .entry-totp button, .note-ops button, .entry-attach) { min-height: 48px; }
-html[data-shell="touch"] :is(.entry-fav, .entry-pw .pw-actions button, .entry-totp button, .note-ops button, .entry-attach) { min-width: 48px; }
+html[data-shell="touch"] :is(.entry-pw .pw-actions button, .entry-totp button, .note-ops button, .entry-attach) { min-width: 48px; }
+html[data-shell="touch"] .entry-heading { gap: 4px; }
+html[data-shell="touch"] .entry-heading .entry-fav { min-width: 36px; justify-content: flex-end; }
 .entry-action-label { display: none; }
 html[data-shell="touch"] .entry-pw { flex-wrap: wrap; }
 html[data-shell="touch"] .entry-favicon { align-self: flex-start; margin-top: 7px; }
